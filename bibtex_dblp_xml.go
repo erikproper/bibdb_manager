@@ -32,7 +32,6 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -1284,45 +1283,40 @@ func doLoadDblpXml(args []string) {
 
 // --- CLI: -update_dblp ---
 
-const dblpXMLIndexURL = "https://dblp.uni-trier.de/xml/"
+const dblpXMLDownloadURL = "https://dblp.uni-trier.de/xml/dblp.xml.gz"
 
 var reDblpXMLFilename = regexp.MustCompile(`dblp-\d{4}-\d{2}-\d{2}\.xml\.gz`)
-var reDblpUndatedDate = regexp.MustCompile(`dblp\.xml\.gz[^0-9]*(\d{4}-\d{2}-\d{2})`)
 
-// doUpdateDblp fetches the DBLP XML index page, identifies the latest dated
-// release (or falls back to the undated dblp.xml.gz stored with today's date),
-// and downloads it to dblpFolder() if not already present.
-// The previous .xml.gz is left in place (files have distinct dated names).
+// downloadsFolder returns the current user's OS-standard Downloads directory,
+// or "" if the home directory cannot be determined.
+func downloadsFolder() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, "Downloads")
+}
+
+// doUpdateDblp imports a DBLP XML export that the user has downloaded by hand
+// into their Downloads folder. DBLP's site added a bot check that rejects
+// automated fetches, so dblp.xml.gz can no longer be pulled programmatically —
+// the user must fetch it in a browser first.
+// The dated destination filename is derived from the download's mtime, so
+// re-running after a fresh manual download is detected as a new release; the
+// previous .xml.gz is left in place (files have distinct dated names).
 func doUpdateDblp() {
-	fmt.Fprintf(os.Stderr, "Fetching DBLP XML index from %s...\n", dblpXMLIndexURL)
-	resp, err := http.Get(dblpXMLIndexURL)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Could not fetch DBLP XML index: %s\n", err)
+	dlFolder := downloadsFolder()
+	if dlFolder == "" {
+		fmt.Fprintf(os.Stderr, "Could not determine your Downloads folder.\n")
 		os.Exit(1)
 	}
-	body, err := io.ReadAll(resp.Body)
-	resp.Body.Close()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Could not read DBLP XML index: %s\n", err)
-		os.Exit(1)
-	}
+	sourcePath := filepath.Join(dlFolder, "dblp.xml.gz")
 
-	var latest, downloadURL string
-	matches := reDblpXMLFilename.FindAllString(string(body), -1)
-	if len(matches) > 0 {
-		sort.Strings(matches)
-		latest = matches[len(matches)-1]
-		downloadURL = dblpXMLIndexURL + latest
-	} else if m := reDblpUndatedDate.FindStringSubmatch(string(body)); m != nil {
-		latest = "dblp-" + m[1] + ".xml.gz"
-		downloadURL = dblpXMLIndexURL + "dblp.xml.gz"
-		fmt.Fprintf(os.Stderr, "No dated files found; using dblp.xml.gz (dated %s) → %s\n", m[1], latest)
-	} else if strings.Contains(string(body), "dblp.xml.gz") {
-		latest = "dblp-" + time.Now().Format("2006-01-02") + ".xml.gz"
-		downloadURL = dblpXMLIndexURL + "dblp.xml.gz"
-		fmt.Fprintf(os.Stderr, "No dated files found; using dblp.xml.gz → %s\n", latest)
-	} else {
-		fmt.Fprintf(os.Stderr, "No DBLP XML files found at %s\n", dblpXMLIndexURL)
+	info, err := os.Stat(sourcePath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "DBLP no longer allows automated downloads.\n")
+		fmt.Fprintf(os.Stderr, "Please download %s manually in your browser,\n", dblpXMLDownloadURL)
+		fmt.Fprintf(os.Stderr, "save it to %s, then re-run -update_dblp.\n", dlFolder)
 		os.Exit(1)
 	}
 
@@ -1331,6 +1325,7 @@ func doUpdateDblp() {
 		os.Exit(1)
 	}
 
+	latest := "dblp-" + info.ModTime().Format("2006-01-02") + ".xml.gz"
 	destPath := dblpFolder() + latest
 	if FileExists(destPath) {
 		if readDblpCurrentXML() == latest {
@@ -1343,58 +1338,15 @@ func doUpdateDblp() {
 		return
 	}
 
-	fmt.Fprintf(os.Stderr, "Downloading %s → %s\n", downloadURL, destPath)
-
-	resp2, err := http.Get(downloadURL)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Download failed: %s\n", err)
+	fmt.Fprintf(os.Stderr, "Moving %s → %s\n", sourcePath, destPath)
+	if err := copyFile(sourcePath, destPath); err != nil {
+		fmt.Fprintf(os.Stderr, "Could not copy %s to %s: %s\n", sourcePath, destPath, err)
 		os.Exit(1)
 	}
-	defer resp2.Body.Close()
-	total := resp2.ContentLength
-
-	f, err := os.Create(destPath)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Could not create %s: %s\n", destPath, err)
-		os.Exit(1)
+	if err := os.Remove(sourcePath); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: could not remove %s: %s\n", sourcePath, err)
 	}
-	defer f.Close()
 
-	cr := &countingReader{r: resp2.Body}
-	start := time.Now()
-
-	done := make(chan struct{})
-	go func() {
-		ticker := time.NewTicker(15 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ticker.C:
-				n := cr.n.Load()
-				mb := float64(n) / 1e6
-				elapsed := time.Since(start).Seconds()
-				if total > 0 {
-					fmt.Fprintf(os.Stderr, "  %.0f / %.0f MB (%.0f%%) %.0fs\n",
-						mb, float64(total)/1e6, float64(n)*100/float64(total), elapsed)
-				} else {
-					fmt.Fprintf(os.Stderr, "  %.0f MB %.0fs\n", mb, elapsed)
-				}
-			case <-done:
-				return
-			}
-		}
-	}()
-
-	if _, err = io.Copy(f, cr); err != nil {
-		close(done)
-		fmt.Fprintf(os.Stderr, "\nDownload error: %s\n", err)
-		os.Remove(destPath)
-		os.Exit(1)
-	}
-	close(done)
-
-	fmt.Fprintf(os.Stderr, "Downloaded %s (%.0f MB) in %.1fs\n",
-		latest, float64(cr.n.Load())/1e6, time.Since(start).Seconds())
 	doLoadDblpXml([]string{destPath})
 
 	// Import succeeded — keep only the two most recent XML files.

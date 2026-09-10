@@ -5,14 +5,16 @@
  * - bibtex_display
  *
  * Live external preview channel: displayContent writes text to display_file
- * (see the .settings file) and, the first time it is called during a run,
- * launches display_command to open that file in an external, auto-refreshing
- * viewer. Subsequent calls just overwrite display_file — the viewer is
- * expected to pick up the change on its own (e.g. an editor that reloads
- * files changed on disk).
+ * (see the .settings file) and launches display_command to open that file in
+ * an external viewer. By default (display_reopen = true) display_command runs
+ * again on every call — for an app opened via `open -a`, this just brings its
+ * window to the front rather than spawning a second instance, so each update
+ * is both shown and surfaced. Setting display_reopen to false launches
+ * display_command only once per run; later calls just overwrite display_file
+ * and rely on the viewer to notice the change on its own.
  *
- * Both settings are optional; when display_file is unset, displayContent is a
- * silent no-op so callers never need to guard the call themselves.
+ * All three settings are optional; when display_file is unset, displayContent
+ * is a silent no-op so callers never need to guard the call themselves.
  *
  * Creator: Henderik A. Proper (e.proper@acm.org), Luxembourg, in collaboration with Claude.ai
  *
@@ -31,16 +33,13 @@ import (
 
 var displayCommandLaunched = false
 
-// displayContent writes content to display_file, launching display_command
-// once per run (on the first call) to open it. No-op when display_file is
-// not configured.
+// displayContent writes content to display_file, then launches display_command
+// to open it — on every call when display_reopen is true (the default, so the
+// viewer window comes to front each time), or only on the first call otherwise.
+// No-op when display_file is not configured.
 func displayContent(content string) {
 	if displayFile == "" {
 		return
-	}
-	if !displayCommandLaunched {
-		launchDisplayCommand()
-		displayCommandLaunched = true
 	}
 	if dir := filepath.Dir(displayFile); dir != "" && dir != "." {
 		if err := os.MkdirAll(dir, 0755); err != nil {
@@ -50,6 +49,11 @@ func displayContent(content string) {
 	}
 	if err := os.WriteFile(displayFile, []byte(content), 0644); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: could not write display_file %s: %s\n", displayFile, err)
+		return
+	}
+	if displayReopen || !displayCommandLaunched {
+		launchDisplayCommand()
+		displayCommandLaunched = true
 	}
 }
 

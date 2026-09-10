@@ -45,18 +45,25 @@ type TBibTeXFolders struct {
 	// preview (e.g. a DBLP table-of-contents while resolving a child's DBLP key).
 	DisplayFile string `json:"display_file,omitempty"`
 	// DisplayCommand opens DisplayFile in an external, auto-refreshing viewer. Run
-	// once per bib_check invocation, the first time displayContent() is called.
+	// once per bib_check invocation, the first time displayContent() is called —
+	// or before every write when DisplayReopen is true (the default).
 	DisplayCommand string `json:"display_command,omitempty"`
+	// DisplayReopen controls whether DisplayCommand re-runs on every displayContent
+	// call (true — brings the viewer window to front each time there's something
+	// new to look at) or only once per session (false). A pointer so "absent from
+	// the file" (defaults to true) is distinguishable from "explicitly false".
+	DisplayReopen *bool `json:"display_reopen,omitempty"`
 }
 
 var (
 	csvDelimiter   = ";"
 	keyPrefix      = ""
-	globalFolder   = "" // set by loadBibTeXFolders; defaults to bibTeXFolder when empty
-	backupFolder   = "" // set by loadBibTeXSettings (from DB); defaults to bibTeXFolder+bibTeXBaseName+".backups/" when empty
-	cacheFolder    = "" // set by loadBibTeXFolders; defaults to bibTeXFolder when empty
-	displayFile    = "" // set by loadBibTeXFolders; see displayContent
-	displayCommand = "" // set by loadBibTeXFolders; see displayContent
+	globalFolder   = ""   // set by loadBibTeXFolders; defaults to bibTeXFolder when empty
+	backupFolder   = ""   // set by loadBibTeXSettings (from DB); defaults to bibTeXFolder+bibTeXBaseName+".backups/" when empty
+	cacheFolder    = ""   // set by loadBibTeXFolders; defaults to bibTeXFolder when empty
+	displayFile    = ""   // set by loadBibTeXFolders; see displayContent
+	displayCommand = ""   // set by loadBibTeXFolders; see displayContent
+	displayReopen  = true // set by loadBibTeXFolders; see displayContent
 )
 
 func writeBibTeXFolders(foldersPath string, f TBibTeXFolders) {
@@ -192,6 +199,9 @@ func loadBibTeXFolders(settingsPath string) {
 		displayFile = expandHome(f.DisplayFile)
 	}
 	displayCommand = f.DisplayCommand
+	if f.DisplayReopen != nil {
+		displayReopen = *f.DisplayReopen
+	}
 
 	// key_prefix is no longer stored in .settings. If it is still absent after
 	// reading the legacy field, it will be prompted and written to the DB config

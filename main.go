@@ -53,7 +53,7 @@ var (
 	Reporting TInteraction
 )
 
-const AppVersion = "29.47"
+const AppVersion = "29.48"
 
 // Run-state flags consumed by the write tail in main.
 var (
@@ -3981,7 +3981,7 @@ func main() {
 flag.BoolVar(&cmdAlignBooktitleCountries, "align_booktitle_countries", false, "detect and fix unbraced country names in booktitle fields")
 	flag.BoolVar(&cmdUpdateOrcidCache, "update_orcid", false, "refresh the ORCID disk cache for all known contributors (oldest-first, q+Enter to stop)")
 	flag.BoolVar(&cmdLoadDblpXml, "load_dblp_xml", false, "load a DBLP .xml.gz export into the local DBLP file store")
-	flag.BoolVar(&cmdUpdateDblp, "update_dblp", false, "download the latest DBLP XML export from dblp.uni-trier.de")
+	flag.BoolVar(&cmdUpdateDblp, "update_dblp", false, "import a manually downloaded DBLP XML export (dblp.xml.gz) found in your Downloads folder")
 	flag.BoolVar(&cmdRepairDblpManifest, "repair_dblp_manifest", false, "rebuild DBLP manifest and title index from a .xml.gz export")
 	flag.BoolVar(&cmdRebuildDblpCrossrefIndex, "rebuild_dblp_crossref_index", false, "rebuild DBLP crossref children index from stored data.json files")
 	flag.BoolVar(&cmdRebuildDblpTitleIndex, "rebuild_dblp_title_index", false, "rebuild DBLP title index from stored data.json files (no XML needed; -base required for folder config)")
@@ -4069,11 +4069,11 @@ flag.BoolVar(&cmdAlignBooktitleCountries, "align_booktitle_countries", false, "d
 	}
 
 	// Acquired here, before cmdUpdateDblp, rather than further down: -update_dblp
-	// does a slow (multi-minute) download+import and does not os.Exit() afterward —
-	// it falls through into the normal session below. acquireDblpLock alone does
+	// does a slow (multi-minute) import and does not os.Exit() afterward — it
+	// falls through into the normal session below. acquireDblpLock alone does
 	// not stop a second, unrelated invocation (e.g. -watch) from acquiring this same
 	// instance lock and running a full session against the same working DB while
-	// the download is still in progress; when -update_dblp later reaches its own
+	// the import is still in progress; when -update_dblp later reaches its own
 	// DB work, both processes can be writing at once, producing SQLITE_BUSY_SNAPSHOT
 	// ("database is locked (517)") on whichever write loses the race.
 	acquireInstanceLock()
