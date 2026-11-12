@@ -9,7 +9,7 @@
  *
  * Creator: Henderik A. Proper (e.proper@acm.org), Luxembourg, in collaboration with Claude.ai
  *
- * Version of: 18.05.2026
+ * Version of: 11.11.2026
  *
  */
 
@@ -312,6 +312,12 @@ func (l *TBibTeXLibrary) MaybeMergeDBLPEntry(DBLPKey, key string, allowURLFetch 
 	// author must stay as {Withdrawn publication} even if DBLP's file store doesn't
 	// know about the withdrawal.
 	locallyWithdrawn := l.EntryFieldValueity(key, "withdrawn") != ""
+
+	// An ISSN next to an ISBN is too much information (see CheckISSNRedundance);
+	// drop it here so a DBLP update does not re-add what bib.check removes.
+	if IsValidISBN(dblpEntry.Fields["isbn"]) || IsValidISBN(l.EntryFieldValueity(key, "isbn")) {
+		delete(dblpEntry.Fields, "issn")
+	}
 
 	l.DblpSourceData = buildDblpSourceData(l, key, dblpEntry)
 	beginBibTransaction()

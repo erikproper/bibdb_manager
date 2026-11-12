@@ -9,7 +9,7 @@
  *
  * Creator: Henderik A. Proper (erikproper@gmail.com)
  *
- * Version of: 03.05.2026
+ * Version of: 11.11.2026
  *
  */
 
@@ -1347,6 +1347,20 @@ func (l *TBibTeXLibrary) CheckISBN(entry *TBibTeXEntry) {
 	l.ReportEntryWarning(entry.Key, WarningBadISBN, isbn)
 }
 
+// CheckISSNRedundance drops the issn when the entry has a valid isbn: the isbn
+// identifies the volume itself, so the series ISSN is only clutter. Runs after
+// CheckISBN, which may first move an ISSN-shaped isbn into the issn field.
+func (l *TBibTeXLibrary) CheckISSNRedundance(entry *TBibTeXEntry) {
+	issn := entry.FieldValue("issn")
+
+	if issn == "" || !IsValidISBN(entry.FieldValue("isbn")) {
+		return
+	}
+
+	l.Progress(ProgressRemovedRedundantISSN, entry.Key, issn)
+	l.deleteEntryField(entry, "issn")
+}
+
 func (l *TBibTeXLibrary) CheckChapter(entry *TBibTeXEntry) {
 	chapter := entry.FieldValue("chapter")
 	if chapter == "" || IsValidChapter(chapter) {
@@ -1905,6 +1919,7 @@ func (l *TBibTeXLibrary) CheckEntry(entry *TBibTeXEntry) {
 			l.CheckURLDateNeed(entry)
 			l.CheckISSN(entry)
 			l.CheckISBN(entry)
+			l.CheckISSNRedundance(entry)
 			l.CheckChapter(entry)
 			l.CheckYear(entry)
 			l.CheckURLDate(entry)

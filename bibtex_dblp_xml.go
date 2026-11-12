@@ -19,7 +19,7 @@
  *
  * Creator: Henderik A. Proper (e.proper@acm.org), Luxembourg, in collaboration with Claude.ai
  *
- * Version of: 19.05.2026
+ * Version of: 12.11.2026
  *
  */
 
@@ -1297,6 +1297,70 @@ func downloadsFolder() string {
 	return filepath.Join(home, "Downloads")
 }
 
+// findDblpDownload returns the DBLP export in dlFolder: dblp.xml.gz, or dblp.xml
+// when the browser unpacked it (Safari does so by default). When both exist, the
+// newer one wins. Returns "" when neither exists.
+func findDblpDownload(dlFolder string) (string, os.FileInfo) {
+	var bestPath string
+	var bestInfo os.FileInfo
+	for _, name := range []string{"dblp.xml.gz", "dblp.xml"} {
+		path := filepath.Join(dlFolder, name)
+		if info, err := os.Stat(path); err == nil && !info.IsDir() {
+			if bestInfo == nil || info.ModTime().After(bestInfo.ModTime()) {
+				bestPath, bestInfo = path, info
+			}
+		}
+	}
+	return bestPath, bestInfo
+}
+
+// fileIsGzipped reports whether path starts with the gzip magic bytes, so the
+// file's content decides, not its name.
+func fileIsGzipped(path string) (bool, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return false, err
+	}
+	defer f.Close()
+	magic := make([]byte, 2)
+	if _, err := io.ReadFull(f, magic); err != nil {
+		return false, err
+	}
+	return magic[0] == 0x1f && magic[1] == 0x8b, nil
+}
+
+// gzipFileAtomic writes a gzip-compressed copy of src to dst via a temporary
+// file, so an interrupted run never leaves a truncated dst behind.
+func gzipFileAtomic(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	tmp := fmt.Sprintf("%s.tmp-%d", dst, os.Getpid())
+	out, err := os.Create(tmp)
+	if err != nil {
+		return err
+	}
+	gz, err := gzip.NewWriterLevel(out, gzip.BestSpeed)
+	if err == nil {
+		_, err = io.Copy(gz, in)
+	}
+	if err == nil {
+		err = gz.Close()
+	}
+	if closeErr := out.Close(); err == nil {
+		err = closeErr
+	}
+	if err == nil {
+		err = os.Rename(tmp, dst)
+	}
+	if err != nil {
+		os.Remove(tmp)
+	}
+	return err
+}
+
 // doUpdateDblp imports a DBLP XML export that the user has downloaded by hand
 // into their Downloads folder. DBLP's site added a bot check that rejects
 // automated fetches, so dblp.xml.gz can no longer be pulled programmatically —
@@ -1310,10 +1374,8 @@ func doUpdateDblp() {
 		fmt.Fprintf(os.Stderr, "Could not determine your Downloads folder.\n")
 		os.Exit(1)
 	}
-	sourcePath := filepath.Join(dlFolder, "dblp.xml.gz")
-
-	info, err := os.Stat(sourcePath)
-	if err != nil {
+	sourcePath, info := findDblpDownload(dlFolder)
+	if sourcePath == "" {
 		fmt.Fprintf(os.Stderr, "DBLP no longer allows automated downloads.\n")
 		fmt.Fprintf(os.Stderr, "Please download %s manually in your browser,\n", dblpXMLDownloadURL)
 		fmt.Fprintf(os.Stderr, "save it to %s, then re-run -update_dblp.\n", dlFolder)
@@ -1338,8 +1400,19 @@ func doUpdateDblp() {
 		return
 	}
 
-	fmt.Fprintf(os.Stderr, "Moving %s → %s\n", sourcePath, destPath)
-	if err := copyFile(sourcePath, destPath); err != nil {
+	compressed, err := fileIsGzipped(sourcePath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Could not read %s: %s\n", sourcePath, err)
+		os.Exit(1)
+	}
+	if compressed {
+		fmt.Fprintf(os.Stderr, "Moving %s → %s\n", sourcePath, destPath)
+		err = copyFileAtomic(sourcePath, destPath)
+	} else {
+		fmt.Fprintf(os.Stderr, "%s is not compressed (browser unpacked it); compressing → %s...\n", sourcePath, destPath)
+		err = gzipFileAtomic(sourcePath, destPath)
+	}
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "Could not copy %s to %s: %s\n", sourcePath, destPath, err)
 		os.Exit(1)
 	}

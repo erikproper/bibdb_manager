@@ -13,7 +13,7 @@
  *
  * Creator: Henderik A. Proper (e.proper@acm.org), Luxembourg, in collaboration with Claude.ai
  *
- * Version of: 19.05.2026
+ * Version of: 12.11.2026
  *
  */
 
@@ -23,6 +23,7 @@ import (
 	"crypto/md5"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -246,21 +247,18 @@ func writeDblpEntryFile(dblpKey string, jsonBytes []byte) error {
 }
 
 // appendToIndexFile appends a single line to a hash-keyed index file,
-// creating parent directories as needed.
+// creating parent directories only when the open fails for lack of them.
+// It does not check for an existing copy of the line: re-reading the file on
+// every append made a full DBLP import quadratic (files for titles such as
+// "Editorial" hold tens of thousands of keys). readIndexFile drops duplicates.
 func appendToIndexFile(path, line string) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-		return err
-	}
-	// Skip the write when the line is already present — avoids duplicates when
-	// an entry's mdate changes but its indexed value (title, person, etc.) does not.
-	if existing, err := os.ReadFile(path); err == nil {
-		for _, l := range strings.Split(strings.TrimSpace(string(existing)), "\n") {
-			if l == line {
-				return nil
-			}
-		}
-	}
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if errors.Is(err, fs.ErrNotExist) {
+		if err = os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+			return err
+		}
+		f, err = os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	}
 	if err != nil {
 		return err
 	}
@@ -403,9 +401,13 @@ func readIndexFile(path string) []string {
 	if err != nil {
 		return nil
 	}
+	// Duplicates arise because appendToIndexFile does not check before appending
+	// (e.g. an entry re-imported after an mdate change); keep the first occurrence.
 	var lines []string
+	seen := map[string]bool{}
 	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
-		if line != "" {
+		if line != "" && !seen[line] {
+			seen[line] = true
 			lines = append(lines, line)
 		}
 	}

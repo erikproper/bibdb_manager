@@ -173,6 +173,7 @@ const (
 	WarningNoTitleKeywordsForPreferredAlias  = "Cannot derive preferred alias (base: %s): no usable title keywords found."
 	ProgressGeneratedPreferredAlias = "  Generated preferred alias %s for %s"
 	ProgressRemovedRedundantURL     = "Removed redundant URL for %s: %s"
+	ProgressRemovedRedundantISSN    = "Removed ISSN for %s (entry has an ISBN): %s"
 	WarningBadISBN                       = "Wrong ISBN: %q."
 	WarningISBNMismatchFromCrossrefDOI   = "Crossref to %s: DOI-derived ISBN %s conflicts with parent ISBN %s."
 	WarningBadISSN                  = "Wrong ISSN: %q."
