@@ -612,7 +612,8 @@ func (l *TBibTeXLibrary) resolveTypedDblpKey(displayKey, typed string) string {
 }
 
 // CheckDblpKeyMissingWarnings warns about library entries whose DBLP key has
-// been absent from the local DBLP store for more than two months.
+// been absent from the local DBLP store for more than two months. A missing-key
+// mark on an entry that no longer has a DBLP key is stale and is dropped.
 func (l *TBibTeXLibrary) CheckDblpKeyMissingWarnings() {
 	threshold := time.Now().AddDate(0, -2, 0)
 	for key, dateStr := range l.AllEntriesWithProp(MetaPropDblpKeyMissing) {
@@ -620,8 +621,13 @@ func (l *TBibTeXLibrary) CheckDblpKeyMissingWarnings() {
 		if err != nil {
 			continue
 		}
+		DBLPKey := l.EntryFieldValueity(key, DBLPField)
+		if DBLPKey == "" {
+			// The DBLP key was removed after it went missing; the mark is stale.
+			l.DeleteMetadata(key, MetaPropDblpKeyMissing)
+			continue
+		}
 		if t.Before(threshold) {
-			DBLPKey := l.EntryFieldValueity(key, DBLPField)
 			l.Warning(WarningDblpKeyNotInXML, DBLPKey, key, dateStr)
 		}
 	}
