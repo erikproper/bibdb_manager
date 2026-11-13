@@ -512,6 +512,13 @@ func (b *TDblpDBBuilder) finish(meta TDblpMeta, progress func(format string, arg
 		removeDblpDBFiles(dblpDBNewPath())
 		return err
 	}
+	return swapInDblpDBNew()
+}
+
+// swapInDblpDBNew renames a complete dblpDBNewPath() over dblpDBPath(), after an
+// import or a restore. The read connection is closed so later reads see the new
+// store.
+func swapInDblpDBNew() error {
 	closeDblpReader()
 	// A stale journal of the old file must not attach to the new one. The old
 	// file itself is replaced by the rename, so there is never a moment without one.

@@ -790,6 +790,10 @@ func doLoadDblpXml(args []string) {
 
 	fmt.Fprintf(os.Stderr, "DBLP import complete: %d entries in %.1fs\n",
 		count, time.Since(start).Seconds())
+
+	if err := pushDblpStore(); err != nil {
+		fmt.Fprintf(os.Stderr, "Could not copy the DBLP store to %s: %s\n", dblpBackupFolder(), err)
+	}
 }
 
 // --- CLI: -update_dblp ---

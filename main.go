@@ -9,7 +9,7 @@
  *
  * Creator: Henderik A. Proper (e.proper@acm.org), Luxembourg, in collaboration with Claude.ai
  *
- * Version of: 30.07.2026
+ * Version of: 13.11.2026
  *
  */
 
@@ -53,7 +53,7 @@ var (
 	Reporting TInteraction
 )
 
-const AppVersion = "30.4"
+const AppVersion = "30.5"
 
 // Run-state flags consumed by the write tail in main.
 var (
@@ -765,30 +765,37 @@ func cleanKey(rawKey string) string {
 
 var BibFile string
 
-var instanceLockFile *os.File // held open for the lifetime of the process to maintain the flock
+// The lock files are held open for the lifetime of the process to keep their
+// flocks. Each needs its own variable: when one variable held both, taking the
+// DBLP lock dropped the last reference to the instance lock file, and the garbage
+// collector could then close it, releasing that lock during a long -update_dblp.
+var (
+	instanceLockFile *os.File
+	dblpLockFile     *os.File
+)
 
-// flockPath obtains an exclusive non-blocking flock on lockPath.
+// flockPath opens lockPath and obtains an exclusive non-blocking flock on it.
 // Exits immediately if another instance already holds that lock.
 // The OS releases the lock automatically when the process exits.
-func flockPath(lockPath string) {
-	var err error
-	instanceLockFile, err = os.OpenFile(lockPath, os.O_CREATE|os.O_WRONLY, 0600)
+func flockPath(lockPath string) *os.File {
+	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_WRONLY, 0600)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Could not open lock file %s: %s\n", lockPath, err)
 		os.Exit(1)
 	}
-	if err := syscall.Flock(int(instanceLockFile.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		fmt.Fprintf(os.Stderr, "Another instance is already running (%s)\n", lockPath)
 		os.Exit(1)
 	}
+	return f
 }
 
 func acquireInstanceLock() {
-	flockPath(bibTeXFolder + bibTeXBaseName + LockFileExtension)
+	instanceLockFile = flockPath(bibTeXFolder + bibTeXBaseName + LockFileExtension)
 }
 
 func acquireDblpLock() {
-	flockPath(dblpFolder() + "dblp" + LockFileExtension)
+	dblpLockFile = flockPath(dblpFolder() + "dblp" + LockFileExtension)
 }
 
 // requireNoDblpImport exits with a clear message if a DBLP import is currently
@@ -3907,6 +3914,8 @@ func main() {
 		cmdAlignBooktitleCountries  bool
 		cmdUpdateOrcidCache         bool
 		cmdLoadDblpXml              bool
+		cmdPushDblp                 bool
+		cmdRestoreDblp              bool
 		cmdUpdateDblp               bool
 		cmdRestoreKeyHints      bool
 		restoreKeyHintsPath     string
@@ -3978,6 +3987,8 @@ func main() {
 flag.BoolVar(&cmdAlignBooktitleCountries, "align_booktitle_countries", false, "detect and fix unbraced country names in booktitle fields")
 	flag.BoolVar(&cmdUpdateOrcidCache, "update_orcid", false, "refresh the ORCID disk cache for all known contributors (oldest-first, q+Enter to stop)")
 	flag.BoolVar(&cmdLoadDblpXml, "load_dblp_xml", false, "load a DBLP .xml.gz export into the local DBLP store")
+	flag.BoolVar(&cmdPushDblp, "push_dblp", false, "copy the local DBLP store to DBLP.backup/ next to the library (Nextcloud)")
+	flag.BoolVar(&cmdRestoreDblp, "restore_dblp", false, "replace the local DBLP store with the copy in DBLP.backup/")
 	flag.BoolVar(&cmdUpdateDblp, "update_dblp", false, "import a manually downloaded DBLP XML export (dblp.xml.gz) found in your Downloads folder")
 	flag.BoolVar(&cmdRestoreKeyHints, "restore_key_hints", false, "restore key hints from a backup CSV, remapping old keys via key_oldies")
 	flag.StringVar(&restoreKeyHintsPath, "hints_csv", "", "path to the backup key_hints.csv for -restore_key_hints")
@@ -4071,6 +4082,30 @@ flag.BoolVar(&cmdAlignBooktitleCountries, "align_booktitle_countries", false, "d
 	// DB work, both processes can be writing at once, producing SQLITE_BUSY_SNAPSHOT
 	// ("database is locked (517)") on whichever write loses the race.
 	acquireInstanceLock()
+
+	if cmdPushDblp || cmdRestoreDblp {
+		lock := tryLockDblp()
+		if lock == nil {
+			fmt.Fprintln(os.Stderr, "DBLP import in progress — try again later.")
+			os.Exit(1)
+		}
+		var err error
+		if cmdPushDblp {
+			err = pushDblpStore()
+		} else {
+			err = restoreDblpStore()
+		}
+		lock.Close()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
+
+	if !cmdUpdateDblp && !cmdLoadDblpXml {
+		maybeRestoreDblpStore()
+	}
 
 	if cmdUpdateDblp {
 		acquireDblpLock()

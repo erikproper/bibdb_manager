@@ -9,7 +9,7 @@
  *
  * Creator: Henderik A. Proper (erikproper@gmail.com)
  *
- * Version of: 23.04.2024
+ * Version of: 13.11.2026
  *
  */
 
@@ -51,11 +51,14 @@ func init() {
 }
 
 // readStdinLine blocks until the user types a line and returns it trimmed of
-// whitespace (including any stray \r). Returns "" when stdin is closed.
+// whitespace (including any stray \r). Closed stdin (end of input, Ctrl-D) quits
+// as "q" would: returning "" made the question loops ask again forever.
 func readStdinLine() string {
 	line, ok := <-stdinCh
 	if !ok {
-		return ""
+		fmt.Fprintln(os.Stderr)
+		quitNow()
+		return "q"
 	}
 	return strings.TrimSpace(line)
 }
