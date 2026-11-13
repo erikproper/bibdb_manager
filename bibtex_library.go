@@ -14,7 +14,7 @@
  *
  * Creator: Henderik A. Proper (erikproper@gmail.com)
  *
- * Version of: 24.04.2024
+ * Version of: 13.11.2026
  *
  */
 
@@ -1660,6 +1660,11 @@ func (l *TBibTeXLibrary) AssignField(key, field, value string) bool {
 func (l *TBibTeXLibrary) applyMappingsForKey(entry *TBibTeXEntry, key, sourceValue string, fieldIsChanged map[string]bool, writeToDb bool) bool {
 	changed := false
 	for targetField, targetValue := range l.FieldMappings[key][sourceValue] {
+		// An ISSN next to an ISBN is too much information (see CheckISSNRedundance);
+		// a series → issn mapping would otherwise re-add what that check removes.
+		if targetField == "issn" && IsValidISBN(entry.Fields["isbn"]) {
+			continue
+		}
 		if entry.Fields[targetField] != targetValue && !fieldIsChanged[targetField] && l.EntryAllowsForField(entry.Key, targetField) {
 			if writeToDb {
 				l.setEntryField(entry, targetField, targetValue)
