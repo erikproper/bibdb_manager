@@ -9,7 +9,7 @@
  *
  * Creator: Henderik A. Proper (e.proper@acm.org), Luxembourg, in collaboration with Claude.ai
  *
- * Version of: 11.11.2026
+ * Version of: 13.11.2026
  *
  */
 
@@ -80,9 +80,9 @@ func (l *TBibTeXLibrary) resolveDBLPCrossref(crossrefDblpKey string, allowURLFet
 	dblpAlias := KeyForDBLP(crossrefDblpKey)
 	libraryKey := l.MapEntryKey(dblpAlias)
 	if libraryKey == dblpAlias {
-		// Add from local file store regardless of allowURLFetch; URL fetch only
+		// Add from local DBLP store regardless of allowURLFetch; URL fetch only
 		// happens inside MaybeMergeDBLPEntry when dblpEntryFromFile returns nil.
-		if dblpEntryFromFile(crossrefDblpKey) != nil || allowURLFetch {
+		if dblpEntryFromStore(crossrefDblpKey) != nil || allowURLFetch {
 			// Before creating a new entry, check whether an existing library entry
 			// with the same title and type already covers this proceedings. This
 			// prevents creating a duplicate that would steal crossref children from
@@ -111,7 +111,7 @@ func (l *TBibTeXLibrary) resolveDBLPCrossref(crossrefDblpKey string, allowURLFet
 // Returns the canonical key of the matching entry, or "" when none is found.
 // Used by resolveDBLPCrossref to avoid creating a duplicate proceedings.
 func (l *TBibTeXLibrary) findExistingNonDblpProceedings(dblpKey string) string {
-	dblpEntry := dblpEntryFromFile(dblpKey)
+	dblpEntry := dblpEntryFromStore(dblpKey)
 	if dblpEntry == nil {
 		return ""
 	}
@@ -171,7 +171,7 @@ func (l *TBibTeXLibrary) MaybeMergeDBLPEntry(DBLPKey, key string, allowURLFetch 
 		return false
 	}
 
-	dblpEntry := dblpEntryFromFile(DBLPKey)
+	dblpEntry := dblpEntryFromStore(DBLPKey)
 	if dblpEntry == nil && allowURLFetch {
 		dblpEntry = l.dblpEntryFromURL(DBLPKey)
 	}
@@ -209,7 +209,7 @@ func (l *TBibTeXLibrary) MaybeMergeDBLPEntry(DBLPKey, key string, allowURLFetch 
 			rawCrossref = dblpEntry.Fields["crossref"]
 		}
 		if rawCrossref != "" {
-			if parent := dblpEntryFromFile(rawCrossref); parent != nil {
+			if parent := dblpEntryFromStore(rawCrossref); parent != nil {
 				// DBLP sometimes uses @article + crossref to model contributions within a
 				// bookish parent (LNCS sub-series, edited volumes, …). Correct the type:
 				//   article + proceedings parent → inproceedings
@@ -309,7 +309,7 @@ func (l *TBibTeXLibrary) MaybeMergeDBLPEntry(DBLPKey, key string, allowURLFetch 
 	}
 
 	// Check before the merge: if the library entry already has a withdrawn date, the
-	// author must stay as {Withdrawn publication} even if DBLP's file store doesn't
+	// author must stay as {Withdrawn publication} even if the DBLP store doesn't
 	// know about the withdrawal.
 	locallyWithdrawn := l.EntryFieldValueity(key, "withdrawn") != ""
 
@@ -322,7 +322,7 @@ func (l *TBibTeXLibrary) MaybeMergeDBLPEntry(DBLPKey, key string, allowURLFetch 
 	l.DblpSourceData = buildDblpSourceData(l, key, dblpEntry)
 	beginBibTransaction()
 	changed := l.MergeInMemoryDBLPEntry(dblpEntry, key)
-	// Apply per-author ORCID evidence from the file store. When DBLP provides an
+	// Apply per-author ORCID evidence from the DBLP store. When DBLP provides an
 	// orcid= attribute on an <author> element in a publication entry, use it to
 	// correct any name-based mis-assignment and record the evidence in
 	// entry_contributor_names.orcid_used. The je (TDblpJSONEntry) is cheap to re-read
@@ -334,9 +334,9 @@ func (l *TBibTeXLibrary) MaybeMergeDBLPEntry(DBLPKey, key string, allowURLFetch 
 		changed = true
 		l.SetEntryFieldValue(key, DBLPField, DBLPKey)
 	}
-	// Override author when withdrawn — either DBLP file store marks it as such, or the
+	// Override author when withdrawn — either DBLP store marks it as such, or the
 	// library itself already has a withdrawn date (locally set by the user).
-	isWithdrawn, mdate := dblpWithdrawnInfoFromFile(DBLPKey)
+	isWithdrawn, mdate := dblpWithdrawnInfoFromStore(DBLPKey)
 	if isWithdrawn || locallyWithdrawn {
 		if l.EntryFieldValueity(key, "author") != "{Withdrawn publication}" {
 			l.SetEntryFieldValue(key, "author", "{Withdrawn publication}")
@@ -417,7 +417,7 @@ func (l *TBibTeXLibrary) MaybeAddDBLPEntry(DBLPKey string) string {
 	l.CheckNeedToMergeForEqualTitles(key)
 	key = l.MapEntryKey(key)
 
-	// For bookish entries (proceedings/book) add all children from the DBLP file store,
+	// For bookish entries (proceedings/book) add all children from the DBLP store,
 	// unless the entry carries the no_dblp_children flag.
 	// Alias registration above must complete first so that LookupDBLPKey on this parent
 	// resolves correctly when children call back into MaybeAddDBLPEntry for their crossref.
@@ -454,10 +454,10 @@ func (l *TBibTeXLibrary) MaybeAddDBLPEntry(DBLPKey string) string {
 	return key
 }
 
-// MarkDblpKeyMissing records that DBLPKey is not in the local file store for
-// library entry key. Does nothing if DBLPKey is already present in the file store.
+// MarkDblpKeyMissing records that DBLPKey is not in the local DBLP store for
+// library entry key. Does nothing if DBLPKey is already present in the DBLP store.
 func (l *TBibTeXLibrary) MarkDblpKeyMissing(key, DBLPKey string) {
-	if DBLPKey == "" || dblpEntryFromFile(DBLPKey) != nil {
+	if DBLPKey == "" || dblpEntryFromStore(DBLPKey) != nil {
 		return
 	}
 	canon := l.MapEntryKey(key)
@@ -470,7 +470,7 @@ func (l *TBibTeXLibrary) MarkDblpKeyMissing(key, DBLPKey string) {
 // When the DBLP key is already mapped to a different library entry, that entry
 // is merged into key first. If the user declines the merge, the association is
 // aborted and the pair is recorded as non-doubles so the candidate is not offered
-// again. Then the entry is refreshed from the local file store (or dblp.org when
+// again. Then the entry is refreshed from the local DBLP store (or dblp.org when
 // not yet stored locally), and MarkDblpKeyMissing is called in case the file
 // store does not have it yet.
 func (l *TBibTeXLibrary) AssociateDblpKey(key, dblpKey string) {
@@ -505,7 +505,7 @@ func (l *TBibTeXLibrary) AskCandidateDblpKey(key string, candidates []string) st
 	fmt.Fprintf(os.Stderr, "\nLibrary entry:\n%s\n", l.entryDisplayString(key))
 	for i, dblpKey := range candidates {
 		fmt.Fprintf(os.Stderr, "[%d] %s", i+1, dblpKey)
-		if entry := dblpEntryFromFile(dblpKey); entry != nil {
+		if entry := dblpEntryFromStore(dblpKey); entry != nil {
 			if entryType := entry.EntryType(); entryType != "" {
 				fmt.Fprintf(os.Stderr, " (%s)", entryType)
 			}
@@ -550,7 +550,7 @@ func (l *TBibTeXLibrary) AskCandidateDblpKey(key string, candidates []string) st
 			if BibTeXBookish.Contains(entry.EntryType()) {
 				showChildrenCount(dblpKey)
 			} else if crossref := entry.Fields["crossref"]; crossref != "" {
-				if parent := dblpEntryFromFile(crossref); parent != nil {
+				if parent := dblpEntryFromStore(crossref); parent != nil {
 					fmt.Fprintf(os.Stderr, "\n  Parent: %s", crossref)
 					for _, field := range []string{"title", "booktitle", "year", "editor", "publisher", "series"} {
 						if v := parent.Fields[field]; v != "" {
@@ -584,35 +584,35 @@ func (l *TBibTeXLibrary) AskCandidateDblpKey(key string, candidates []string) st
 }
 
 // resolveTypedDblpKey validates a DBLP key the user typed by hand against the
-// local file store. If found verbatim, returns it unchanged. DBLP's own web UI
+// local DBLP store. If found verbatim, returns it unchanged. DBLP's own web UI
 // makes it easy to copy a key one character short (e.g. "onf/vldb/TuzhilinC9"
 // for "conf/vldb/TuzhilinC90"), so on a miss — only when typed contains at
 // least two "/" (fewer makes a substring search too unconstrained to be useful
 // — practically everything contains one slash) — this searches the local
-// manifest for keys containing typed as a substring and, when there are 1-4 of
+// DBLP store for keys containing typed as a substring and, when there are 1-4 of
 // them, offers them as a pick list via AskCandidateDblpKey (displayKey is the
 // library entry being resolved, shown for context). 0 or 5+ matches fall back
 // to the plain "not found" warning. Returns "" whenever nothing was resolved.
 func (l *TBibTeXLibrary) resolveTypedDblpKey(displayKey, typed string) string {
-	if dblpEntryFromFile(typed) != nil {
+	if dblpEntryFromStore(typed) != nil {
 		return typed
 	}
 	if strings.Count(typed, "/") < 2 {
-		l.Warning("DBLP key %q not found in file store", typed)
+		l.Warning("DBLP key %q not found in the DBLP store", typed)
 		return ""
 	}
 	const maxCandidates = 4
 	matches := searchDblpKeysContaining(typed, maxCandidates+1)
 	if len(matches) == 0 || len(matches) > maxCandidates {
-		l.Warning("DBLP key %q not found in file store", typed)
+		l.Warning("DBLP key %q not found in the DBLP store", typed)
 		return ""
 	}
-	l.Warning("DBLP key %q not found in file store — did you mean one of these?", typed)
+	l.Warning("DBLP key %q not found in the DBLP store — did you mean one of these?", typed)
 	return l.AskCandidateDblpKey(displayKey, matches)
 }
 
 // CheckDblpKeyMissingWarnings warns about library entries whose DBLP key has
-// been absent from the local file store for more than two months.
+// been absent from the local DBLP store for more than two months.
 func (l *TBibTeXLibrary) CheckDblpKeyMissingWarnings() {
 	threshold := time.Now().AddDate(0, -2, 0)
 	for key, dateStr := range l.AllEntriesWithProp(MetaPropDblpKeyMissing) {

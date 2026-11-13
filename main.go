@@ -53,7 +53,7 @@ var (
 	Reporting TInteraction
 )
 
-const AppVersion = "29.52"
+const AppVersion = "30.1"
 
 // Run-state flags consumed by the write tail in main.
 var (
@@ -582,7 +582,7 @@ func dblpCandidateInYearRange(c string, entryYear int, hasYear bool) bool {
 	if !hasYear {
 		return true
 	}
-	ce := dblpEntryFromFile(c)
+	ce := dblpEntryFromStore(c)
 	if ce == nil {
 		return true
 	}
@@ -655,7 +655,7 @@ func maybeFindDBLPCandidatesExcluding(key string, extraExclusions TStringSet) bo
 		parentsSeen := map[string]bool{}
 		var parentKeys []string
 		for _, c := range candidates {
-			if ce := dblpEntryFromFile(c); ce != nil {
+			if ce := dblpEntryFromStore(c); ce != nil {
 				if crossref := ce.Fields["crossref"]; crossref != "" &&
 					!existing.Contains(KeyForDBLP(crossref)) &&
 					!extraExclusions.Contains(crossref) &&
@@ -2852,7 +2852,7 @@ func runWatch() bool {
 			SpinnerInterrupt()
 			stderrPrintf("\nWatching %s — adding missing publication:\n", label)
 			stderrPrintf("  DBLP key: %s\n", key)
-			if entry := dblpEntryFromFile(key); entry != nil {
+			if entry := dblpEntryFromStore(key); entry != nil {
 				if t := entry.EntryType(); t != "" {
 					stderrPrintf("  type    : %s\n", t)
 				}
@@ -3908,9 +3908,6 @@ func main() {
 		cmdUpdateOrcidCache         bool
 		cmdLoadDblpXml              bool
 		cmdUpdateDblp               bool
-		cmdRepairDblpManifest       bool
-		cmdRebuildDblpCrossrefIndex bool
-		cmdRebuildDblpTitleIndex    bool
 		cmdRestoreKeyHints      bool
 		restoreKeyHintsPath     string
 		cmdDeleteGarbage            bool
@@ -3980,11 +3977,8 @@ func main() {
 	flag.BoolVar(&cmdCheckPdfs, "check_pdfs", false, "check PDF health, orphan files, and duplicates in the files folder")
 flag.BoolVar(&cmdAlignBooktitleCountries, "align_booktitle_countries", false, "detect and fix unbraced country names in booktitle fields")
 	flag.BoolVar(&cmdUpdateOrcidCache, "update_orcid", false, "refresh the ORCID disk cache for all known contributors (oldest-first, q+Enter to stop)")
-	flag.BoolVar(&cmdLoadDblpXml, "load_dblp_xml", false, "load a DBLP .xml.gz export into the local DBLP file store")
+	flag.BoolVar(&cmdLoadDblpXml, "load_dblp_xml", false, "load a DBLP .xml.gz export into the local DBLP store")
 	flag.BoolVar(&cmdUpdateDblp, "update_dblp", false, "import a manually downloaded DBLP XML export (dblp.xml.gz) found in your Downloads folder")
-	flag.BoolVar(&cmdRepairDblpManifest, "repair_dblp_manifest", false, "rebuild DBLP manifest and title index from a .xml.gz export")
-	flag.BoolVar(&cmdRebuildDblpCrossrefIndex, "rebuild_dblp_crossref_index", false, "rebuild DBLP crossref children index from stored data.json files")
-	flag.BoolVar(&cmdRebuildDblpTitleIndex, "rebuild_dblp_title_index", false, "rebuild DBLP title index from stored data.json files (no XML needed; -base required for folder config)")
 	flag.BoolVar(&cmdRestoreKeyHints, "restore_key_hints", false, "restore key hints from a backup CSV, remapping old keys via key_oldies")
 	flag.StringVar(&restoreKeyHintsPath, "hints_csv", "", "path to the backup key_hints.csv for -restore_key_hints")
 	flag.BoolVar(&cmdDeleteGarbage, "delete_garbage", false, "delete DBLP trash folder contents and exit")
@@ -4092,26 +4086,6 @@ flag.BoolVar(&cmdAlignBooktitleCountries, "align_booktitle_countries", false, "d
 		acquireDblpLock()
 		maybeStartDblpTrashCleanup()
 		doLoadDblpXml(args)
-		os.Exit(0)
-	}
-
-	if cmdRepairDblpManifest {
-		if len(args) == 0 {
-			fmt.Fprintln(os.Stderr, "Usage: -repair_dblp_manifest <path.xml.gz>")
-			os.Exit(1)
-		}
-		maybeStartDblpTrashCleanup()
-		doRepairDblpManifest(args)
-		os.Exit(0)
-	}
-
-	if cmdRebuildDblpCrossrefIndex {
-		doRebuildDblpCrossrefIndex()
-		os.Exit(0)
-	}
-
-	if cmdRebuildDblpTitleIndex {
-		doRebuildDblpTitleIndex()
 		os.Exit(0)
 	}
 

@@ -9,7 +9,7 @@
  *
  * Creator: Henderik A. Proper (erikproper@gmail.com)
  *
- * Version of: 11.11.2026
+ * Version of: 13.11.2026
  *
  */
 
@@ -1795,9 +1795,9 @@ func (l *TBibTeXLibrary) displayDblpChildrenToC(entryDBLP, parentKey string) {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "DBLP table of contents for %s\n%s\n\n", entryDBLP, strings.Repeat("=", len("DBLP table of contents for ")+len(entryDBLP)))
 	for _, childDBLP := range children {
-		entry := dblpEntryFromFile(childDBLP)
+		entry := dblpEntryFromStore(childDBLP)
 		if entry == nil {
-			fmt.Fprintf(&sb, "dblp: %s\n(not found in local file store)\n\n", childDBLP)
+			fmt.Fprintf(&sb, "dblp: %s\n(not found in local DBLP store)\n\n", childDBLP)
 			continue
 		}
 		fmt.Fprintf(&sb, "dblp: %s\n%s\n\n", childDBLP, l.renderEntryAsText(entry, parent))
@@ -1815,9 +1815,9 @@ func (l *TBibTeXLibrary) displayDblpChildrenToC(entryDBLP, parentKey string) {
 // already gives when resolving a known parent's children — useful when the
 // looked-up key (e.g. via "S") turns out to be a proceedings itself.
 func (l *TBibTeXLibrary) displayDblpEntry(dblpKey string) {
-	entry := dblpEntryFromFile(dblpKey)
+	entry := dblpEntryFromStore(dblpKey)
 	if entry == nil {
-		l.Progress("DBLP key %s not found in local file store", dblpKey)
+		l.Progress("DBLP key %s not found in local DBLP store", dblpKey)
 		return
 	}
 
@@ -1829,9 +1829,9 @@ func (l *TBibTeXLibrary) displayDblpEntry(dblpKey string) {
 		header := fmt.Sprintf("Children of %s (%d)", dblpKey, len(children))
 		fmt.Fprintf(&sb, "%s\n%s\n\n", header, strings.Repeat("=", len(header)))
 		for _, childDBLP := range children {
-			childEntry := dblpEntryFromFile(childDBLP)
+			childEntry := dblpEntryFromStore(childDBLP)
 			if childEntry == nil {
-				fmt.Fprintf(&sb, "dblp: %s\n(not found in local file store)\n\n", childDBLP)
+				fmt.Fprintf(&sb, "dblp: %s\n(not found in local DBLP store)\n\n", childDBLP)
 				continue
 			}
 			fmt.Fprintf(&sb, "dblp: %s\n%s\n\n", childDBLP, l.renderEntryAsText(childEntry, entry))
@@ -2126,7 +2126,7 @@ func (l *TBibTeXLibrary) CheckLoneProceedings() {
 
 	// addDblpChildrenForKey imports all DBLP children of libraryKey whose proceedings
 	// has the given dblpKey. Only reports progress when something actually changes.
-	// Returns true when at least one child was found in the DBLP file store.
+	// Returns true when at least one child was found in the DBLP store.
 	addDblpChildrenForKey := func(libraryKey, dblpKey string) bool {
 		children := readDblpCrossrefChildren(dblpKey)
 		if len(children) == 0 {

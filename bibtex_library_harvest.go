@@ -359,7 +359,7 @@ func (l *TBibTeXLibrary) harvestFindDblpCandidates(e TBibTeXEntry, excludeDblpKe
 	fmt.Fprintf(os.Stderr, "\n")
 	for i, c := range candidates {
 		fmt.Fprintf(os.Stderr, "  [%d] %s", i+1, c)
-		if entry := dblpEntryFromFile(c); entry != nil {
+		if entry := dblpEntryFromStore(c); entry != nil {
 			for _, field := range []string{"title", "year", "author", "booktitle", "journal"} {
 				if v := entry.Fields[field]; v != "" {
 					fmt.Fprintf(os.Stderr, "\n      %-12s: %s", field, v)

@@ -15,7 +15,7 @@
  *
  * Creator: Henderik A. Proper (e.proper@acm.org), Luxembourg, in collaboration with Claude.ai
  *
- * Version of: 26.05.2026
+ * Version of: 13.11.2026
  *
  */
 
@@ -23,7 +23,6 @@ package main
 
 import (
 	"math"
-	"os"
 	"path"
 	"regexp"
 	"strconv"
@@ -40,7 +39,7 @@ var reKeyNumericSuffix = regexp.MustCompile(`-(\d+)$`)
 // findCandidateDblpParents returns all DBLP keys for proceedings/book entries
 // in the same conference directory as childDBLPKey and with the same year.
 // Returns nil when there is no ambiguity (zero or one candidate).
-// dirCache maps "parentDir\x00year" to the crossrefs/-scan result.
+// dirCache maps "parentDir\x00year" to the result of that parent scan.
 // jsonCache maps DBLP keys to their parsed JSON entries; both may be nil to skip caching.
 // Rule 0 (child's own crossref) is checked first and bypasses the dirCache entirely,
 // since different children in the same venue/year may point to different parents.
@@ -73,7 +72,7 @@ func findCandidateDblpParents(childDBLPKey string, dirCache map[string][]string,
 		return nil
 	}
 
-	// Rule 0: if the child's data.json claims a specific parent and that parent
+	// Rule 0: if the child's DBLP entry claims a specific parent and that parent
 	// exists as a valid parent-type entry, DBLP's own assignment is authoritative.
 	// Do not cache: siblings in the same venue/year may point to different parents.
 	if parentJe := cachedJSON(ownParent); parentJe != nil {
@@ -83,7 +82,7 @@ func findCandidateDblpParents(childDBLPKey string, dirCache map[string][]string,
 	}
 
 	// Child claims a parent that isn't in the store yet or has an unexpected type.
-	// Fall back to crossrefs/ scan to find candidates in the same venue/year.
+	// Fall back to the parents of other entries in the same venue, same year.
 	childYear := childJe.Fields["year"]
 	cacheKey := parentDir + "\x00" + childYear
 	if dirCache != nil {
@@ -92,21 +91,8 @@ func findCandidateDblpParents(childDBLPKey string, dirCache map[string][]string,
 		}
 	}
 
-	crossrefsDir := dblpFolder() + "crossrefs/" + parentDir
-	dirEntries, err := os.ReadDir(crossrefsDir)
-	if err != nil {
-		if dirCache != nil {
-			dirCache[cacheKey] = nil
-		}
-		return nil
-	}
-
 	var candidates []string
-	for _, e := range dirEntries {
-		if !e.IsDir() {
-			continue
-		}
-		key := parentDir + "/" + e.Name()
+	for _, key := range readDblpCrossrefParentsIn(parentDir) {
 		je := cachedJSON(key)
 		if je == nil {
 			continue
@@ -127,7 +113,7 @@ func findCandidateDblpParents(childDBLPKey string, dirCache map[string][]string,
 }
 
 // checkSiblingConsistency returns true when every library entry that shares
-// crossrefLibKey as its crossref also has a DBLP data.json that points to
+// crossrefLibKey as its crossref also has a DBLP entry that points to
 // candidateDblpKey as its parent. Siblings without a DBLP key are skipped.
 func (l *TBibTeXLibrary) checkSiblingConsistency(crossrefLibKey, candidateDblpKey string) bool {
 	consistent := true
@@ -350,7 +336,7 @@ func (l *TBibTeXLibrary) FixDblpHierarchy() {
 }
 
 // SetDblpParentOverride records that childDBLPKey's parent is parentDBLPKey,
-// overriding whatever DBLP's data.json says.
+// overriding whatever the DBLP entry says.
 func (l *TBibTeXLibrary) SetDblpParentOverride(childDBLPKey, parentDBLPKey string) {
 	l.DblpParent.Set(childDBLPKey, parentDBLPKey)
 }

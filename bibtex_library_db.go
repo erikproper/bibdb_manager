@@ -25,7 +25,7 @@
  *
  * Creator: Henderik A. Proper (e.proper@acm.org), Luxembourg, in collaboration with Claude.ai
  *
- * Version of: 04.05.2026
+ * Version of: 13.11.2026
  *
  */
 
@@ -3868,7 +3868,7 @@ func upsertBibEntryField(key, field, value string) {
 		err = bibExec(`DELETE FROM bib_entries WHERE entry_key = ? AND field = ?`, key, field)
 		if field == DBLPField {
 			deleteDblpCanonicalByCanonicalKey(key)
-			// dblp_key_missing records "this entry's dblp key isn't in the file store
+			// dblp_key_missing records "this entry's dblp key isn't in the DBLP store
 			// yet" — meaningless once the entry has no dblp key at all. Without this,
 			// clearing dblp leaves a stale flag behind forever (nothing else re-checks
 			// or clears it for an entry with an empty dblp field).
@@ -3901,7 +3901,7 @@ func upsertBibEntryField(key, field, value string) {
 			// that carries it. Only an explicit clear (value == "", handled above) drops
 			// the mapping — see the matching comment there.
 			upsertDblpCanonical(value, key)
-			// The dblp key changed, so any earlier "not found in file store" flag was
+			// The dblp key changed, so any earlier "not found in the DBLP store" flag was
 			// about a different key — clear it. MarkDblpKeyMissing re-sets it on the
 			// next check if the new key is also missing.
 			Library.DeleteMetadata(key, MetaPropDblpKeyMissing)
@@ -3957,7 +3957,7 @@ func deleteBibEntryField(key, field string) {
 		// must also drop the dblp_canonical row, or the old dblp key keeps resolving
 		// to this entry (via LookupDblpCanonical/buildKeyAliasesFromDb) even though
 		// bib_entries no longer shows it. Same for dblp_key_missing — "not found in
-		// file store" is meaningless once there's no dblp key to look up at all.
+		// DBLP store" is meaningless once there's no dblp key to look up at all.
 		if field == DBLPField {
 			deleteDblpCanonicalByCanonicalKey(key)
 			Library.DeleteMetadata(key, MetaPropDblpKeyMissing)
