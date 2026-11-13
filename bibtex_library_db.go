@@ -535,6 +535,11 @@ func ensureContributorRolesTableExists() {
 		  contributor_id TEXT    NOT NULL REFERENCES contributors(id),
 		  PRIMARY KEY (entry_key, role, position)
 		);`)
+	// Lookups by contributor (e.g. the DBLP contributor splits) would otherwise scan
+	// the whole table.
+	tryCreateTableIfNeeded(`
+		CREATE INDEX IF NOT EXISTS contributor_roles_contributor
+		  ON contributor_roles(contributor_id, entry_key);`)
 }
 
 func ensureEntryContributorNamesTableExists() {
