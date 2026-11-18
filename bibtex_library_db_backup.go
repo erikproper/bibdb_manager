@@ -7,7 +7,7 @@
  *     - bibtex_library_db_backup
  *
  * Nextcloud copy of the library database (plan step 21.2). The database is used
- * locally (dbPath(), in cache_folder); the home folder (home_folder in the settings,
+ * locally (dbPath(), in local_db_folder); the shared DB folder (shared_db_folder,
  * by default the library's folder) only holds a copy: $base.sqlite3, $base.dump and
  * the stamp $base.stamp.
  *
@@ -52,7 +52,7 @@ const (
 	pushGenerationMarker = "push_generation"
 )
 
-// TLibraryStamp describes the copy in the home folder.
+// TLibraryStamp describes the copy in the shared DB folder.
 type TLibraryStamp struct {
 	Generation int64  `json:"generation"`
 	PushedAt   string `json:"pushed_at"` // RFC 3339
@@ -60,7 +60,7 @@ type TLibraryStamp struct {
 	Size       int64  `json:"size"` // of $base.sqlite3
 }
 
-// TLibraryUnpushed marks local changes that are not (yet) in the home folder.
+// TLibraryUnpushed marks local changes that are not (yet) in the shared DB folder.
 type TLibraryUnpushed struct {
 	BaseGeneration int64 `json:"base_generation"` // generation the changes started from
 }
@@ -75,8 +75,8 @@ var libraryPushNeeded bool
 // and saveKeyNonDoublesToDb would drop every non-double pair of an empty one.
 var writeSessionOpenFailed bool
 
-func libraryStampPath() string { return homeFolder + bibTeXBaseName + libraryStampExtension }
-func libraryDumpPath() string  { return homeFolder + bibTeXBaseName + libraryDumpExtension }
+func libraryStampPath() string { return sharedDBFolder + bibTeXBaseName + libraryStampExtension }
+func libraryDumpPath() string  { return sharedDBFolder + bibTeXBaseName + libraryDumpExtension }
 
 func libraryUnpushedPath() string {
 	return strings.TrimSuffix(dbPath(), cacheFileExtension) + libraryUnpushedExtension
@@ -205,13 +205,13 @@ func checkDbFile(path string) error {
 }
 
 // pushLibraryDatabase copies the local database (closed, or checkpointed with no
-// write in progress) to the home folder, with a dump when withDump, and writes the
+// write in progress) to the shared DB folder, with a dump when withDump, and writes the
 // stamp last. The database must already carry generation gen.
 func pushLibraryDatabase(gen int64, withDump bool) error {
 	if !dbIsolationActive() {
 		return nil
 	}
-	if err := os.MkdirAll(homeFolder, 0o755); err != nil {
+	if err := os.MkdirAll(sharedDBFolder, 0o755); err != nil {
 		return err
 	}
 	working := dbPath()
@@ -257,7 +257,7 @@ func restoreLibraryDatabase(stamp *TLibraryStamp) error {
 		return err
 	}
 	if info.Size() != stamp.Size {
-		return fmt.Errorf("the copy in %s is not fully synced yet (%d of %d bytes)", homeFolder, info.Size(), stamp.Size)
+		return fmt.Errorf("the copy in %s is not fully synced yet (%d of %d bytes)", sharedDBFolder, info.Size(), stamp.Size)
 	}
 	removeDblpDBFiles(tmp)
 	if err := copyFileAtomic(home, tmp); err != nil {
@@ -266,7 +266,7 @@ func restoreLibraryDatabase(stamp *TLibraryStamp) error {
 	}
 	if err := checkDbFile(tmp); err != nil {
 		removeDblpDBFiles(tmp)
-		return fmt.Errorf("the copy in %s is damaged: %w", homeFolder, err)
+		return fmt.Errorf("the copy in %s is damaged: %w", sharedDBFolder, err)
 	}
 	gen, err := dbFilePushGeneration(tmp)
 	if err != nil {
@@ -276,7 +276,7 @@ func restoreLibraryDatabase(stamp *TLibraryStamp) error {
 	if gen != stamp.Generation {
 		removeDblpDBFiles(tmp)
 		return fmt.Errorf("the copy in %s has generation %d, its stamp says %d (Nextcloud still syncing?)",
-			homeFolder, gen, stamp.Generation)
+			sharedDBFolder, gen, stamp.Generation)
 	}
 	os.Remove(working + "-wal") //nolint:errcheck
 	os.Remove(working + "-shm") //nolint:errcheck
@@ -312,7 +312,7 @@ func localEntryCount() int {
 	return n
 }
 
-// alignWithLibraryStamp is phase 1 of a write session when the home folder holds a
+// alignWithLibraryStamp is phase 1 of a write session when the shared DB folder holds a
 // stamped copy: it decides between the local database and the home copy. Returns
 // false when the run cannot go on.
 func alignWithLibraryStamp(stamp *TLibraryStamp, hInfo os.FileInfo) bool {

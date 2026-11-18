@@ -54,7 +54,7 @@ var (
 	Reporting TInteraction
 )
 
-const AppVersion = "30.9"
+const AppVersion = "30.13"
 
 // Run-state flags consumed by the write tail in main.
 var (
@@ -816,7 +816,7 @@ func flockPath(lockPath string) *os.File {
 }
 
 func acquireInstanceLock() {
-	instanceLockFile = flockPath(libraryBase() + LockFileExtension)
+	instanceLockFile = flockPath(localDBFolder + bibTeXBaseName + LockFileExtension)
 }
 
 func acquireDblpLock() {
@@ -3853,6 +3853,75 @@ func doAssignOrcid(args []string) {
 	}
 }
 
+// Command flags, at package level so the command table (commands.go) can use them.
+var (
+	cmdSync               bool
+	cmdGetPdfs            bool
+	cmdFindEntries        bool
+	cmdEntryKey           bool
+	cmdEntryKeyAlias      bool
+	cmdShowEntry          bool
+	cmdFixEntries         bool
+	cmdFixDuplicates        bool // -fix_duplicates: fix entries in unresolved title groups
+	cmdFixCandidates        bool // -fix_candidates: link unmatched entries to DBLP
+	cmdTriageAuthorMappings    bool // -triage_author_mappings: triage author/editor superseded_field_values
+	cmdTriageContributorAliases bool // -triage_contributor_aliases: generalise or keep entry-specific contributor aliases
+	cmdDisambiguateContributors bool // -disambiguate_contributors: resolve ambiguous contributor-name assignments
+	cmdUpgradeWatchActions      bool // -upgrade_watch_actions: rewrite watch file to contributor format
+	cmdAssignOrcid              bool // -assign_orcid: assign an ORCID to a contributor
+	cmdEnrichContributorData    bool // -enrich_contributor_data: run full contributor enrichment pipeline
+	cmdHomework                 bool // -homework: run all pending homework in priority order
+	cmdMergeContributors     bool // -merge_contributors: merge two contributors into one
+	cmdAddDblpEntry   bool
+	cmdAddDblpEntries bool
+	cmdWatch             bool
+	cmdAddGroup              bool // -add_group: create a new BibDesk static group (with optional initial entries)
+	cmdAddKeyMapping         bool
+	cmdMergeEntries       bool
+	cmdAddNameMapping     bool
+	cmdCorrectName        bool
+	cmdAddDoiAlias        bool
+	cmdSetPreferredAlias  bool
+	cmdNewKey             bool
+	cmdDeleteEntry        bool
+	cmdMap                bool
+	cmdUseAliases         bool
+	cmdAddToGroup         bool
+	cmdRemoveFromGroup    bool
+	cmdSetGroups          bool
+	cmdSetField           bool
+	cmdRenderAsBibTeX     bool
+	cmdRenderGroup        bool
+	cmdListGroupAliases   bool
+	cmdRenderAsTex        bool
+	cmdRenderAsHTML       bool
+	cmdRenderAsText       bool
+	cmdCheckPdfs                bool
+	cmdAlignBooktitleCountries  bool
+	cmdUpdateOrcidCache         bool
+	cmdLoadDblpXml              bool
+	cmdPushDblp                 bool
+	cmdRestoreDblp              bool
+	cmdUpdateDblp               bool
+	cmdRestoreKeyHints      bool
+	restoreKeyHintsPath     string
+	cmdDeleteGarbage            bool
+	cmdRestoreFromDump          bool
+	cmdRestoreBackupName        string // -restore <name>: restore named backup to home DB
+	cmdApplyScript              bool
+	// Unified table export/import (v23.0).
+	// Bare flag (-export) means "all"; with value (-export t1,t2) means those tables.
+	cmdExport tableListFlag
+	cmdImport tableListFlag
+
+	cmdSetSyncStatus string // -set_sync_status <status> <source_key> <stem>: set/clear a sync status flag
+
+	cmdImportAllCSV bool // legacy migration helper; kept for migrate.sh compat
+	cmdImportBib    bool
+
+	cmdHarvest bool // -harvest: harvest entries from a bib file (path from args) or stdin
+)
+
 func main() {
 	stderrPrintf("%s %s\n", filepath.Base(os.Args[0]), AppVersion)
 
@@ -3892,73 +3961,6 @@ func main() {
 	flag.BoolVar(&cmdVersion, "version", false, "print version and exit")
 	flag.BoolVar(&cmdVersion, "v", false, "print version and exit")
 
-	var (
-		cmdSync               bool
-		cmdGetPdfs            bool
-		cmdFindEntries        bool
-		cmdEntryKey           bool
-		cmdEntryKeyAlias      bool
-		cmdShowEntry          bool
-		cmdFixEntries         bool
-		cmdFixDuplicates        bool // -fix_duplicates: fix entries in unresolved title groups
-		cmdFixCandidates        bool // -fix_candidates: link unmatched entries to DBLP
-		cmdTriageAuthorMappings    bool // -triage_author_mappings: triage author/editor superseded_field_values
-		cmdTriageContributorAliases bool // -triage_contributor_aliases: generalise or keep entry-specific contributor aliases
-		cmdDisambiguateContributors bool // -disambiguate_contributors: resolve ambiguous contributor-name assignments
-		cmdUpgradeWatchActions      bool // -upgrade_watch_actions: rewrite watch file to contributor format
-		cmdAssignOrcid              bool // -assign_orcid: assign an ORCID to a contributor
-		cmdEnrichContributorData    bool // -enrich_contributor_data: run full contributor enrichment pipeline
-		cmdHomework                 bool // -homework: run all pending homework in priority order
-		cmdMergeContributors     bool // -merge_contributors: merge two contributors into one
-		cmdAddDblpEntry   bool
-		cmdAddDblpEntries bool
-		cmdWatch             bool
-		cmdAddGroup              bool // -add_group: create a new BibDesk static group (with optional initial entries)
-		cmdAddKeyMapping         bool
-		cmdMergeEntries       bool
-		cmdAddNameMapping     bool
-		cmdCorrectName        bool
-		cmdAddDoiAlias        bool
-		cmdSetPreferredAlias  bool
-		cmdNewKey             bool
-		cmdDeleteEntry        bool
-		cmdMap                bool
-		cmdUseAliases         bool
-		cmdAddToGroup         bool
-		cmdRemoveFromGroup    bool
-		cmdSetGroups          bool
-		cmdSetField           bool
-		cmdRenderAsBibTeX     bool
-		cmdRenderGroup        bool
-		cmdListGroupAliases   bool
-		cmdRenderAsTex        bool
-		cmdRenderAsHTML       bool
-		cmdRenderAsText       bool
-		cmdCheckPdfs                bool
-		cmdAlignBooktitleCountries  bool
-		cmdUpdateOrcidCache         bool
-		cmdLoadDblpXml              bool
-		cmdPushDblp                 bool
-		cmdRestoreDblp              bool
-		cmdUpdateDblp               bool
-		cmdRestoreKeyHints      bool
-		restoreKeyHintsPath     string
-		cmdDeleteGarbage            bool
-		cmdRestoreFromDump          bool
-		cmdRestoreBackupName        string // -restore <name>: restore named backup to home DB
-		cmdApplyScript              bool
-		// Unified table export/import (v23.0).
-		// Bare flag (-export) means "all"; with value (-export t1,t2) means those tables.
-		cmdExport tableListFlag
-		cmdImport tableListFlag
-
-		cmdSetSyncStatus string // -set_sync_status <status> <source_key> <stem>: set/clear a sync status flag
-
-		cmdImportAllCSV bool // legacy migration helper; kept for migrate.sh compat
-		cmdImportBib    bool
-
-		cmdHarvest bool // -harvest: harvest entries from a bib file (path from args) or stdin
-	)
 
 	flag.BoolVar(&cmdSync, "sync", false, "sync library to bib file(s) via exchange config; optional arg narrows to one file")
 	flag.BoolVar(&cmdPull, "pull", false, "with -sync: skip up-sync (phase 1) and re-import; only write bib output from DB")
@@ -4011,14 +4013,14 @@ func main() {
 flag.BoolVar(&cmdAlignBooktitleCountries, "align_booktitle_countries", false, "detect and fix unbraced country names in booktitle fields")
 	flag.BoolVar(&cmdUpdateOrcidCache, "update_orcid", false, "refresh the ORCID disk cache for all known contributors (oldest-first, q+Enter to stop)")
 	flag.BoolVar(&cmdLoadDblpXml, "load_dblp_xml", false, "load a DBLP .xml.gz export into the local DBLP store")
-	flag.BoolVar(&cmdPushDblp, "push_dblp", false, "copy the local DBLP store to DBLP.backup/ next to the library (Nextcloud)")
-	flag.BoolVar(&cmdRestoreDblp, "restore_dblp", false, "replace the local DBLP store with the copy in DBLP.backup/")
+	flag.BoolVar(&cmdPushDblp, "push_dblp", false, "copy the local DBLP store to DBLP/ in the shared DB folder (Nextcloud)")
+	flag.BoolVar(&cmdRestoreDblp, "restore_dblp", false, "replace the local DBLP store with the copy in DBLP/ in the shared DB folder")
 	flag.BoolVar(&cmdUpdateDblp, "update_dblp", false, "import a manually downloaded DBLP XML export (dblp.xml.gz) found in your Downloads folder")
 	flag.BoolVar(&cmdRestoreKeyHints, "restore_key_hints", false, "restore key hints from a backup CSV, remapping old keys via key_oldies")
 	flag.StringVar(&restoreKeyHintsPath, "hints_csv", "", "path to the backup key_hints.csv for -restore_key_hints")
 	flag.BoolVar(&cmdDeleteGarbage, "delete_garbage", false, "delete DBLP trash folder contents and exit")
-	flag.BoolVar(&cmdRestoreFromDump, "restore_from_dump", false, "rebuild the local database from $base.dump in the home folder and push it (use after corruption)")
-	flag.StringVar(&cmdRestoreBackupName, "restore", "", "restore the local database from a named backup and push it to the home folder (e.g. -restore ErikProper_20260709_123456)")
+	flag.BoolVar(&cmdRestoreFromDump, "restore_from_dump", false, "rebuild the local database from $base.dump in the shared DB folder and push it (use after corruption)")
+	flag.StringVar(&cmdRestoreBackupName, "restore", "", "restore the local database from a named backup and push it to the shared DB folder (e.g. -restore ErikProper_20260709_123456)")
 	flag.BoolVar(&cmdNoGarbageCleaning, "no_garbage_cleaning", false, "skip background cleanup of the DBLP trash folder")
 	flag.BoolVar(&cmdApplyScript, "do_entry_actions", false, "evaluate group assignment rules from <base>.scripts/entry_actions")
 	// Unified table export / import (v23.0)
@@ -4083,17 +4085,19 @@ flag.BoolVar(&cmdAlignBooktitleCountries, "align_booktitle_countries", false, "d
 	if backupFolder == "" {
 		backupFolder = libraryBase() + ".backups/"
 	}
-	if globalFolder == "" {
-		globalFolder = bibTeXFolder
+	if localDBFolder == "" {
+		localDBFolder = bibTeXFolder
 	}
-	if homeFolder == "" {
-		homeFolder = bibTeXFolder
+	if sharedDBFolder == "" {
+		sharedDBFolder = bibTeXFolder
 	}
-	loadUnicodeMap(globalFolder + "unicode_map.csv")
-	loadHtmlCommandsMap(globalFolder + "html_commands_map.csv")
-	loadHtmlCharacterMap(globalFolder + "html_character_map.csv")
-	loadLatexIndexerMap(globalFolder + "latex_indexer.csv")
-	loadHarvestIgnoreKeys(globalFolder + "harvest_ignore_keys.csv")
+	maybeMigrateFolderNames()
+	loadMapContentsFromDB()
+	loadUnicodeMap(localDBFolder + "unicode_map.csv")
+	loadHtmlCommandsMap(localDBFolder + "html_commands_map.csv")
+	loadHtmlCharacterMap(localDBFolder + "html_character_map.csv")
+	loadLatexIndexerMap(localDBFolder + "latex_indexer.csv")
+	loadHarvestIgnoreKeys(localDBFolder + "harvest_ignore_keys.csv")
 
 	if cmdNewKey {
 		doNewKey()
@@ -4177,7 +4181,6 @@ flag.BoolVar(&cmdAlignBooktitleCountries, "align_booktitle_countries", false, "d
 		endRun(0)
 	}
 
-	maybeMigrateDblpFolder()
 	maybeMigrateDblpNameFiles()
 	connectToDatabase()
 
@@ -4185,349 +4188,7 @@ flag.BoolVar(&cmdAlignBooktitleCountries, "align_booktitle_countries", false, "d
 		maybeStartDblpTrashCleanup()
 	}
 
-	switch {
-	case cmdSync:
-		filter := ""
-		if len(args) > 0 {
-			filter = args[0]
-		}
-		endRunOnError(doSync(filter))
-
-	case cmdGetPdfs:
-		doGetPdfs()
-
-	case cmdFindEntries:
-		if len(args) == 0 || len(args) > 2 {
-			messageln("Usage: -find_entries <field> [<value>]")
-			endRun(1)
-		}
-		doFindEntries(args)
-
-	case cmdEntryKey:
-		if len(args) == 0 {
-			messageln("Usage: -entry_key <alias>")
-			endRun(1)
-		}
-		doEntryKey(args)
-
-	case cmdEntryKeyAlias:
-		if len(args) == 0 {
-			messageln("Usage: -entry_key_alias <key>")
-			endRun(1)
-		}
-		doEntryKeyAlias(args, cmdMap)
-
-	case cmdMap:
-		if len(args) < 2 {
-			messageln("Usage: -map <alias>... <canonical>")
-			endRun(1)
-		}
-		doAddKeyMapping(args)
-
-	case cmdShowEntry:
-		if len(args) == 0 {
-			messageln("Usage: -show_entry <key>")
-			endRun(1)
-		}
-		doShowEntry(args)
-
-	case cmdFixEntries:
-		if len(args) == 0 {
-			messageln("Usage: -fix_entries <key>...")
-			endRun(1)
-		}
-		doFixEntries(args)
-
-	case cmdFixDuplicates:
-		doFixDuplicates()
-
-	case cmdTriageAuthorMappings:
-		doTriageAuthorMappings()
-
-	case cmdTriageContributorAliases:
-		doTriageContributorAliases()
-
-	case cmdDisambiguateContributors:
-		doDisambiguateContributors()
-
-	case cmdUpgradeWatchActions:
-		doUpgradeWatchActions()
-
-	case cmdAssignOrcid:
-		if len(args) != 2 {
-			messageln("Usage: -assign_orcid <name-or-EP-id> <orcid>")
-			endRun(1)
-		}
-		doAssignOrcid(args)
-
-	case cmdUpdateOrcidCache:
-		doUpdateOrcidCache()
-
-	case cmdHomework:
-		doHomework()
-
-	case cmdEnrichContributorData:
-		doEnrichContributorData()
-
-	case cmdMergeContributors:
-		if len(args) < 2 {
-			messageln("Usage: -merge_contributors <from...> <into>")
-			endRun(1)
-		}
-		doMergeContributors(args)
-
-	case cmdRestoreKeyHints:
-		doRestoreKeyHints(restoreKeyHintsPath)
-
-	case cmdUpdateDblp:
-		doUpsertDblpEntries()
-		if dbWriteSessionActive {
-			runWatchAndScript()
-		}
-
-	case cmdFixCandidates:
-		doFixCandidates()
-
-	case cmdAddDblpEntries:
-		requireNoDblpImport()
-		doUpsertDblpEntries()
-
-	case cmdAddDblpEntry:
-		requireNoDblpImport()
-		if len(args) == 0 {
-			messageln("Usage: -add_dblp_entry <key>...")
-			endRun(1)
-		}
-		// Route each argument: DBLP keys (containing "/") go to doAddDblpEntry;
-		// library keys go to doFixDblpFor.
-		var libKeys, dblpKeys []string
-		for _, arg := range args {
-			if strings.Contains(arg, "/") {
-				dblpKeys = append(dblpKeys, arg)
-			} else {
-				libKeys = append(libKeys, arg)
-			}
-		}
-		if len(libKeys) > 0 {
-			doUpsertDblpFor(libKeys)
-		}
-		if len(dblpKeys) > 0 {
-			doUpsertDblpEntryFromDblpKeys(dblpKeys)
-		}
-
-case cmdWatch:
-		requireNoDblpImport()
-		doWatch()
-
-	case cmdAddGroup:
-		if len(args) < 1 {
-			messageln("Usage: -add_group <group_name> [key...]")
-			endRun(1)
-		}
-		doCreateGroup(args)
-
-	case cmdAddKeyMapping:
-		if len(args) < 2 {
-			messageln("Usage: -add_key_mapping <alias>... <canonical>")
-			endRun(1)
-		}
-		doAddKeyMapping(args)
-
-	case cmdMergeEntries:
-		if len(args) < 2 {
-			messageln("Usage: -merge_entries <key>... <target>")
-			endRun(1)
-		}
-		doMergeEntries(args)
-
-	case cmdAddNameMapping:
-		if len(args) != 2 {
-			messageln("Usage: -add_name_mapping <canonical> <alias>")
-			endRun(1)
-		}
-		doAddNameMapping(args)
-
-	case cmdCorrectName:
-		if len(args) != 2 {
-			messageln("Usage: -correct_name <bad_name> <correct_name>")
-			endRun(1)
-		}
-		doCorrectName(args)
-
-	case cmdAddDoiAlias:
-		if len(args) != 2 {
-			messageln("Usage: -add_doi_alias <doi> <entry_key>")
-			endRun(1)
-		}
-		if !openLibraryToUpdate() {
-			endRun(1)
-		}
-		addEntryDoiAlias(args[1], args[0])
-
-	case cmdDeleteEntry:
-		if len(args) == 0 {
-			messageln("Usage: -delete_entry <key>...")
-			endRun(1)
-		}
-		if !openLibraryToUpdate() {
-			endRun(1)
-		}
-		for _, rawKey := range args {
-			key := Library.MapEntryKey(rawKey)
-			if key == "" {
-				key = rawKey
-			}
-			if !Library.EntryExists(key) {
-				messagef("Entry not found: %s\n", rawKey)
-				continue
-			}
-			messagef("\nEntry to delete:\n%s\n", Library.entryDisplayString(key))
-			if !Library.ConfirmAction(fmt.Sprintf("Delete %s?", key)) {
-				continue
-			}
-			Library.DeleteEntry(key)
-			Library.Progress("Deleted: %s", key)
-		}
-
-	case cmdSetPreferredAlias:
-		if len(args) != 2 {
-			messageln("Usage: -set_preferred_alias <key> <alias>")
-			endRun(1)
-		}
-		doSetPreferredAlias(args)
-
-	case cmdSetField:
-		if len(args) < 2 || len(args) > 3 {
-			messageln("Usage: -set_field <key> <field> [<value>]")
-			endRun(1)
-		}
-		doSetField(args)
-
-	case cmdAddToGroup:
-		if len(args) != 2 {
-			messageln("Usage: -add_to_group <key> <group>")
-			endRun(1)
-		}
-		doAddToGroup(args)
-
-	case cmdRemoveFromGroup:
-		if len(args) != 2 {
-			messageln("Usage: -remove_from_group <key> <group>")
-			endRun(1)
-		}
-		doRemoveFromGroup(args)
-
-	case cmdSetGroups:
-		if len(args) < 2 {
-			messageln("Usage: -set_groups <key> [+] <group>...")
-			endRun(1)
-		}
-		doSetGroups(args)
-
-	case cmdRenderGroup:
-		if len(args) != 3 {
-			messageln("Usage: -render_group [-use_aliases] <group> <pubs_folder> <citations_folder>")
-			endRun(1)
-		}
-		doRenderGroup(args, cmdUseAliases)
-
-	case cmdListGroupAliases:
-		if len(args) != 1 {
-			messageln("Usage: -list_group_aliases <group>")
-			endRun(1)
-		}
-		doListGroupAliases(args)
-
-	case cmdRenderAsBibTeX:
-		if len(args) == 0 {
-			messageln("Usage: -render_as_bibtex <key>")
-			endRun(1)
-		}
-		doRenderAsBibTeX(args)
-
-	case cmdRenderAsTex:
-		if len(args) == 0 {
-			messageln("Usage: -render_as_tex <key>")
-			endRun(1)
-		}
-		doRenderAsTex(args)
-
-	case cmdRenderAsHTML:
-		if len(args) == 0 {
-			messageln("Usage: -render_as_html <key>")
-			endRun(1)
-		}
-		doRenderAsHTML(args)
-
-	case cmdRenderAsText:
-		if len(args) == 0 {
-			messageln("Usage: -render_as_text <key>")
-			endRun(1)
-		}
-		doRenderAsText(args)
-
-	case cmdCheckPdfs:
-		doCheckPDFs()
-
-case cmdAlignBooktitleCountries:
-		if openLibraryToUpdate() {
-			Library.CheckAlignBooktitleCountries()
-		}
-
-	case cmdApplyScript:
-		doApplyScript()
-
-	case cmdExport != "":
-		// IsBoolFlag=true means "-export table" parses as bare "-export" with "table" in args.
-		// When the spec is the default "all" and positional args are present, treat the first
-		// arg as the table spec so "-export bib_entries" works alongside "-export=bib_entries".
-		exportSpec := string(cmdExport)
-		if exportSpec == "all" && len(args) > 0 {
-			exportSpec = strings.Join(args, ",")
-		}
-		if openLibraryToReport() {
-			ExportTables(exportSpec)
-		}
-
-	case cmdImport != "":
-		importSpec := string(cmdImport)
-		if importSpec == "all" && len(args) > 0 {
-			importSpec = strings.Join(args, ",")
-		}
-		skipStartupChecks = true
-		if openLibraryToUpdate() {
-			ImportTables(importSpec, &Library)
-		}
-
-	case cmdImportAllCSV:
-		// Does not require ValidBibDb: mapping tables are imported independently of bib entries.
-		if prepareWorkingDatabase() {
-			if ImportAllCSVExchangeFiles() {
-				dbInteraction.Progress("All CSV exchange files imported successfully.")
-			}
-		}
-
-	case cmdImportBib:
-		if len(args) == 0 {
-			messageln("Usage: -import_bib <file.bib>")
-			endRun(1)
-		}
-		doImportBib(args[0])
-
-	case cmdHarvest:
-		path := ""
-		if len(args) > 0 {
-			path = args[0]
-		}
-		doHarvest(path)
-
-	default:
-		if len(args) > 0 {
-			messageln("Unexpected arguments (did you forget a command flag?):", args)
-			endRun(1)
-		}
-		doDefaultRun()
-	}
+	selectCommand().run(args)
 
 	if writeSessionOpenFailed {
 		stderrPrintf("\n")

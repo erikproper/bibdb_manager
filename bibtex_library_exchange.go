@@ -648,7 +648,7 @@ func importIgnoreTitlesFromCSV(replace bool) {
 // CSV format: field;original;shortened  (global file, not per-library)
 
 func ExportShortenMappings() {
-	path := globalFolder + ShortenMappingsFilePath
+	path := localDBFolder + ShortenMappingsFilePath
 	rows, err := db.Query(`SELECT field, original, shortened FROM shorten_mappings ORDER BY field, original`)
 	if err != nil {
 		dbInteraction.Warning("Could not query shorten_mappings: %s", err)
@@ -659,7 +659,7 @@ func ExportShortenMappings() {
 }
 
 func importShortenMappingsFromCSV(replace bool) {
-	path := globalFolder + ShortenMappingsFilePath
+	path := localDBFolder + ShortenMappingsFilePath
 	upsert := `INSERT INTO shorten_mappings (field, original, shortened) VALUES (?, ?, ?)
 	             ON CONFLICT(field, original) DO UPDATE SET shortened = excluded.shortened`
 	// shorten_mappings.csv uses '#' comment lines and blank section separators — skip them.
@@ -920,9 +920,9 @@ func ImportAllCSVExchangeFiles() bool {
 		dbInteraction.Progress("Importing %s from %s", t.name, t.path)
 		t.fn(true)
 	}
-	// shorten_mappings lives in globalFolder, not exchange folder
-	if _, err := os.Stat(globalFolder + ShortenMappingsFilePath); err == nil {
-		dbInteraction.Progress("Importing shorten_mappings from %s", globalFolder+ShortenMappingsFilePath)
+	// shorten_mappings lives in localDBFolder, not exchange folder
+	if _, err := os.Stat(localDBFolder + ShortenMappingsFilePath); err == nil {
+		dbInteraction.Progress("Importing shorten_mappings from %s", localDBFolder+ShortenMappingsFilePath)
 		importShortenMappingsFromCSV(true)
 	}
 	if _, err := os.Stat(tablesFilePath(EntryMetadataFilePath)); err == nil {

@@ -774,9 +774,9 @@ func doLoadDblpXml(args []string) error {
 		XMLFile:              filepath.Base(xmlGzPath),
 		LoadedAt:             time.Now().UTC().Format(time.RFC3339),
 		EntryCount:           count,
-		HtmlCommandsMapHash:  csvFileHash(globalFolder + "html_commands_map.csv"),
-		HtmlCharacterMapHash: csvFileHash(globalFolder + "html_character_map.csv"),
-		UnicodeMapHash:       csvFileHash(globalFolder + "unicode_map.csv"),
+		HtmlCommandsMapHash:  csvFileHash(localDBFolder + "html_commands_map.csv"),
+		HtmlCharacterMapHash: csvFileHash(localDBFolder + "html_character_map.csv"),
+		UnicodeMapHash:       csvFileHash(localDBFolder + "unicode_map.csv"),
 	}
 	finishStart := time.Now()
 	err = builder.finish(meta, func(format string, args ...any) {

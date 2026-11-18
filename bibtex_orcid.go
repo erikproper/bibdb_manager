@@ -82,12 +82,20 @@ func fetchORCIDPersonWithStatus(orcid string) (*orcidPersonResult, orcidFetchSta
 
 	var p struct {
 		Name struct {
-			CreditName struct{ Value string `json:"value"` } `json:"credit-name"`
-			FamilyName struct{ Value string `json:"value"` } `json:"family-name"`
-			GivenNames struct{ Value string `json:"value"` } `json:"given-names"`
+			CreditName struct {
+				Value string `json:"value"`
+			} `json:"credit-name"`
+			FamilyName struct {
+				Value string `json:"value"`
+			} `json:"family-name"`
+			GivenNames struct {
+				Value string `json:"value"`
+			} `json:"given-names"`
 		} `json:"name"`
 		OtherNames struct {
-			OtherName []struct{ Content string `json:"content"` } `json:"other-name"`
+			OtherName []struct {
+				Content string `json:"content"`
+			} `json:"other-name"`
 		} `json:"other-names"`
 	}
 	if err := json.Unmarshal(body, &p); err != nil {
@@ -122,14 +130,11 @@ func fetchORCIDPerson(orcid string) *orcidPersonResult {
 
 // orcidFolder returns the path to the ORCID disk cache directory (parallel to dblpFolder).
 func orcidFolder() string {
-	if globalFolder != "" {
-		return globalFolder + "ORCID.cache/"
-	}
-	return bibTeXFolder + "ORCID.cache/"
+	return localDBFolder + orcidSubfolder
 }
 
 // orcidCachePath returns the data.json path for a given ORCID.
-// Layout: ORCID.cache/<first-4-digits>/<full-orcid>/data.json
+// Layout: ORCID/<first-4-digits>/<full-orcid>/data.json
 func orcidCachePath(orcid string) string {
 	if len(orcid) < 4 {
 		return ""

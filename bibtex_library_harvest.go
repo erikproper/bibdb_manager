@@ -39,14 +39,14 @@ import (
 // runHarvestEntry, which merges automatically with no user interaction).
 var harvestIgnoreKeys = TStringSetNew()
 
-// loadHarvestIgnoreKeys reads globalFolder/harvest_ignore_keys.csv: one key per
+// loadHarvestIgnoreKeys reads localDBFolder/harvest_ignore_keys.csv: one key per
 // line, blank lines and lines starting with # ignored. Writes a seeded default
 // file when absent so the mechanism is discoverable and extensible by hand.
 func loadHarvestIgnoreKeys(path string) {
-	if !FileExists(path) {
+	if !mapExists(path) {
 		writeDefaultHarvestIgnoreKeys(path)
 	}
-	processFile(path, func(line string) {
+	processMap(path, func(line string) {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "#") {
 			return

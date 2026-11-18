@@ -20,7 +20,7 @@ import (
 )
 
 var (
-	// bibTeXFolder is the library folder (library_folder in $base.settings; by
+	// bibTeXFolder is the library folder (bibtex_folder in $base.settings; by
 	// default the folder of the settings file). It holds $base.bib, $base.files/,
 	// $base.scripts/, $base.tables/, $base.exchange/ and $base.lock.
 	bibTeXFolder   string

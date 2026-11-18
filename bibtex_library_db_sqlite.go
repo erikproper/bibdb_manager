@@ -45,13 +45,13 @@ func sqliteDSN(path string) string { return path + "?_txlock=immediate" }
 
 // --- database connection ---
 
-// dbPath returns the path of the main SQLite cache file. When cache_folder is
+// dbPath returns the path of the main SQLite cache file. When local_db_folder is
 // configured, the file lives there (outside Nextcloud/cloud-sync folders).
 // Otherwise it lives next to the .bib file.
 func dbPath() string {
 	folder := bibTeXFolder
-	if cacheFolder != "" {
-		folder = cacheFolder
+	if localDBFolder != "" {
+		folder = localDBFolder
 	}
 	return folder + bibTeXBaseName + cacheFileExtension
 }
@@ -428,10 +428,10 @@ func rollbackSafeParse() {
 
 // --- write-session isolation ---
 
-// dbHomePath returns the location of the database's copy in the home folder
+// dbHomePath returns the location of the database's copy in the shared DB folder
 // (step 21.2: the local working database is primary, the home copy a backup).
 func dbHomePath() string {
-	return homeFolder + bibTeXBaseName + cacheFileExtension
+	return sharedDBFolder + bibTeXBaseName + cacheFileExtension
 }
 
 // dbIsolationActive reports whether the working path differs from the home path.
@@ -449,7 +449,9 @@ func prepareWorkingDatabase() (ok bool) {
 	defer func() {
 		if !ok {
 			writeSessionOpenFailed = true
+			return
 		}
+		storeMapsInDB() // maps not yet in the database (first run since 30.11)
 	}()
 	if !dbIsolationActive() {
 		dbWriteSessionActive = true
@@ -771,7 +773,7 @@ func finaliseWorkingDatabase() {
 		return
 	}
 	if err := pushLibraryDatabase(gen, true); err != nil {
-		dbInteraction.Warning("Could not save the database to %s: %s. The changes are kept locally and pushed by the next run.", homeFolder, err)
+		dbInteraction.Warning("Could not save the database to %s: %s. The changes are kept locally and pushed by the next run.", sharedDBFolder, err)
 		return
 	}
 
@@ -895,7 +897,7 @@ func postCheckGate() bool {
 }
 
 // writeDatabaseDump writes a SQL dump of the (closed, local) database src to
-// $base.dump in the home folder, using the sqlite3 CLI tool, through a .part file
+// $base.dump in the shared DB folder, using the sqlite3 CLI tool, through a .part file
 // and a rename. Skips with a warning if sqlite3 is not available.
 func writeDatabaseDump(src string) {
 	dumpPath := libraryDumpPath()
@@ -921,7 +923,7 @@ func writeDatabaseDump(src string) {
 }
 
 // doRestoreFromDump rebuilds the local database from the SQL dump $base.dump in the
-// home folder (written by writeDatabaseDump), then pushes it with a new generation.
+// shared DB folder (written by writeDatabaseDump), then pushes it with a new generation.
 // The dump is loaded into a fresh SQLite file via the sqlite3 CLI; the old home
 // copy is moved to the backups folder first. Must be called before
 // connectToDatabase (bibTeXFolder, bibTeXBaseName and the folders must be set).
@@ -974,7 +976,7 @@ func doRestoreFromDump() error {
 		return errReported
 	}
 	if err := installRestoredDatabase(); err != nil {
-		messagef("Restored %s, but could not push it to %s: %s\n", workPath, homeFolder, err)
+		messagef("Restored %s, but could not push it to %s: %s\n", workPath, sharedDBFolder, err)
 		return errReported
 	}
 	messagef("Restore complete: %s\n", workPath)
@@ -1005,7 +1007,7 @@ func doRestoreFromBackup(backupName string) error {
 		return errReported
 	}
 	if err := installRestoredDatabase(); err != nil {
-		messagef("Restored %s, but could not push it to %s: %s\n", workPath, homeFolder, err)
+		messagef("Restored %s, but could not push it to %s: %s\n", workPath, sharedDBFolder, err)
 		return errReported
 	}
 	restored, _ := os.Stat(workPath)

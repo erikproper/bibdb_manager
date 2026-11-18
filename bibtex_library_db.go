@@ -264,7 +264,7 @@ func SetConfig(key, value string) {
 
 // maybeBootstrapConfigFromFile copies non-bootstrap settings from the in-memory config
 // (loaded from the .folders file or migrated from the legacy .config file) into the DB
-// config table on first run. Bootstrap keys (cache_folder, global_folder) remain in the
+// config table on first run. Bootstrap keys (the folders) remain in the
 // .folders file only and are never written to the DB.
 func maybeBootstrapConfigFromFile() {
 	var count int

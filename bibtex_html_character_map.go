@@ -172,7 +172,7 @@ func writeHtmlCharacterMap(path string) {
 func loadHtmlCharacterMap(path string) {
 	htmlCharMap = make(map[string]string)
 
-	f, err := os.Open(path)
+	f, err := openMap(path) // database text, or the old file
 	if err != nil {
 		for _, sec := range defaultHtmlCharSections {
 			for _, e := range sec.entries {

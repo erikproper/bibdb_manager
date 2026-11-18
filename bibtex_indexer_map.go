@@ -77,7 +77,7 @@ func writeLatexIndexerMap(path string) {
 func loadLatexIndexerMap(path string) {
 	raw := make(map[string]string)
 
-	f, err := os.Open(path)
+	f, err := openMap(path) // database text, or the old file
 	if err != nil {
 		for _, sec := range defaultLatexIndexerSections {
 			for _, e := range sec.entries {

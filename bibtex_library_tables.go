@@ -119,7 +119,7 @@ func init() {
 		// Metadata and miscellaneous (no cascade)
 		{"entry_metadata", EntryMetadataFilePath,
 			exportEntryMetadataCSV, importEntryMetadataCSV, nil},
-		// shorten_mappings lives in globalFolder — not in the per-library .tables/ dir.
+		// shorten_mappings lives in localDBFolder — not in the per-library .tables/ dir.
 		// It is imported directly via ImportAllCSVExchangeFiles; no registry entry needed.
 		{"urls_ignore", URLsIgnoreFilePath,
 			ExportURLsIgnore, func() { importURLsIgnoreFromCSV(true) }, nil},
@@ -360,9 +360,9 @@ func importBibEntriesReplace() {
 
 // ── folders export (virtual table) ───────────────────────────────────────────
 
-// exportFolders writes the bootstrap settings (global_folder, cache_folder) to
-// folders.csv as a key;value CSV. Import is not supported here — edit .folders
-// directly to change bootstrap paths.
+// exportFolders writes the four folders from the settings to
+// folders.csv as a key;value CSV. Import is not supported here — edit
+// $base.settings directly to change them.
 func exportFolders() {
 	ensureTablesDir()
 	path := tablesFilePath(FoldersCSVFilePath)
@@ -373,8 +373,10 @@ func exportFolders() {
 	}
 	defer f.Close()
 	for _, row := range [][2]string{
-		{"global_folder", globalFolder},
-		{"cache_folder", cacheFolder},
+		{"bibtex_folder", bibTeXFolder},
+		{"local_db_folder", localDBFolder},
+		{"shared_db_folder", sharedDBFolder},
+		{"backup_folder", backupFolder},
 	} {
 		f.WriteString(csvLine(row[0], row[1]) + "\n")
 	}

@@ -30,44 +30,53 @@ import (
 )
 
 // dblpFolder returns the folder holding the DBLP store, XML downloads and name maps.
-// Falls back to bibTeXFolder+"DBLP.cache/" when global_folder is not configured.
 func dblpFolder() string {
-	if globalFolder != "" {
-		return globalFolder + "DBLP.cache/"
-	}
-	return bibTeXFolder + "DBLP.cache/"
+	return localDBFolder + dblpSubfolder
 }
 
-// maybeMigrateDblpFolder renames the legacy "DBLP/" folder to "DBLP.cache/" on first
-// run after upgrading. Called at startup before any DBLP file-store access.
-func maybeMigrateDblpFolder() {
-	newPath := dblpFolder()
-	if _, err := os.Stat(newPath); err == nil {
-		return // already using new name
-	}
-	var oldPath string
-	if globalFolder != "" {
-		oldPath = globalFolder + "DBLP/"
-	} else {
-		oldPath = bibTeXFolder + "DBLP/"
-	}
-	if _, err := os.Stat(oldPath); err == nil {
-		if err := os.Rename(oldPath, newPath); err == nil {
-			dbInteraction.Progress("Migrated DBLP folder: DBLP/ → DBLP.cache/")
+// maybeMigrateFolderNames renames the subfolders of the 2026-11-18 layout (step
+// 22.1b) on the first run after upgrading: in the local DB folder DBLP.cache/ →
+// DBLP/ and ORCID.cache/ → ORCID/; in the shared DB folder DBLP.backup/ → DBLP/.
+// Called at startup, before anything uses those folders.
+func maybeMigrateFolderNames() {
+	for _, m := range []struct{ folder, old, new string }{
+		{localDBFolder, "DBLP.cache/", dblpSubfolder},
+		{localDBFolder, "ORCID.cache/", orcidSubfolder},
+		{sharedDBFolder, "DBLP.backup/", dblpSubfolder},
+	} {
+		oldPath, newPath := m.folder+m.old, m.folder+m.new
+		if pathExists(newPath) || !pathExists(oldPath) { // folders: not FileExists
+			continue
 		}
+		if err := os.Rename(oldPath, newPath); err != nil {
+			messagef("Could not rename %s to %s: %s\n", oldPath, newPath, err)
+			continue
+		}
+		stderrPrintf("Renamed %s → %s\n", oldPath, newPath)
 	}
 }
 
 // maybeMigrateDblpNameFiles moves the Pass-1 DBLP name CSVs (dblp_name_bibtex.csv,
-// dblp_name_orcid.csv) from the legacy globalFolder location into dblpFolder(),
+// dblp_name_orcid.csv) from the legacy localDBFolder location into dblpFolder(),
 // where they belong alongside the rest of the DBLP-derived cache. Called at
 // startup before any access to those files.
+// pathExists reports whether path exists, file or folder.
+func pathExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+const (
+	dblpSubfolder  = "DBLP/"  // the DBLP store, in the local and in the shared DB folder
+	orcidSubfolder = "ORCID/" // the ORCID cache, in the local DB folder
+)
+
 func maybeMigrateDblpNameFiles() {
-	if globalFolder == "" {
-		return // no separate global folder; files were always alongside DBLP.cache
+	if localDBFolder == "" {
+		return // no separate folder; files were always alongside the DBLP store
 	}
 	for _, name := range []string{"dblp_name_bibtex.csv", "dblp_name_orcid.csv"} {
-		oldPath := globalFolder + name
+		oldPath := localDBFolder + name
 		newPath := dblpFolder() + name
 		if _, err := os.Stat(newPath); err == nil {
 			continue // already migrated
@@ -79,7 +88,7 @@ func maybeMigrateDblpNameFiles() {
 			continue
 		}
 		if err := os.Rename(oldPath, newPath); err == nil {
-			dbInteraction.Progress("Migrated %s: globalFolder → DBLP.cache/", name)
+			dbInteraction.Progress("Migrated %s into the DBLP store folder", name)
 		}
 	}
 }

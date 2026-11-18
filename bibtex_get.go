@@ -649,18 +649,18 @@ func mergeShortenMappings(base, override TShortenMappings) TShortenMappings {
 // THyphenations maps lowercase word → word-with-\- hints (as stored in hyphenations.csv).
 type THyphenations map[string]string
 
-// readHyphenations loads hyphenations.csv from global_folder.
+// readHyphenations loads hyphenations.csv from the local DB folder.
 // Each line contains only the hinted form with \- markers; the original word
 // is derived by stripping \- (e.g. "ma\-ni\-fe\-sto" → key "manifesto").
 // Blank lines and lines starting with # are ignored.
 func readHyphenations() THyphenations {
 	result := THyphenations{}
-	path := globalFolder + "hyphenations.csv"
-	if !FileExists(path) {
+	path := localDBFolder + "hyphenations.csv"
+	if !mapExists(path) {
 		return result
 	}
 	var bad []string
-	processFile(path, func(line string) {
+	processMap(path, func(line string) {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "#") {
 			return

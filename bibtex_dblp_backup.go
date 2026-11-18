@@ -7,7 +7,7 @@
  *
  * Nextcloud copy of the DBLP store (plan step 21.4). The store itself is used
  * locally in dblpFolder(); a copy of dblp.sqlite3 and the name-map CSVs is kept in
- * DBLP.backup/ in the home folder (home_folder in the settings; by default the
+ * DBLP/ in the shared DB folder (shared_db_folder in the settings; by default the
  * library's folder, in Nextcloud). Another machine then
  * restores that copy instead of building the store from the XML.
  *
@@ -37,8 +37,7 @@ import (
 )
 
 const (
-	dblpBackupFolderName = "DBLP.backup/"
-	dblpBackupStampName  = "dblp.stamp"
+	dblpBackupStampName = "dblp.stamp"
 
 	// dblpBackupPartSuffix marks a file that is still being copied.
 	dblpBackupPartSuffix = ".part"
@@ -54,7 +53,7 @@ var dblpNameMapFiles = []string{
 	"dblp_homepages_oldies.csv",
 }
 
-// TDblpBackupStamp describes the copy in DBLP.backup/.
+// TDblpBackupStamp describes the copy in the shared DB folder.
 type TDblpBackupStamp struct {
 	XMLFile  string `json:"xml_file"`  // basename of the XML the store was built from
 	PushedAt string `json:"pushed_at"` // RFC 3339
@@ -63,7 +62,7 @@ type TDblpBackupStamp struct {
 }
 
 func dblpBackupFolder() string {
-	return homeFolder + dblpBackupFolderName
+	return sharedDBFolder + dblpSubfolder
 }
 
 // readDblpBackupStamp returns the stamp of the Nextcloud copy, or nil when there is
@@ -108,7 +107,7 @@ func copyFileViaPart(src, dst string) error {
 	return os.Rename(part, dst)
 }
 
-// pushDblpStore copies the local store and its name-map CSVs to DBLP.backup/.
+// pushDblpStore copies the local store and its name-map CSVs to the shared DB folder.
 // Called after a successful import, and by -push_dblp.
 func pushDblpStore() error {
 	xmlFile := readDblpCurrentXML()

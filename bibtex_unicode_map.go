@@ -236,7 +236,7 @@ func writeUnicodeMap(path string) {
 func loadUnicodeMap(path string) {
 	normaliseUnicodeMap = make(map[rune]string)
 
-	f, err := os.Open(path)
+	f, err := openMap(path) // database text, or the old file
 	if err != nil {
 		// No file — seed from defaults then write.
 		for _, sec := range defaultUnicodeMapSections {

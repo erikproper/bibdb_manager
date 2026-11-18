@@ -139,7 +139,7 @@ func loadHtmlCommandsMap(path string) {
 	htmlCmdOpen = make(map[string]string)
 	htmlCmdClose = make(map[string]string)
 
-	f, err := os.Open(path)
+	f, err := openMap(path) // database text, or the old file
 	if err != nil {
 		for _, sec := range defaultHtmlCommandsSections {
 			for _, e := range sec.entries {

@@ -10,7 +10,7 @@
  * file on the first run after upgrading.
  *
  * The .settings file holds the settings that must be known before the DB can be
- * opened (library_folder, global_folder, cache_folder, backup_folder, home_folder) plus a couple of standalone display knobs
+ * opened (bibtex_folder, local_db_folder, shared_db_folder, backup_folder) plus a couple of standalone display knobs
  * (display_file, display_command) that have no DB to live in yet at the point
  * they're needed. All other settings (key_prefix, csv_delimiter, backup_folder)
  * live in the DB config table.
@@ -34,18 +34,28 @@ import (
 // It holds the path settings required to locate the database and backup files,
 // plus a couple of standalone display knobs (see displayContent).
 type TBibTeXFolders struct {
-	// LibraryFolder holds the library's own files ($base.bib, .files/, .scripts/,
-	// .tables/, .exchange/, .lock). Default: the folder of the settings file.
-	LibraryFolder    string `json:"library_folder,omitempty"`
-	GlobalFolder     string `json:"global_folder"`
-	DblpFolderLegacy string `json:"dblp_folder,omitempty"` // migrated to global_folder on next write
-	CacheFolder      string `json:"cache_folder"`
-	BackupFolder     string `json:"backup_folder,omitempty"` // optional; overrides DB config value
-	// HomeFolder is the (Nextcloud) folder that holds the copies of the local
-	// databases: the library database, its dump and stamp, and DBLP.backup/.
-	// Defaults to the library folder. reset.test writes the test library's
-	// settings itself, so they never point at the production copies.
-	HomeFolder string `json:"home_folder,omitempty"`
+	// The four locations (step 22.1b, Erik 2026-11-18):
+	// BibTeXFolder holds the operational library files ($base.bib, .files/,
+	// .scripts/, .tables/, .exchange/). Default: the folder of the settings file.
+	BibTeXFolder string `json:"bibtex_folder,omitempty"`
+	// LocalDBFolder holds the databases the programme works on (the library DB,
+	// DBLP/, ORCID/), the instance lock, and for now the maps. Machine-local.
+	LocalDBFolder string `json:"local_db_folder,omitempty"`
+	// SharedDBFolder holds the cloud copy: $base.sqlite3, .dump, .stamp, DBLP/.
+	// reset.test writes the test library's settings itself, so they never point
+	// at the production copy.
+	SharedDBFolder string `json:"shared_db_folder,omitempty"`
+	// BackupFolder holds the timestamped backups. Machine-local.
+	BackupFolder string `json:"backup_folder,omitempty"`
+
+	// Old keys (before 30.11): read once, when the new ones are absent, and
+	// dropped from the file.
+	LibraryFolderLegacy string `json:"library_folder,omitempty"` // → bibtex_folder
+	CacheFolderLegacy   string `json:"cache_folder,omitempty"`   // → local_db_folder
+	GlobalFolderLegacy  string `json:"global_folder,omitempty"`  // → local_db_folder
+	HomeFolderLegacy    string `json:"home_folder,omitempty"`    // → shared_db_folder
+	DblpFolderLegacy    string `json:"dblp_folder,omitempty"`    // older still → local_db_folder
+
 	// key_prefix was here in v22.x; v23.0 moves it to the DB config table only.
 	// Read and migrate on first run, but never write back.
 	KeyPrefixLegacy string `json:"key_prefix,omitempty"`
@@ -66,10 +76,9 @@ type TBibTeXFolders struct {
 var (
 	csvDelimiter   = ";"
 	keyPrefix      = ""
-	globalFolder   = ""   // set by loadBibTeXFolders; default: the library folder
+	localDBFolder  = ""   // set by loadBibTeXFolders; default: the bibtex folder
+	sharedDBFolder = ""   // set by loadBibTeXFolders; default: the bibtex folder
 	backupFolder   = ""   // set by loadBibTeXFolders; default: libraryBase()+".backups/"
-	cacheFolder    = ""   // set by loadBibTeXFolders; default: the library folder
-	homeFolder     = ""   // set by loadBibTeXFolders; default: the library folder
 	displayFile    = ""   // set by loadBibTeXFolders; see displayContent
 	displayCommand = ""   // set by loadBibTeXFolders; see displayContent
 	displayReopen  = true // set by loadBibTeXFolders; see displayContent
@@ -155,9 +164,9 @@ func loadBibTeXFolders(settingsPath string) {
 							backupFolder += "/"
 						}
 					}
-					f.GlobalFolder = legacy.GlobalFolder
+					f.GlobalFolderLegacy = legacy.GlobalFolder
 					f.DblpFolderLegacy = legacy.DblpFolderLegacy
-					f.CacheFolder = legacy.CacheFolder
+					f.CacheFolderLegacy = legacy.CacheFolder
 					f.KeyPrefixLegacy = legacy.KeyPrefix
 					messagef("Migrating %s.config → %s.settings\n",
 						strings.TrimSuffix(settingsPath, SettingsFileExtension),
@@ -171,11 +180,22 @@ func loadBibTeXFolders(settingsPath string) {
 		needsWrite = true
 	}
 
-	// Migrate legacy dblp_folder → global_folder on next write.
-	if f.GlobalFolder == "" && f.DblpFolderLegacy != "" {
-		f.GlobalFolder = f.DblpFolderLegacy
-		needsWrite = true
+	// Old keys → new names (30.11). The local DB folder was split over
+	// cache_folder (library DB) and global_folder (DBLP, ORCID, maps); one folder now.
+	migrate := func(newKey *string, old ...*string) {
+		for _, o := range old {
+			if *newKey == "" && *o != "" {
+				*newKey = *o
+			}
+			if *o != "" {
+				*o = "" // the old key is dropped from the file
+				needsWrite = true
+			}
+		}
 	}
+	migrate(&f.BibTeXFolder, &f.LibraryFolderLegacy)
+	migrate(&f.LocalDBFolder, &f.CacheFolderLegacy, &f.GlobalFolderLegacy, &f.DblpFolderLegacy)
+	migrate(&f.SharedDBFolder, &f.HomeFolderLegacy)
 	f.DblpFolderLegacy = ""
 
 	// Migrate key_prefix from folders to DB (v23.0): carry value into memory so
@@ -197,10 +217,9 @@ func loadBibTeXFolders(settingsPath string) {
 		}
 		return withSlash(expandHome(*key))
 	}
-	bibTeXFolder = fill(&f.LibraryFolder, settingsFolder)
-	globalFolder = fill(&f.GlobalFolder, bibTeXFolder)
-	cacheFolder = fill(&f.CacheFolder, bibTeXFolder)
-	homeFolder = fill(&f.HomeFolder, bibTeXFolder)
+	bibTeXFolder = fill(&f.BibTeXFolder, settingsFolder)
+	localDBFolder = fill(&f.LocalDBFolder, bibTeXFolder)
+	sharedDBFolder = fill(&f.SharedDBFolder, bibTeXFolder)
 	if f.BackupFolder == "" && backupFolder != "" {
 		f.BackupFolder = tildePath(backupFolder) // from a legacy .config
 	}

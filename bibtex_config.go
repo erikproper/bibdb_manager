@@ -45,7 +45,7 @@ const (
 	LocalGroupsExtension       = ".groups"      // per-subset local group memberships (group;canonicalKey CSV)
 	LocalGroupsStructExtension = ".groupstruct" // verbatim jabref-meta grouping block from source bib
 	cacheFileExtension         = ".sqlite3"
-	SettingsFileExtension      = ".settings" // bootstrap paths + display settings file (global_folder, cache_folder, display_file, display_command); formerly .folders
+	SettingsFileExtension      = ".settings" // bootstrap file: the four folders and the display settings; formerly .folders
 	FoldersFileExtension       = ".folders"  // legacy bootstrap paths file name; migrated to .settings on first run
 	ConfigFileExtension        = ".config"   // reserved for sync-mode definitions (step 13.2+)
 	LockFileExtension          = ".lock"

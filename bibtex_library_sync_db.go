@@ -11,7 +11,7 @@
  * ancestor snapshot enables field-level three-way merge in subsequent syncs.
  *
  * Isolation strategy: home copy lives next to the bib file; a working copy is
- * kept in cache_folder during the sync session. On open, the home copy is
+ * kept in local_db_folder during the sync session. On open, the home copy is
  * copied to cache (no recovery prompt on stale working copy — unlike the main
  * DB, an interrupted sync's partial working copy is never meaningful). On
  * close, the working copy is copied back to the home path when dirty.
@@ -64,7 +64,7 @@ type TSyncEntry struct {
 type TSyncState struct {
 	homePath       string
 	workingPath    string
-	isolated       bool // whether home ≠ working (cache_folder active)
+	isolated       bool // whether home ≠ working (local_db_folder active)
 	db             *sql.DB
 	entries        map[string]*TSyncEntry
 	statuses       map[string]string            // source_key → status ("waived", "ignored", …)
@@ -80,14 +80,14 @@ const (
 
 // syncWorkingPath returns the working (cache) path for a given home sync path.
 func syncWorkingPath(homePath string) string {
-	if cacheFolder == "" {
+	if localDBFolder == "" {
 		return homePath
 	}
-	return filepath.Join(cacheFolder, filepath.Base(homePath))
+	return filepath.Join(localDBFolder, filepath.Base(homePath))
 }
 
 // openSyncState opens (or creates) the .sync SQLite DB for the bib at
-// keysBasePath. It copies the home file to cache_folder if isolation is
+// keysBasePath. It copies the home file to local_db_folder if isolation is
 // active, creates the schema if needed, and bulk-loads all tables into memory.
 // Returns nil when the open fails (caller should treat as empty state).
 func openSyncState(keysBasePath string) *TSyncState {
