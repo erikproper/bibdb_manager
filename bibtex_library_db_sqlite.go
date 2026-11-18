@@ -13,7 +13,7 @@
  *
  * Creator: Henderik A. Proper (e.proper@acm.org), Luxembourg, in collaboration with Claude.ai
  *
- * Version of: 04.05.2026
+ * Version of: 18.11.2026
  *
  */
 
@@ -427,9 +427,10 @@ func rollbackSafeParse() {
 
 // --- write-session isolation ---
 
-// dbHomePath returns the permanent home location for the database, next to the bib file.
+// dbHomePath returns the location of the database's copy in the home folder
+// (step 21.2: the local working database is primary, the home copy a backup).
 func dbHomePath() string {
-	return bibTeXFolder + bibTeXBaseName + cacheFileExtension
+	return homeFolder + bibTeXBaseName + cacheFileExtension
 }
 
 // dbIsolationActive reports whether the working path differs from the home path.
@@ -443,7 +444,12 @@ func dbIsolationActive() bool {
 // prepareWorkingDatabase ensures the working database is a current copy of the home
 // database before a write session begins. Detects a stale working copy left by a
 // crash and offers the user a chance to restore. Returns false on setup failure.
-func prepareWorkingDatabase() bool {
+func prepareWorkingDatabase() (ok bool) {
+	defer func() {
+		if !ok {
+			writeSessionOpenFailed = true
+		}
+	}()
 	if !dbIsolationActive() {
 		dbWriteSessionActive = true
 		return true
@@ -496,7 +502,12 @@ func prepareWorkingDatabase() bool {
 		}
 		f.Close()
 		hInfo, _ = os.Stat(home)
+	} else if stamp := readLibraryStamp(); stamp != nil {
+		return alignWithLibraryStamp(stamp, hInfo)
 	}
+	// No stamp yet (first run since step 21.2, or a new library): align the old way
+	// below, and push at the end of the run so the next run has a stamp.
+	libraryPushNeeded = true
 
 	wInfo, wErr := os.Stat(working)
 
@@ -636,12 +647,16 @@ func flushWorkingDbToHome() {
 	if reopenTx {
 		commitBibTransaction()
 	}
-	db.Exec(`PRAGMA wal_checkpoint(TRUNCATE)`)                       //nolint:errcheck
+	base := tableModTime(pushGenerationMarker)
+	gen := nextPushGeneration(base)
+	markLibraryUnpushed(base)
+	setTableDate(pushGenerationMarker, gen)
+	db.Exec(`PRAGMA wal_checkpoint(TRUNCATE)`) //nolint:errcheck
 	working := dbPath()
 	wFlush, wFlushErr := os.Stat(working)
 	if homeDbSizeAtOpen > 10*1024*1024 && wFlushErr == nil && wFlush.Size() < homeDbSizeAtOpen/10 {
 		dbInteraction.Warning("Working database (%d bytes) is implausibly smaller than home was at session open (%d bytes) — skipping mid-session flush to prevent data loss.", wFlush.Size(), homeDbSizeAtOpen)
-	} else if err := copyFileAtomic(working, dbHomePath()); err != nil {
+	} else if err := pushLibraryDatabase(gen, false); err != nil {
 		dbInteraction.Warning("Could not flush working database to home: %s", err)
 	}
 	if reopenTx {
@@ -710,25 +725,39 @@ func finaliseWorkingDatabase() {
 	// recorded right after markWriteSessionOpen(). The close marker itself accounts
 	// for one more change, so if total_changes() == changesAtSessionOpen+1, only
 	// session markers were written — no need to copy the working DB back to home.
+	var gen int64
 	if db != nil {
 		markWriteSessionClosed()
 		var totalChanges int64
 		db.QueryRow(`SELECT total_changes()`).Scan(&totalChanges)
-		if totalChanges <= changesAtSessionOpen+1 {
+		if totalChanges <= changesAtSessionOpen+1 && !libraryPushNeeded {
 			db.Close()
 			db = nil
 			return // nothing real was written; home DB is already up to date
 		}
-	}
-
-	if db != nil {
+		base := tableModTime(pushGenerationMarker)
+		gen = nextPushGeneration(base)
+		markLibraryUnpushed(base)
+		setTableDate(pushGenerationMarker, gen)
+		db.Exec(`PRAGMA wal_checkpoint(TRUNCATE)`) //nolint:errcheck
 		db.Close()
 		db = nil
+	} else {
+		base, err := dbFilePushGeneration(working)
+		if err == nil {
+			gen = nextPushGeneration(base)
+			markLibraryUnpushed(base)
+			err = setDbFilePushGeneration(working, gen)
+		}
+		if err != nil {
+			dbInteraction.Warning("Could not set the push generation: %s", err)
+			return
+		}
 	}
 
 	ts := time.Now().Format("20060102_150405")
 	backupPath := backupFolder + bibTeXBaseName + "_" + ts + cacheFileExtension
-	if err := os.MkdirAll(backupFolder, 0o755); err == nil {
+	if err := os.MkdirAll(backupFolder, 0o755); err == nil && FileExists(home) {
 		if err := copyFile(home, backupPath); err != nil {
 			dbInteraction.Warning("Could not back up home database: %s", err)
 		}
@@ -740,29 +769,15 @@ func finaliseWorkingDatabase() {
 		dbInteraction.Warning("Working database (%d bytes) is implausibly smaller than home was at session open (%d bytes) — refusing to overwrite home to prevent data loss; working copy left at %s for inspection.", wInfo.Size(), homeDbSizeAtOpen, working)
 		return
 	}
-	if err := copyFileAtomic(working, home); err != nil {
-		dbInteraction.Warning("Could not save working database to home: %s", err)
+	if err := pushLibraryDatabase(gen, true); err != nil {
+		dbInteraction.Warning("Could not save the database to %s: %s. The changes are kept locally and pushed by the next run.", homeFolder, err)
 		return
 	}
-	// Sync home mtime to working's mtime so the next run's skip-copy check triggers.
-	if wErr == nil {
-		os.Chtimes(home, wInfo.ModTime(), wInfo.ModTime())
-	}
 
-	writeDatabaseDump()
-
-	dumpPath := bibTeXFolder + bibTeXBaseName + ".dump"
-	backupDumpPath := backupFolder + bibTeXBaseName + "_" + ts + ".dump"
+	dumpPath := libraryDumpPath()
+	backupDumpPath := backupFolder + bibTeXBaseName + "_" + ts + libraryDumpExtension
 	if _, err := os.Stat(dumpPath); err == nil {
 		copyFile(dumpPath, backupDumpPath) //nolint:errcheck
-	}
-
-	// writeDatabaseDump() opens the home DB via the sqlite3 CLI, which may trigger
-	// a WAL checkpoint or other write that updates home's mtime. Read back home's
-	// actual stored mtime and apply it to working so both agree exactly — prevents
-	// a spurious "working newer than home" warning on the next run.
-	if hFinal, err := os.Stat(home); err == nil {
-		os.Chtimes(working, hFinal.ModTime(), hFinal.ModTime())
 	}
 }
 
@@ -878,32 +893,39 @@ func postCheckGate() bool {
 	return false
 }
 
-// writeDatabaseDump writes a SQL dump of the home database to $base.dump using
-// the sqlite3 CLI tool. Skips with a warning if sqlite3 is not available.
-func writeDatabaseDump() {
-	dumpPath := bibTeXFolder + bibTeXBaseName + ".dump"
-	out, err := os.Create(dumpPath)
+// writeDatabaseDump writes a SQL dump of the (closed, local) database src to
+// $base.dump in the home folder, using the sqlite3 CLI tool, through a .part file
+// and a rename. Skips with a warning if sqlite3 is not available.
+func writeDatabaseDump(src string) {
+	dumpPath := libraryDumpPath()
+	part := dumpPath + dblpBackupPartSuffix
+	out, err := os.Create(part)
 	if err != nil {
 		dbInteraction.Warning("Could not create dump file: %s", err)
 		return
 	}
-	defer out.Close()
-	cmd := exec.Command("sqlite3", dbHomePath(), ".dump")
+	cmd := exec.Command("sqlite3", src, ".dump")
 	cmd.Stdout = out
-	if err := cmd.Run(); err != nil {
+	err = cmd.Run()
+	if cerr := out.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil {
+		err = os.Rename(part, dumpPath)
+	}
+	if err != nil {
 		dbInteraction.Warning("Could not write database dump (sqlite3 not in PATH?): %s", err)
-		out.Close()
-		os.Remove(dumpPath)
+		os.Remove(part)
 	}
 }
 
-// doRestoreFromDump restores the home database from a SQL dump file produced by
-// writeDatabaseDump. The dump is loaded into a fresh SQLite file via the sqlite3
-// CLI. The corrupt home DB is moved to the backups folder before replacement.
-// This must be called before connectToDatabase (bibTeXFolder and bibTeXBaseName
-// must already be set; backupFolder may still be empty, defaulting to $base.backups/).
+// doRestoreFromDump rebuilds the local database from the SQL dump $base.dump in the
+// home folder (written by writeDatabaseDump), then pushes it with a new generation.
+// The dump is loaded into a fresh SQLite file via the sqlite3 CLI; the old home
+// copy is moved to the backups folder first. Must be called before
+// connectToDatabase (bibTeXFolder, bibTeXBaseName and the folders must be set).
 func doRestoreFromDump() {
-	dumpPath := bibTeXFolder + bibTeXBaseName + ".dump"
+	dumpPath := libraryDumpPath()
 	info, err := os.Stat(dumpPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "No dump file found at %s\n", dumpPath)
@@ -912,8 +934,9 @@ func doRestoreFromDump() {
 	fmt.Fprintf(os.Stderr, "Restoring from %s (%.0f MB)...\n", dumpPath, float64(info.Size())/1e6)
 
 	homePath := dbHomePath()
-	newPath := homePath + ".restore"
-	os.Remove(newPath)
+	workPath := dbPath()
+	newPath := workPath + libraryRestoreSuffix
+	removeDblpDBFiles(newPath)
 
 	f, err := os.Open(dumpPath)
 	if err != nil {
@@ -928,59 +951,40 @@ func doRestoreFromDump() {
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "sqlite3 restore failed: %s\n%s\n", err, stderr.String())
-		os.Remove(newPath)
+		removeDblpDBFiles(newPath)
 		os.Exit(1)
 	}
 
-	bkDir := backupFolder
-	if bkDir == "" {
-		bkDir = bibTeXFolder + bibTeXBaseName + ".backups/"
-	}
 	if _, err := os.Stat(homePath); err == nil {
 		ts := time.Now().Format("20060102_150405")
-		corruptBackup := bkDir + bibTeXBaseName + "_corrupt_" + ts + cacheFileExtension
-		if mkErr := os.MkdirAll(bkDir, 0755); mkErr == nil {
-			if renErr := os.Rename(homePath, corruptBackup); renErr != nil {
-				if cpErr := copyFile(homePath, corruptBackup); cpErr == nil {
-					os.Remove(homePath)
-				}
+		corruptBackup := backupFolder + bibTeXBaseName + "_corrupt_" + ts + cacheFileExtension
+		if mkErr := os.MkdirAll(backupFolder, 0755); mkErr == nil {
+			if cpErr := copyFile(homePath, corruptBackup); cpErr == nil {
+				fmt.Fprintf(os.Stderr, "Saved the old database as %s\n", corruptBackup)
 			}
-			fmt.Fprintf(os.Stderr, "Moved corrupt DB to %s\n", corruptBackup)
 		}
 	}
 
 	// Remove stale WAL/SHM files so SQLite does not apply them to the fresh DB.
-	os.Remove(homePath + "-wal")
-	os.Remove(homePath + "-shm")
-
-	// Also wipe the working DB (cache folder) so the next run starts clean.
-	if workPath := dbPath(); workPath != homePath {
-		os.Remove(workPath)
-		os.Remove(workPath + "-wal")
-		os.Remove(workPath + "-shm")
-		fmt.Fprintf(os.Stderr, "Cleared working database at %s\n", workPath)
+	os.Remove(workPath + "-wal")
+	os.Remove(workPath + "-shm")
+	if err := os.Rename(newPath, workPath); err != nil {
+		fmt.Fprintf(os.Stderr, "Could not install restored DB at %s: %s\n", workPath, err)
+		os.Exit(1)
 	}
-
-	if err := os.Rename(newPath, homePath); err != nil {
-		if cpErr := copyFile(newPath, homePath); cpErr != nil {
-			fmt.Fprintf(os.Stderr, "Could not install restored DB at %s: %s\n", homePath, cpErr)
-			os.Exit(1)
-		}
-		os.Remove(newPath)
+	if err := installRestoredDatabase(); err != nil {
+		fmt.Fprintf(os.Stderr, "Restored %s, but could not push it to %s: %s\n", workPath, homeFolder, err)
+		os.Exit(1)
 	}
-	fmt.Fprintf(os.Stderr, "Restore complete: %s\n", homePath)
+	fmt.Fprintf(os.Stderr, "Restore complete: %s\n", workPath)
 }
 
-// doRestoreFromBackup copies a named backup file back to the home database path.
-// backupName is the timestamp portion of the backup filename (e.g. "ErikProper_20260709_123456");
-// the full path is resolved as backupFolder/backupName.sqlite3.
-// Clears both home and working sidecar files before restoring.
+// doRestoreFromBackup copies a named backup file into the local database and
+// pushes it with a new generation. backupName is the base of the backup filename
+// (e.g. "ErikProper_20260709_123456"); the full path is
+// backupFolder/backupName.sqlite3.
 func doRestoreFromBackup(backupName string) {
-	bkDir := backupFolder
-	if bkDir == "" {
-		bkDir = bibTeXFolder + bibTeXBaseName + ".backups/"
-	}
-	backupPath := bkDir + backupName + cacheFileExtension
+	backupPath := backupFolder + backupName + cacheFileExtension
 	info, err := os.Stat(backupPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Backup not found: %s\n", backupPath)
@@ -988,26 +992,19 @@ func doRestoreFromBackup(backupName string) {
 	}
 	fmt.Fprintf(os.Stderr, "Restoring from %s (%.0f MB)...\n", backupPath, float64(info.Size())/1e6)
 
-	homePath := dbHomePath()
-
-	// Remove stale sidecar files at home before overwriting.
-	os.Remove(homePath + "-wal")
-	os.Remove(homePath + "-shm")
-
-	// Also wipe the working DB so the next run starts with a fresh copy from home.
-	if workPath := dbPath(); workPath != homePath {
-		os.Remove(workPath)
-		os.Remove(workPath + "-wal")
-		os.Remove(workPath + "-shm")
-		fmt.Fprintf(os.Stderr, "Cleared working database at %s\n", workPath)
-	}
-
-	if err := copyFileAtomic(backupPath, homePath); err != nil {
-		fmt.Fprintf(os.Stderr, "Could not restore %s → %s: %s\n", backupPath, homePath, err)
+	workPath := dbPath()
+	os.Remove(workPath + "-wal")
+	os.Remove(workPath + "-shm")
+	if err := copyFileAtomic(backupPath, workPath); err != nil {
+		fmt.Fprintf(os.Stderr, "Could not restore %s → %s: %s\n", backupPath, workPath, err)
 		os.Exit(1)
 	}
-	restored, _ := os.Stat(homePath)
-	fmt.Fprintf(os.Stderr, "Restore complete: %s (%d bytes)\n", homePath, restored.Size())
+	if err := installRestoredDatabase(); err != nil {
+		fmt.Fprintf(os.Stderr, "Restored %s, but could not push it to %s: %s\n", workPath, homeFolder, err)
+		os.Exit(1)
+	}
+	restored, _ := os.Stat(workPath)
+	fmt.Fprintf(os.Stderr, "Restore complete: %s (%d bytes)\n", workPath, restored.Size())
 }
 
 // --- write-session markers ---

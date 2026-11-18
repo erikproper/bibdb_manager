@@ -53,7 +53,7 @@ var (
 	Reporting TInteraction
 )
 
-const AppVersion = "30.5"
+const AppVersion = "30.7"
 
 // Run-state flags consumed by the write tail in main.
 var (
@@ -467,6 +467,7 @@ func openLibraryToUpdate() bool {
 func openLibraryToReport() bool {
 	// Read-only session: suppress all routine progress; show only warnings and questions.
 	Reporting.progressSuppressed = true
+	warnIfLibraryStampNewer()
 	initialiseLibrary() // propagates progressSuppressed via Library.Initialise(Reporting, ...)
 	Library.ReadKeyOldiesFile()
 	loadMappingFiles()
@@ -3993,8 +3994,8 @@ flag.BoolVar(&cmdAlignBooktitleCountries, "align_booktitle_countries", false, "d
 	flag.BoolVar(&cmdRestoreKeyHints, "restore_key_hints", false, "restore key hints from a backup CSV, remapping old keys via key_oldies")
 	flag.StringVar(&restoreKeyHintsPath, "hints_csv", "", "path to the backup key_hints.csv for -restore_key_hints")
 	flag.BoolVar(&cmdDeleteGarbage, "delete_garbage", false, "delete DBLP trash folder contents and exit")
-	flag.BoolVar(&cmdRestoreFromDump, "restore_from_dump", false, "restore home database from $base.dump (use after corruption to rebuild from SQL dump)")
-	flag.StringVar(&cmdRestoreBackupName, "restore", "", "restore home database from a named backup (e.g. -restore ErikProper_20260709_123456)")
+	flag.BoolVar(&cmdRestoreFromDump, "restore_from_dump", false, "rebuild the local database from $base.dump in the home folder and push it (use after corruption)")
+	flag.StringVar(&cmdRestoreBackupName, "restore", "", "restore the local database from a named backup and push it to the home folder (e.g. -restore ErikProper_20260709_123456)")
 	flag.BoolVar(&cmdNoGarbageCleaning, "no_garbage_cleaning", false, "skip background cleanup of the DBLP trash folder")
 	flag.BoolVar(&cmdApplyScript, "do_entry_actions", false, "evaluate group assignment rules from <base>.scripts/entry_actions")
 	// Unified table export / import (v23.0)
@@ -4061,6 +4062,9 @@ flag.BoolVar(&cmdAlignBooktitleCountries, "align_booktitle_countries", false, "d
 	}
 	if globalFolder == "" {
 		globalFolder = bibTeXFolder
+	}
+	if homeFolder == "" {
+		homeFolder = bibTeXFolder
 	}
 	loadUnicodeMap(globalFolder + "unicode_map.csv")
 	loadHtmlCommandsMap(globalFolder + "html_commands_map.csv")
@@ -4500,6 +4504,11 @@ case cmdAlignBooktitleCountries:
 			os.Exit(1)
 		}
 		doDefaultRun()
+	}
+
+	if writeSessionOpenFailed {
+		stderrPrintf("\n")
+		os.Exit(1)
 	}
 
 	Library.CheckDblpKeyMissingWarnings()

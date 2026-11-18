@@ -7,7 +7,8 @@
  *
  * Nextcloud copy of the DBLP store (plan step 21.4). The store itself is used
  * locally in dblpFolder(); a copy of dblp.sqlite3 and the name-map CSVs is kept in
- * DBLP.backup/ next to the library, which lives in Nextcloud. Another machine then
+ * DBLP.backup/ in the home folder (home_folder in the settings; by default the
+ * library's folder, in Nextcloud). Another machine then
  * restores that copy instead of building the store from the XML.
  *
  * A push copies each file under a temporary name and renames it, so Nextcloud only
@@ -19,7 +20,7 @@
  *
  * Creator: Henderik A. Proper (e.proper@acm.org), Luxembourg, in collaboration with Claude.ai
  *
- * Version of: 13.11.2026
+ * Version of: 18.11.2026
  *
  */
 
@@ -62,7 +63,7 @@ type TDblpBackupStamp struct {
 }
 
 func dblpBackupFolder() string {
-	return bibTeXFolder + dblpBackupFolderName
+	return homeFolder + dblpBackupFolderName
 }
 
 // readDblpBackupStamp returns the stamp of the Nextcloud copy, or nil when there is

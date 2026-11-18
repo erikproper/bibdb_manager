@@ -10,14 +10,14 @@
  * file on the first run after upgrading.
  *
  * The .settings file holds the settings that must be known before the DB can be
- * opened (global_folder, cache_folder) plus a couple of standalone display knobs
+ * opened (global_folder, cache_folder, home_folder) plus a couple of standalone display knobs
  * (display_file, display_command) that have no DB to live in yet at the point
  * they're needed. All other settings (key_prefix, csv_delimiter, backup_folder)
  * live in the DB config table.
  *
  * Creator: Henderik A. Proper (e.proper@acm.org), Luxembourg, in collaboration with Claude.ai
  *
- * Version of: 03.06.2026
+ * Version of: 18.11.2026
  *
  */
 
@@ -38,6 +38,12 @@ type TBibTeXFolders struct {
 	DblpFolderLegacy string `json:"dblp_folder,omitempty"` // migrated to global_folder on next write
 	CacheFolder      string `json:"cache_folder"`
 	BackupFolder     string `json:"backup_folder,omitempty"` // optional; overrides DB config value
+	// HomeFolder is the (Nextcloud) folder that holds the copies of the local
+	// databases: the library database, its dump and stamp, and DBLP.backup/.
+	// Optional; defaults to the library's own folder. Never written by the
+	// programme, so a copied settings file cannot point a test library at the
+	// production copies.
+	HomeFolder string `json:"home_folder,omitempty"`
 	// key_prefix was here in v22.x; v23.0 moves it to the DB config table only.
 	// Read and migrate on first run, but never write back.
 	KeyPrefixLegacy string `json:"key_prefix,omitempty"`
@@ -61,6 +67,7 @@ var (
 	globalFolder   = ""   // set by loadBibTeXFolders; defaults to bibTeXFolder when empty
 	backupFolder   = ""   // set by loadBibTeXSettings (from DB); defaults to bibTeXFolder+bibTeXBaseName+".backups/" when empty
 	cacheFolder    = ""   // set by loadBibTeXFolders; defaults to bibTeXFolder when empty
+	homeFolder     = ""   // set by loadBibTeXFolders; defaults to bibTeXFolder when empty
 	displayFile    = ""   // set by loadBibTeXFolders; see displayContent
 	displayCommand = ""   // set by loadBibTeXFolders; see displayContent
 	displayReopen  = true // set by loadBibTeXFolders; see displayContent
@@ -193,6 +200,12 @@ func loadBibTeXFolders(settingsPath string) {
 		backupFolder = expandHome(f.BackupFolder)
 		if !strings.HasSuffix(backupFolder, "/") {
 			backupFolder += "/"
+		}
+	}
+	if f.HomeFolder != "" {
+		homeFolder = expandHome(f.HomeFolder)
+		if !strings.HasSuffix(homeFolder, "/") {
+			homeFolder += "/"
 		}
 	}
 	if f.DisplayFile != "" {

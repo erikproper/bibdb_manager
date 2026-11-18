@@ -25,7 +25,7 @@
  *
  * Creator: Henderik A. Proper (e.proper@acm.org), Luxembourg, in collaboration with Claude.ai
  *
- * Version of: 13.11.2026
+ * Version of: 18.11.2026
  *
  */
 
@@ -1095,6 +1095,9 @@ func maybeMergeSpuriousContributors() {
 		JOIN contributor_names cn ON cn.name = c1.name AND cn.id != c1.id
 		JOIN contributors c2 ON c2.id = cn.id
 		WHERE c2.name != c1.name
+		  -- Homonyms: different DBLP persons or ORCIDs are different people.
+		  AND NOT (COALESCE(c1.dblp_key, '') != '' AND COALESCE(c2.dblp_key, '') != '' AND c1.dblp_key != c2.dblp_key)
+		  AND NOT (COALESCE(c1.orcid, '') != '' AND COALESCE(c2.orcid, '') != '' AND c1.orcid != c2.orcid)
 		  AND NOT EXISTS (
 		        SELECT 1 FROM non_double_contributors ndc
 		        WHERE ndc.contributor_id_a = CASE WHEN c1.id < c2.id THEN c1.id ELSE c2.id END
@@ -1117,11 +1120,17 @@ func maybeMergeSpuriousContributors() {
 
 	// Pass 2: two contributors that share the exact same canonical name (e.g. produced
 	// by a rename that did not detect an existing contributor with the target name).
+	// Not when DBLP or ORCID tells them apart: DBLP has many homonyms ("Lin Li 0047",
+	// "Lin Li 0087"), stored with the same name; v30.6 merged 216 of those (2026-11-18).
 	rows2, err := db.Query(`
 		SELECT c1.id, c1.name, c2.id, c2.name
 		FROM contributors c1
 		JOIN contributors c2 ON c1.name = c2.name AND c1.id < c2.id
-		WHERE NOT EXISTS (
+		WHERE 1 = 1
+		  -- Homonyms: different DBLP persons or ORCIDs are different people.
+		  AND NOT (COALESCE(c1.dblp_key, '') != '' AND COALESCE(c2.dblp_key, '') != '' AND c1.dblp_key != c2.dblp_key)
+		  AND NOT (COALESCE(c1.orcid, '') != '' AND COALESCE(c2.orcid, '') != '' AND c1.orcid != c2.orcid)
+		  AND NOT EXISTS (
 		        SELECT 1 FROM non_double_contributors ndc
 		        WHERE ndc.contributor_id_a = c1.id AND ndc.contributor_id_b = c2.id
 		      )`)
