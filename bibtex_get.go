@@ -554,7 +554,7 @@ func expandSelectStmts(stmts []TSelectStatement, alreadyIncluded map[string]bool
 			// Uses watchEntryDblpKeys which unions ORCID index + person-name index.
 			// NOTE: when non-DBLP sources (ORCID direct, other databases) are added,
 			// revisit this together with the watch script commands (see CHECKPOINT).
-			watchPath := bibTeXFolder + bibTeXBaseName + scriptsFolderSuffix + "/watch"
+			watchPath := libraryBase() + scriptsFolderSuffix + "/watch"
 			for _, w := range ReadWatchFile(watchPath) {
 				for _, dk := range watchEntryDblpKeys(w) {
 					if libKey := Library.LookupDBLPKey(dk); libKey != "" {

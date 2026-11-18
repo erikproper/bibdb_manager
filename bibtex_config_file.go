@@ -10,7 +10,7 @@
  * file on the first run after upgrading.
  *
  * The .settings file holds the settings that must be known before the DB can be
- * opened (global_folder, cache_folder, home_folder) plus a couple of standalone display knobs
+ * opened (library_folder, global_folder, cache_folder, backup_folder, home_folder) plus a couple of standalone display knobs
  * (display_file, display_command) that have no DB to live in yet at the point
  * they're needed. All other settings (key_prefix, csv_delimiter, backup_folder)
  * live in the DB config table.
@@ -27,6 +27,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -34,15 +35,17 @@ import (
 // It holds the path settings required to locate the database and backup files,
 // plus a couple of standalone display knobs (see displayContent).
 type TBibTeXFolders struct {
+	// LibraryFolder holds the library's own files ($base.bib, .files/, .scripts/,
+	// .tables/, .exchange/, .lock). Default: the folder of the settings file.
+	LibraryFolder    string `json:"library_folder,omitempty"`
 	GlobalFolder     string `json:"global_folder"`
 	DblpFolderLegacy string `json:"dblp_folder,omitempty"` // migrated to global_folder on next write
 	CacheFolder      string `json:"cache_folder"`
 	BackupFolder     string `json:"backup_folder,omitempty"` // optional; overrides DB config value
 	// HomeFolder is the (Nextcloud) folder that holds the copies of the local
 	// databases: the library database, its dump and stamp, and DBLP.backup/.
-	// Optional; defaults to the library's own folder. Never written by the
-	// programme, so a copied settings file cannot point a test library at the
-	// production copies.
+	// Defaults to the library folder. reset.test writes the test library's
+	// settings itself, so they never point at the production copies.
 	HomeFolder string `json:"home_folder,omitempty"`
 	// key_prefix was here in v22.x; v23.0 moves it to the DB config table only.
 	// Read and migrate on first run, but never write back.
@@ -64,10 +67,10 @@ type TBibTeXFolders struct {
 var (
 	csvDelimiter   = ";"
 	keyPrefix      = ""
-	globalFolder   = ""   // set by loadBibTeXFolders; defaults to bibTeXFolder when empty
-	backupFolder   = ""   // set by loadBibTeXSettings (from DB); defaults to bibTeXFolder+bibTeXBaseName+".backups/" when empty
-	cacheFolder    = ""   // set by loadBibTeXFolders; defaults to bibTeXFolder when empty
-	homeFolder     = ""   // set by loadBibTeXFolders; defaults to bibTeXFolder when empty
+	globalFolder   = ""   // set by loadBibTeXFolders; default: the library folder
+	backupFolder   = ""   // set by loadBibTeXFolders; default: libraryBase()+".backups/"
+	cacheFolder    = ""   // set by loadBibTeXFolders; default: the library folder
+	homeFolder     = ""   // set by loadBibTeXFolders; default: the library folder
 	displayFile    = ""   // set by loadBibTeXFolders; see displayContent
 	displayCommand = ""   // set by loadBibTeXFolders; see displayContent
 	displayReopen  = true // set by loadBibTeXFolders; see displayContent
@@ -184,30 +187,25 @@ func loadBibTeXFolders(settingsPath string) {
 		f.KeyPrefixLegacy = ""
 		needsWrite = true
 	}
-	if f.GlobalFolder != "" {
-		globalFolder = expandHome(f.GlobalFolder)
-		if !strings.HasSuffix(globalFolder, "/") {
-			globalFolder += "/"
+	// All path keys are written to the file, filled in with their defaults, so
+	// every location can be seen in one place (Erik, 2026-11-18). The library
+	// folder comes first: the other defaults derive from it.
+	settingsFolder := withSlash(filepath.Dir(settingsPath))
+	fill := func(key *string, def string) string {
+		if *key == "" {
+			*key = tildePath(def)
+			needsWrite = true
 		}
+		return withSlash(expandHome(*key))
 	}
-	if f.CacheFolder != "" {
-		cacheFolder = expandHome(f.CacheFolder)
-		if !strings.HasSuffix(cacheFolder, "/") {
-			cacheFolder += "/"
-		}
+	bibTeXFolder = fill(&f.LibraryFolder, settingsFolder)
+	globalFolder = fill(&f.GlobalFolder, bibTeXFolder)
+	cacheFolder = fill(&f.CacheFolder, bibTeXFolder)
+	homeFolder = fill(&f.HomeFolder, bibTeXFolder)
+	if f.BackupFolder == "" && backupFolder != "" {
+		f.BackupFolder = tildePath(backupFolder) // from a legacy .config
 	}
-	if f.BackupFolder != "" {
-		backupFolder = expandHome(f.BackupFolder)
-		if !strings.HasSuffix(backupFolder, "/") {
-			backupFolder += "/"
-		}
-	}
-	if f.HomeFolder != "" {
-		homeFolder = expandHome(f.HomeFolder)
-		if !strings.HasSuffix(homeFolder, "/") {
-			homeFolder += "/"
-		}
-	}
+	backupFolder = fill(&f.BackupFolder, libraryBase()+".backups/")
 	if f.DisplayFile != "" {
 		displayFile = expandHome(f.DisplayFile)
 	}

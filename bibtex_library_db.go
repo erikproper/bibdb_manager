@@ -319,13 +319,13 @@ func loadBibTeXSettings() {
 
 // configExchangePath returns the path of the config exchange CSV file.
 func configExchangePath() string {
-	return bibTeXFolder + bibTeXBaseName + tablesFolderSuffix + "/config.csv"
+	return libraryBase() + tablesFolderSuffix + "/config.csv"
 }
 
 // ExportConfig writes the user-settable config table entries to the exchange CSV.
 func ExportConfig() {
 	path := configExchangePath()
-	if err := os.MkdirAll(bibTeXFolder+bibTeXBaseName+tablesFolderSuffix, 0o755); err != nil {
+	if err := os.MkdirAll(libraryBase()+tablesFolderSuffix, 0o755); err != nil {
 		dbInteraction.Warning("Could not create exchange folder: %s", err)
 		return
 	}
@@ -1152,8 +1152,8 @@ func maybeMergeSpuriousContributors() {
 	if len(ops) == 0 {
 		return
 	}
-	logPath := bibTeXFolder + bibTeXBaseName + tablesFolderSuffix + "/spurious_contributor_merges.log"
-	os.MkdirAll(bibTeXFolder+bibTeXBaseName+tablesFolderSuffix, 0o755) //nolint:errcheck
+	logPath := libraryBase() + tablesFolderSuffix + "/spurious_contributor_merges.log"
+	os.MkdirAll(libraryBase()+tablesFolderSuffix, 0o755) //nolint:errcheck
 	logFile, logErr := os.Create(logPath)
 	if logErr == nil {
 		fmt.Fprintf(logFile, "Spurious contributor merges on %s (%d candidate(s))\n\n",
@@ -1306,8 +1306,8 @@ func maybeCleanupOrphanedContributors(l *TBibTeXLibrary) {
 		orphanIDs = append(orphanIDs, id)
 	}
 
-	logPath := bibTeXFolder + bibTeXBaseName + tablesFolderSuffix + "/orphaned_contributors.log"
-	os.MkdirAll(bibTeXFolder+bibTeXBaseName+tablesFolderSuffix, 0o755) //nolint:errcheck
+	logPath := libraryBase() + tablesFolderSuffix + "/orphaned_contributors.log"
+	os.MkdirAll(libraryBase()+tablesFolderSuffix, 0o755) //nolint:errcheck
 	if f, err := os.Create(logPath); err == nil {
 		fmt.Fprintf(f, "Orphaned contributors removed on %s (%d total)\n\n",
 			time.Now().Format("2006-01-02 15:04:05"), len(orphanIDs))
@@ -3557,7 +3557,7 @@ func writeRepairCSV(filePath string, lines []string) bool {
 // before any file reads so that loadMappingFiles picks up repaired files.
 // Returns whether entry_field_mappings was written (caller may apply cascade re-read).
 func repairDirtyMappingTables() (entryFieldMappingsRepaired bool) {
-	base := bibTeXFolder + bibTeXBaseName
+	base := libraryBase()
 
 	repair := func(tableName, filePath string) bool {
 		if !isTableDirty(tableName) {

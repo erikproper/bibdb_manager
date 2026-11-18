@@ -92,10 +92,10 @@ func ensureLibraryBackup() {
 		return
 	}
 
-	bibSrc := bibTeXFolder + bibTeXBaseName + BibFileExtension
+	bibSrc := libraryBase() + BibFileExtension
 	_ = copyFile(bibSrc, filepath.Join(backupDir, bibTeXBaseName+BibFileExtension))
 
-	tablesDir := bibTeXFolder + bibTeXBaseName + tablesFolderSuffix
+	tablesDir := libraryBase() + tablesFolderSuffix
 	backupTablesDir := filepath.Join(backupDir, bibTeXBaseName+tablesFolderSuffix)
 	if err := os.MkdirAll(backupTablesDir, 0755); err == nil {
 		if des, err := os.ReadDir(tablesDir); err == nil {

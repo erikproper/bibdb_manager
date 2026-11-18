@@ -128,7 +128,7 @@ func (l *TBibTeXLibrary) ReadMetadataFile() {
 
 // WriteMetadataFile writes a human-readable JSON backup of entry metadata.
 func (l *TBibTeXLibrary) WriteMetadataFile() {
-	path := bibTeXFolder + bibTeXBaseName + EntryMetadataFilePath
+	path := libraryBase() + EntryMetadataFilePath
 	data, err := json.MarshalIndent(l.Metadata, "", "  ")
 	if err != nil {
 		l.Warning("Could not marshal metadata: %s", err)

@@ -354,8 +354,8 @@ func (l *TBibTeXLibrary) ScanOrphanPDFs() {
 	}
 	l.Progress("  Checking for orphaned PDFs")
 
-	logPath := bibTeXFolder + bibTeXBaseName + tablesFolderSuffix + "/orphaned_pdfs.log"
-	os.MkdirAll(bibTeXFolder+bibTeXBaseName+tablesFolderSuffix, 0o755) //nolint:errcheck
+	logPath := libraryBase() + tablesFolderSuffix + "/orphaned_pdfs.log"
+	os.MkdirAll(libraryBase()+tablesFolderSuffix, 0o755) //nolint:errcheck
 	var orphanLog *os.File
 	if f, err2 := os.Create(logPath); err2 == nil {
 		orphanLog = f

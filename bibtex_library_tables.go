@@ -38,7 +38,7 @@ import (
 // tTableEntry describes one exportable/importable table.
 type tTableEntry struct {
 	name      string
-	filePath  string                  // relative to bibTeXFolder+bibTeXBaseName
+	filePath  string                  // relative to libraryBase()
 	exportFn  func()                  // nil if not exportable
 	importFn  func()                  // nil if not importable; always replace-all semantics
 	cascadeFn func(l *TBibTeXLibrary) // re-normalise bib_entries after import; nil if none

@@ -53,7 +53,7 @@ var (
 	Reporting TInteraction
 )
 
-const AppVersion = "30.7"
+const AppVersion = "30.8"
 
 // Run-state flags consumed by the write tail in main.
 var (
@@ -428,7 +428,7 @@ func openLibraryToUpdate() bool {
 		}
 	} else {
 		// No bib_entries yet. Bootstrap: if the canonical .bib file is present, import it now.
-		bibPath := bibTeXFolder + bibTeXBaseName + BibFileExtension
+		bibPath := libraryBase() + BibFileExtension
 		if FileExists(bibPath) {
 			Library.Progress(ProgressImportingBibFile, bibPath)
 			if !parseSyncBibFile(bibPath) {
@@ -792,7 +792,7 @@ func flockPath(lockPath string) *os.File {
 }
 
 func acquireInstanceLock() {
-	instanceLockFile = flockPath(bibTeXFolder + bibTeXBaseName + LockFileExtension)
+	instanceLockFile = flockPath(libraryBase() + LockFileExtension)
 }
 
 func acquireDblpLock() {
@@ -2426,8 +2426,8 @@ func doUpsertDblpEntries() {
 		Library.orcidAutoResolveSameCount = 0
 		Library.orcidAutoResolveDiffCount = 0
 		if len(Library.dblpNameFormAutoAccepts) > 0 {
-			logPath := bibTeXFolder + bibTeXBaseName + tablesFolderSuffix + "/dblp_name_form_auto_accepts.log"
-			os.MkdirAll(bibTeXFolder+bibTeXBaseName+tablesFolderSuffix, 0o755) //nolint:errcheck
+			logPath := libraryBase() + tablesFolderSuffix + "/dblp_name_form_auto_accepts.log"
+			os.MkdirAll(libraryBase()+tablesFolderSuffix, 0o755) //nolint:errcheck
 			if f, err := os.Create(logPath); err == nil {
 				for _, line := range Library.dblpNameFormAutoAccepts {
 					fmt.Fprintln(f, line)
@@ -2438,8 +2438,8 @@ func doUpsertDblpEntries() {
 			Library.dblpNameFormAutoAccepts = nil
 		}
 		if pmOk && len(contribPersonEntries) > 0 {
-			logPath := bibTeXFolder + bibTeXBaseName + tablesFolderSuffix + "/dblp_contributor_splits.log"
-			os.MkdirAll(bibTeXFolder+bibTeXBaseName+tablesFolderSuffix, 0o755) //nolint:errcheck
+			logPath := libraryBase() + tablesFolderSuffix + "/dblp_contributor_splits.log"
+			os.MkdirAll(libraryBase()+tablesFolderSuffix, 0o755) //nolint:errcheck
 			var splitLog *os.File
 			if f, err := os.Create(logPath); err == nil {
 				splitLog = f
@@ -2805,7 +2805,7 @@ func runWatchORCID(w TWatchEntry, label string) {
 func runWatch() bool {
 	Library.ReadKeyNonDoublesFile()
 
-	filePath := bibTeXFolder + bibTeXBaseName + scriptsFolderSuffix + "/watch"
+	filePath := libraryBase() + scriptsFolderSuffix + "/watch"
 	entries := ReadWatchFile(filePath)
 	if len(entries) == 0 {
 		return false
@@ -2817,8 +2817,8 @@ func runWatch() bool {
 		WriteWatchFile(filePath, entries)
 	}
 
-	logPath := bibTeXFolder + bibTeXBaseName + tablesFolderSuffix + "/watching.log"
-	os.MkdirAll(bibTeXFolder+bibTeXBaseName+tablesFolderSuffix, 0o755) //nolint:errcheck
+	logPath := libraryBase() + tablesFolderSuffix + "/watching.log"
+	os.MkdirAll(libraryBase()+tablesFolderSuffix, 0o755) //nolint:errcheck
 	var watchLog *os.File
 	if f, err := os.Create(logPath); err == nil {
 		watchLog = f
@@ -2921,7 +2921,7 @@ func doWatch() {
 	}
 	stderrPrintf("\n")
 	if !runWatch() {
-		filePath := bibTeXFolder + bibTeXBaseName + scriptsFolderSuffix + "/watch"
+		filePath := libraryBase() + scriptsFolderSuffix + "/watch"
 		Library.Progress("No watch entries found in %s", filePath)
 	}
 }
@@ -2929,7 +2929,7 @@ func doWatch() {
 // runScript runs the entry_actions script if present; assumes the library is
 // already open. Silent if the script file does not exist.
 func runScript() bool {
-	scriptPath := bibTeXFolder + bibTeXBaseName + ScriptFilePath
+	scriptPath := libraryBase() + ScriptFilePath
 	if _, err := os.Stat(scriptPath); os.IsNotExist(err) {
 		return false
 	}
@@ -3039,7 +3039,7 @@ func doSetPreferredAlias(args []string) {
 }
 
 func doApplyScript() {
-	scriptPath := bibTeXFolder + bibTeXBaseName + ScriptFilePath
+	scriptPath := libraryBase() + ScriptFilePath
 	if _, err := os.Stat(scriptPath); os.IsNotExist(err) {
 		fmt.Fprintf(os.Stderr, "No script file found at %s\n", scriptPath)
 		return
@@ -3655,7 +3655,7 @@ func doUpgradeWatchActions() {
 		return
 	}
 	pm, _ := loadDblpPersonMaps()
-	filePath := bibTeXFolder + bibTeXBaseName + scriptsFolderSuffix + "/watch"
+	filePath := libraryBase() + scriptsFolderSuffix + "/watch"
 	entries := ReadWatchFile(filePath)
 	if len(entries) == 0 {
 		Library.Progress("Watch file empty or absent: %s", filePath)
@@ -4056,9 +4056,9 @@ flag.BoolVar(&cmdAlignBooktitleCountries, "align_booktitle_countries", false, "d
 
 	Reporting = TInteraction{}
 
-	loadBibTeXFolders(bibTeXFolder + bibTeXBaseName + SettingsFileExtension)
+	loadBibTeXFolders(libraryBase() + SettingsFileExtension)
 	if backupFolder == "" {
-		backupFolder = bibTeXFolder + bibTeXBaseName + ".backups/"
+		backupFolder = libraryBase() + ".backups/"
 	}
 	if globalFolder == "" {
 		globalFolder = bibTeXFolder

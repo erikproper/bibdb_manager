@@ -716,8 +716,8 @@ func (l *TBibTeXLibrary) CheckNameMappingConsistency() {
 		}
 	}
 	if len(contradictions) > 0 {
-		logPath := bibTeXFolder + bibTeXBaseName + tablesFolderSuffix + "/non_double_contributor_name_contradictions.log"
-		os.MkdirAll(bibTeXFolder+bibTeXBaseName+tablesFolderSuffix, 0o755) //nolint:errcheck
+		logPath := libraryBase() + tablesFolderSuffix + "/non_double_contributor_name_contradictions.log"
+		os.MkdirAll(libraryBase()+tablesFolderSuffix, 0o755) //nolint:errcheck
 		if f, err := os.Create(logPath); err == nil {
 			for _, pair := range contradictions {
 				fmt.Fprintf(f, "Removed contradicted non-double pairing: %q / %q (both now resolve to the same contributor)\n", pair[0], pair[1])

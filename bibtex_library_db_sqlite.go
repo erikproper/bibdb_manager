@@ -26,6 +26,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -480,7 +481,7 @@ func prepareWorkingDatabase() (ok bool) {
 	if hErr != nil {
 		// No home DB yet. If a bib file exists for this base, create an empty home DB
 		// so the normal open flow can proceed and auto-import it via ValidBibDb() == false.
-		bibPath := bibTeXFolder + bibTeXBaseName + BibFileExtension
+		bibPath := libraryBase() + BibFileExtension
 		bibInfo, bibErr := os.Stat(bibPath)
 		if bibErr != nil {
 			dbInteraction.Warning("Home database not found: %s", home)
@@ -984,6 +985,9 @@ func doRestoreFromDump() {
 // (e.g. "ErikProper_20260709_123456"); the full path is
 // backupFolder/backupName.sqlite3.
 func doRestoreFromBackup(backupName string) {
+	// Tolerate a name typed with its extension, or with a trailing dot left by
+	// tab completion.
+	backupName = strings.TrimRight(strings.TrimSuffix(backupName, cacheFileExtension), ".")
 	backupPath := backupFolder + backupName + cacheFileExtension
 	info, err := os.Stat(backupPath)
 	if err != nil {

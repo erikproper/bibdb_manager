@@ -31,7 +31,7 @@ import (
 
 // tablesFilePath returns the full path for a table's CSV file.
 func tablesFilePath(suffix string) string {
-	return bibTeXFolder + bibTeXBaseName + suffix
+	return libraryBase() + suffix
 }
 
 // ensureTablesDir creates the tables directory if it does not exist.

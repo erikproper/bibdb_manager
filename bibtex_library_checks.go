@@ -219,8 +219,8 @@ func (l *TBibTeXLibrary) CheckEntryFieldMappingWinners() {
 	}
 
 	if len(fixes) > 0 || len(deleteds) > 0 {
-		logPath := bibTeXFolder + bibTeXBaseName + tablesFolderSuffix + "/entry_field_mapping_winners.log"
-		os.MkdirAll(bibTeXFolder+bibTeXBaseName+tablesFolderSuffix, 0o755) //nolint:errcheck
+		logPath := libraryBase() + tablesFolderSuffix + "/entry_field_mapping_winners.log"
+		os.MkdirAll(libraryBase()+tablesFolderSuffix, 0o755) //nolint:errcheck
 		if f, err := os.Create(logPath); err == nil {
 			defer f.Close()
 			for _, m := range fixes {

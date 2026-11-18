@@ -1311,8 +1311,8 @@ func absorbDblpNamesCore() {
 
 	var splitLog *os.File
 	if len(splitCandidates) > 0 {
-		logPath := bibTeXFolder + bibTeXBaseName + tablesFolderSuffix + "/dblp_contributor_splits.log"
-		os.MkdirAll(bibTeXFolder+bibTeXBaseName+tablesFolderSuffix, 0o755) //nolint:errcheck
+		logPath := libraryBase() + tablesFolderSuffix + "/dblp_contributor_splits.log"
+		os.MkdirAll(libraryBase()+tablesFolderSuffix, 0o755) //nolint:errcheck
 		if f, err := os.Create(logPath); err == nil {
 			splitLog = f
 			fmt.Fprintf(splitLog, "DBLP contributor splits on %s\n\n",
