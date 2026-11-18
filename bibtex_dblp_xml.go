@@ -364,9 +364,9 @@ func saveDblpNameFiles(pm dblpPersonMaps) {
 		sort.Strings(lines)
 		path := base + filename
 		if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0644); err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: could not write %s: %s\n", path, err)
+			messagef("Warning: could not write %s: %s\n", path, err)
 		} else {
-			fmt.Fprintf(os.Stderr, "  Saved %d rows to %s\n", len(lines), path)
+			messagef("  Saved %d rows to %s\n", len(lines), path)
 		}
 	}
 
@@ -664,71 +664,71 @@ func (cr *countingReader) Read(p []byte) (int, error) {
 
 // --- CLI: -load_dblp_xml ---
 
-func doLoadDblpXml(args []string) {
+func doLoadDblpXml(args []string) error {
 	xmlGzPath := args[0]
 	if !FileExists(xmlGzPath) {
-		fmt.Fprintf(os.Stderr, "File not found: %s\n", xmlGzPath)
-		os.Exit(1)
+		messagef("File not found: %s\n", xmlGzPath)
+		return errReported
 	}
 
 	fi, err := os.Stat(xmlGzPath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Cannot stat %s: %s\n", xmlGzPath, err)
-		os.Exit(1)
+		messagef("Cannot stat %s: %s\n", xmlGzPath, err)
+		return errReported
 	}
 	totalBytes := fi.Size()
 
 	if !FileExists(dblpDBPath()) {
-		fmt.Fprintf(os.Stderr, "No DBLP store yet; building %s.\n", dblpDBPath())
+		messagef("No DBLP store yet; building %s.\n", dblpDBPath())
 	} else if meta := readDblpMeta(); meta != nil {
-		fmt.Fprintf(os.Stderr, "Existing DBLP store: %d entries from %s (loaded %s)\n",
+		messagef("Existing DBLP store: %d entries from %s (loaded %s)\n",
 			meta.EntryCount, meta.XMLFile, meta.LoadedAt)
 	}
 
 	start := time.Now()
 
 	// First pass: collect name mappings from www entries.
-	fmt.Fprintf(os.Stderr, "Pass 1: building name map from www entries...\n")
+	messagef("Pass 1: building name map from www entries...\n")
 	f1, err := os.Open(xmlGzPath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Could not open %s: %s\n", xmlGzPath, err)
-		os.Exit(1)
+		messagef("Could not open %s: %s\n", xmlGzPath, err)
+		return errReported
 	}
 	gz1, err := gzip.NewReader(f1)
 	if err != nil {
 		f1.Close()
-		fmt.Fprintf(os.Stderr, "Could not read gzip from %s: %s\n", xmlGzPath, err)
-		os.Exit(1)
+		messagef("Could not read gzip from %s: %s\n", xmlGzPath, err)
+		return errReported
 	}
 	pm, err := dblpBuildNameMap(gz1)
 	gz1.Close()
 	f1.Close()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: name map build error: %s\n", err)
+		messagef("Warning: name map build error: %s\n", err)
 	}
-	fmt.Fprintf(os.Stderr, "  %d person entries collected (%.0fs).\n", len(pm.keyToCanonical), time.Since(start).Seconds())
+	messagef("  %d person entries collected (%.0fs).\n", len(pm.keyToCanonical), time.Since(start).Seconds())
 	saveDblpNameFiles(pm)
 	nameMap := pm.aliasToCanonical()
 
 	// Second pass: import all entries into a new store.
 	builder, err := newDblpDBBuilder()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Could not create %s: %s\n", dblpDBNewPath(), err)
-		os.Exit(1)
+		messagef("Could not create %s: %s\n", dblpDBNewPath(), err)
+		return errReported
 	}
-	fmt.Fprintf(os.Stderr, "Pass 2: importing DBLP XML from %s into %s...\n", xmlGzPath, dblpDBNewPath())
+	messagef("Pass 2: importing DBLP XML from %s into %s...\n", xmlGzPath, dblpDBNewPath())
 	f2, err := os.Open(xmlGzPath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Could not open %s: %s\n", xmlGzPath, err)
-		os.Exit(1)
+		messagef("Could not open %s: %s\n", xmlGzPath, err)
+		return errReported
 	}
 	defer f2.Close()
 
 	cr := &countingReader{r: f2}
 	gz2, err := gzip.NewReader(cr)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Could not read gzip from %s: %s\n", xmlGzPath, err)
-		os.Exit(1)
+		messagef("Could not read gzip from %s: %s\n", xmlGzPath, err)
+		return errReported
 	}
 	defer gz2.Close()
 
@@ -747,7 +747,7 @@ func doLoadDblpXml(args []string) {
 				pct := float64(cr.n.Load()) * 100.0 / float64(totalBytes)
 				mbRead := float64(cr.n.Load()) / 1e6
 				mbTotal := float64(totalBytes) / 1e6
-				fmt.Fprintf(os.Stderr, "\r  %d entries processed (%.0fs elapsed, %.0f%%, %.1f/%.0f MB)...",
+				messagef("\r  %d entries processed (%.0fs elapsed, %.0f%%, %.1f/%.0f MB)...",
 					n, elapsed, pct, mbRead, mbTotal)
 			case <-pass2Done:
 				return
@@ -759,15 +759,15 @@ func doLoadDblpXml(args []string) {
 		processed.Store(int64(n))
 	})
 	close(pass2Done)
-	fmt.Fprintf(os.Stderr, "\r\033[K  %d entries processed (%.0fs).\n", count, time.Since(pass2Start).Seconds())
+	messagef("\r\033[K  %d entries processed (%.0fs).\n", count, time.Since(pass2Start).Seconds())
 	if err != nil {
 		builder.abort()
 		if errors.Is(err, errDblpImportInterrupted) {
-			fmt.Fprintf(os.Stderr, "Import interrupted after %d entries; the current store is unchanged.\n", count)
+			messagef("Import interrupted after %d entries; the current store is unchanged.\n", count)
 		} else {
-			fmt.Fprintf(os.Stderr, "Import failed after %d entries: %s\nThe current store is unchanged.\n", count, err)
+			messagef("Import failed after %d entries: %s\nThe current store is unchanged.\n", count, err)
 		}
-		os.Exit(1)
+		return errReported
 	}
 
 	meta := TDblpMeta{
@@ -780,20 +780,21 @@ func doLoadDblpXml(args []string) {
 	}
 	finishStart := time.Now()
 	err = builder.finish(meta, func(format string, args ...any) {
-		fmt.Fprintf(os.Stderr, format+"\n", args...)
+		messagef(format+"\n", args...)
 	})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Could not complete %s: %s\nThe current store is unchanged.\n", dblpDBNewPath(), err)
-		os.Exit(1)
+		messagef("Could not complete %s: %s\nThe current store is unchanged.\n", dblpDBNewPath(), err)
+		return errReported
 	}
-	fmt.Fprintf(os.Stderr, "  %s ready (%.0fs).\n", dblpDBPath(), time.Since(finishStart).Seconds())
+	messagef("  %s ready (%.0fs).\n", dblpDBPath(), time.Since(finishStart).Seconds())
 
-	fmt.Fprintf(os.Stderr, "DBLP import complete: %d entries in %.1fs\n",
+	messagef("DBLP import complete: %d entries in %.1fs\n",
 		count, time.Since(start).Seconds())
 
 	if err := pushDblpStore(); err != nil {
-		fmt.Fprintf(os.Stderr, "Could not copy the DBLP store to %s: %s\n", dblpBackupFolder(), err)
+		messagef("Could not copy the DBLP store to %s: %s\n", dblpBackupFolder(), err)
 	}
+	return nil
 }
 
 // --- CLI: -update_dblp ---
@@ -883,62 +884,67 @@ func gzipFileAtomic(src, dst string) error {
 // The dated destination filename is derived from the download's mtime, so
 // re-running after a fresh manual download is detected as a new release; the
 // previous .xml.gz is left in place (files have distinct dated names).
-func doUpdateDblp() {
+func doUpdateDblp() error {
 	dlFolder := downloadsFolder()
 	if dlFolder == "" {
-		fmt.Fprintf(os.Stderr, "Could not determine your Downloads folder.\n")
-		os.Exit(1)
+		messagef("Could not determine your Downloads folder.\n")
+		return errReported
 	}
 	sourcePath, info := findDblpDownload(dlFolder)
 	if sourcePath == "" {
-		fmt.Fprintf(os.Stderr, "DBLP no longer allows automated downloads.\n")
-		fmt.Fprintf(os.Stderr, "Please download %s manually in your browser,\n", dblpXMLDownloadURL)
-		fmt.Fprintf(os.Stderr, "save it to %s, then re-run -update_dblp.\n", dlFolder)
-		os.Exit(1)
+		messagef("DBLP no longer allows automated downloads.\n")
+		messagef("Please download %s manually in your browser,\n", dblpXMLDownloadURL)
+		messagef("save it to %s, then re-run -update_dblp.\n", dlFolder)
+		return errReported
 	}
 
 	if err := os.MkdirAll(dblpFolder(), 0755); err != nil {
-		fmt.Fprintf(os.Stderr, "Could not create DBLP folder: %s\n", err)
-		os.Exit(1)
+		messagef("Could not create DBLP folder: %s\n", err)
+		return errReported
 	}
 
 	latest := "dblp-" + info.ModTime().Format("2006-01-02") + ".xml.gz"
 	destPath := dblpFolder() + latest
 	if FileExists(destPath) {
 		if readDblpCurrentXML() == latest {
-			fmt.Fprintf(os.Stderr, "Already have %s — nothing to do.\n", latest)
-			return
+			messagef("Already have %s — nothing to do.\n", latest)
+			return nil
 		}
-		fmt.Fprintf(os.Stderr, "Found %s but import incomplete — re-importing...\n", latest)
-		doLoadDblpXml([]string{destPath})
+		messagef("Found %s but import incomplete — re-importing...\n", latest)
+		if err := doLoadDblpXml([]string{destPath}); err != nil {
+			return err
+		}
 		cleanupDblpXmlFiles()
-		return
+		return nil
 	}
 
 	compressed, err := fileIsGzipped(sourcePath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Could not read %s: %s\n", sourcePath, err)
-		os.Exit(1)
+		messagef("Could not read %s: %s\n", sourcePath, err)
+		return errReported
 	}
 	if compressed {
-		fmt.Fprintf(os.Stderr, "Moving %s → %s\n", sourcePath, destPath)
+		messagef("Moving %s → %s\n", sourcePath, destPath)
 		err = copyFileAtomic(sourcePath, destPath)
 	} else {
-		fmt.Fprintf(os.Stderr, "%s is not compressed (browser unpacked it); compressing → %s...\n", sourcePath, destPath)
+		messagef("%s is not compressed (browser unpacked it); compressing → %s...\n", sourcePath, destPath)
 		err = gzipFileAtomic(sourcePath, destPath)
 	}
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Could not copy %s to %s: %s\n", sourcePath, destPath, err)
-		os.Exit(1)
+		messagef("Could not copy %s to %s: %s\n", sourcePath, destPath, err)
+		return errReported
 	}
 	if err := os.Remove(sourcePath); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: could not remove %s: %s\n", sourcePath, err)
+		messagef("Warning: could not remove %s: %s\n", sourcePath, err)
 	}
 
-	doLoadDblpXml([]string{destPath})
+	if err := doLoadDblpXml([]string{destPath}); err != nil {
+		return err
+	}
 
 	// Import succeeded — keep only the two most recent XML files.
 	cleanupDblpXmlFiles()
+	return nil
 }
 
 // swapBibTeXNameFormat converts between the two BibTeX name orderings:
@@ -1735,9 +1741,9 @@ func detectMisattributedDblpEntries(l *TBibTeXLibrary, pm dblpPersonMaps, keyToN
 		for {
 			select {
 			case <-loadTicker.C:
-				fmt.Fprintf(os.Stderr, "\r  %d/%d person key(s) loaded...", loadedCount.Load(), len(uniqueKeys))
+				messagef("\r  %d/%d person key(s) loaded...", loadedCount.Load(), len(uniqueKeys))
 			case <-loadDone:
-				fmt.Fprintf(os.Stderr, "\r")
+				messagef("\r")
 				return
 			}
 		}
@@ -1874,7 +1880,7 @@ func detectUnkeyedContributorSplits(l *TBibTeXLibrary, pm dblpPersonMaps, keyToN
 	jsonCache := make(map[string]*TDblpJSONEntry)
 	for i, c := range candidates {
 		if i%500 == 0 {
-			fmt.Fprintf(os.Stderr, "\r  reading JSON: %d/%d...", i, len(candidates))
+			messagef("\r  reading JSON: %d/%d...", i, len(candidates))
 		}
 		normKey := normalizeDblpKey(c.dblpVal)
 		if normKey == "" {
@@ -1884,7 +1890,7 @@ func detectUnkeyedContributorSplits(l *TBibTeXLibrary, pm dblpPersonMaps, keyToN
 			jsonCache[normKey] = readDblpJSONEntry(normKey) // nil if not in the DBLP store
 		}
 	}
-	fmt.Fprintf(os.Stderr, "\r")
+	messagef("\r")
 
 	// contribPersonEntries: contribID → personKey → deduplicated set of entryKeys
 	contribPersonEntries := make(map[string]map[string]map[string]bool)
@@ -2263,7 +2269,7 @@ func doEnrichContributorData() {
 	if !openLibraryToUpdate() {
 		return
 	}
-	fmt.Fprintf(os.Stderr, "\nEnriching contributor data:\n")
+	messagef("\nEnriching contributor data:\n")
 
 	Library.Progress("  Step 1/4: absorbing DBLP name mappings...")
 	Library.progressPrefix = "  " // "  " + existing "  " prefix = "    "
@@ -2310,7 +2316,7 @@ func cleanupDblpXmlFiles() {
 	}
 	for _, name := range xmlFiles[:len(xmlFiles)-2] {
 		path := dblpFolder() + name
-		fmt.Fprintf(os.Stderr, "Removing old XML: %s\n", path)
+		messagef("Removing old XML: %s\n", path)
 		os.Remove(path)
 	}
 }

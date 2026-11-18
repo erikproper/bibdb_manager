@@ -22,7 +22,6 @@ package main
 import (
 	"crypto/md5"
 	"encoding/hex"
-	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -109,7 +108,7 @@ func maybeStartDblpTrashCleanup() {
 	if err != nil || len(des) == 0 {
 		return
 	}
-	fmt.Fprintf(os.Stderr, "Deleting DBLP trash in background.\n")
+	messagef("Deleting DBLP trash in background.\n")
 	go os.RemoveAll(dblpTrashFolder())
 }
 

@@ -282,7 +282,7 @@ func doUpdateOrcidCache() {
 	// Re-probe connectivity now, not just at startup, since the network may have
 	// changed state since the binary was launched.
 	if !probeConnectivity() {
-		fmt.Fprintf(os.Stderr, "No network connectivity — cannot refresh ORCID cache.\n")
+		messagef("No network connectivity — cannot refresh ORCID cache.\n")
 		return
 	}
 	if !openLibraryToReport() {
@@ -349,7 +349,7 @@ func doUpdateOrcidCache() {
 	go func() {
 		for {
 			select {
-			case line, ok := <-stdinCh:
+			case line, ok := <-userIO.Input():
 				if !ok || strings.TrimSpace(line) == "q" {
 					select {
 					case quitCh <- struct{}{}:

@@ -25,7 +25,6 @@ package main
 
 import (
 	"encoding/json"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -79,11 +78,11 @@ var (
 func writeBibTeXFolders(foldersPath string, f TBibTeXFolders) {
 	data, err := json.MarshalIndent(f, "", "  ")
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: could not marshal folders file: %s\n", err)
+		messagef("Warning: could not marshal folders file: %s\n", err)
 		return
 	}
 	if err := os.WriteFile(foldersPath, append(data, '\n'), 0644); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: could not write folders file %s: %s\n", foldersPath, err)
+		messagef("Warning: could not write folders file %s: %s\n", foldersPath, err)
 	}
 }
 
@@ -93,14 +92,14 @@ func promptKeyPrefix() string {
 	for {
 		raw, err := Reporting.AskForInput("Enter a two-uppercase-letter key prefix for this library (e.g. EP)")
 		if err != nil {
-			fmt.Fprintln(os.Stderr, "Error: stdin is not interactive; set key_prefix in the folders file.")
-			os.Exit(1)
+			messageln("Error: stdin is not interactive; set key_prefix in the folders file.")
+			endRun(1)
 		}
 		s := strings.ToUpper(raw)
 		if len(s) == 2 && s[0] >= 'A' && s[0] <= 'Z' && s[1] >= 'A' && s[1] <= 'Z' {
 			return s
 		}
-		fmt.Fprintln(os.Stderr, "Key prefix must be exactly two uppercase letters.")
+		messageln("Key prefix must be exactly two uppercase letters.")
 	}
 }
 
@@ -128,7 +127,7 @@ func loadBibTeXFolders(settingsPath string) {
 		// .settings absent — try legacy .folders for one-time migration.
 		foldersPath := strings.TrimSuffix(settingsPath, SettingsFileExtension) + FoldersFileExtension
 		if legacyData, legacyErr := os.ReadFile(foldersPath); legacyErr == nil && json.Unmarshal(legacyData, &f) == nil {
-			fmt.Fprintf(os.Stderr, "Migrating %s.folders → %s.settings\n",
+			messagef("Migrating %s.folders → %s.settings\n",
 				strings.TrimSuffix(settingsPath, SettingsFileExtension),
 				strings.TrimSuffix(settingsPath, SettingsFileExtension))
 		} else {
@@ -160,7 +159,7 @@ func loadBibTeXFolders(settingsPath string) {
 					f.DblpFolderLegacy = legacy.DblpFolderLegacy
 					f.CacheFolder = legacy.CacheFolder
 					f.KeyPrefixLegacy = legacy.KeyPrefix
-					fmt.Fprintf(os.Stderr, "Migrating %s.config → %s.settings\n",
+					messagef("Migrating %s.config → %s.settings\n",
 						strings.TrimSuffix(settingsPath, SettingsFileExtension),
 						strings.TrimSuffix(settingsPath, SettingsFileExtension))
 				}
@@ -168,7 +167,7 @@ func loadBibTeXFolders(settingsPath string) {
 		}
 		needsWrite = true
 	} else if err := json.Unmarshal(data, &f); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: could not parse settings file %s: %s\n", settingsPath, err)
+		messagef("Warning: could not parse settings file %s: %s\n", settingsPath, err)
 		needsWrite = true
 	}
 

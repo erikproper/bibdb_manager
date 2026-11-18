@@ -216,7 +216,7 @@ func unquoteMapField(s string) string {
 func writeUnicodeMap(path string) {
 	f, err := os.Create(path)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: could not write unicode map %s: %s\n", path, err)
+		messagef("Warning: could not write unicode map %s: %s\n", path, err)
 		return
 	}
 	defer f.Close()

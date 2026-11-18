@@ -9,61 +9,37 @@
  *
  * Creator: Henderik A. Proper (erikproper@gmail.com)
  *
- * Version of: 13.11.2026
+ * Version of: 18.11.2026
  *
  */
 
 package main
 
 import (
-	"bufio"
 	"fmt"
-	"os"
 	"strings"
 	"time"
-
-	"github.com/mattn/go-isatty"
 )
 
-// isTTY is true when stderr is connected to an interactive terminal.
-// Non-TTY sessions (pipes, CI, scripts) get data-only output: all stderr is
-// silenced and interactive prompts fail fast so nothing blocks on stdin.
-var isTTY = isatty.IsTerminal(os.Stderr.Fd())
-
-// stdinCh is the single source of stdin lines for all interactive prompts.
-// One pump goroutine reads os.Stdin here; every consumer (WarningQuestion,
-// DBLP scan, etc.) pulls from this channel so there is
-// never more than one reader competing for the same input byte.
-var stdinCh = make(chan string, 1)
-
-func init() {
-	if !isTTY {
-		close(stdinCh) // non-TTY: no stdin reads; fail-fast on all prompts
-		return
-	}
-	go func() {
-		scanner := bufio.NewScanner(os.Stdin)
-		for scanner.Scan() {
-			stdinCh <- scanner.Text()
-		}
-		close(stdinCh)
-	}()
-}
+// isTTY is true when a person is there (see TUserIO.IsInteractive).
+// Non-interactive sessions (pipes, CI, scripts) get data-only output: all
+// messages are silenced and interactive prompts fail fast so nothing blocks.
+var isTTY = userIO.IsInteractive()
 
 // readStdinLine blocks until the user types a line and returns it trimmed of
 // whitespace (including any stray \r). Closed stdin (end of input, Ctrl-D) quits
 // as "q" would: returning "" made the question loops ask again forever.
 func readStdinLine() string {
-	line, ok := <-stdinCh
+	line, ok := <-userIO.Input()
 	if !ok {
-		fmt.Fprintln(os.Stderr)
+		messageln()
 		quitNow()
 		return "q"
 	}
 	return strings.TrimSpace(line)
 }
 
-// TProgressTicker renders an in-place progress counter on stderr.
+// TProgressTicker renders an in-place progress counter in the messages.
 // A nil receiver is safe on all methods.
 // Create with (r *TInteraction).NewProgressTicker.
 type TProgressTicker struct {
@@ -100,7 +76,7 @@ func SpinnerInterrupt() {
 		return
 	}
 	if activeTicker != nil {
-		fmt.Fprint(os.Stderr, "\r\033[K")
+		message("\r\033[K")
 		activeTicker.rendered = false
 	}
 }
@@ -113,7 +89,7 @@ func SpinnerCommit() {
 		return
 	}
 	if activeTicker != nil && activeTicker.rendered {
-		fmt.Fprint(os.Stderr, "\n")
+		message("\n")
 		activeTicker.rendered = false
 	}
 }
@@ -178,12 +154,12 @@ func (t *TProgressTicker) render() {
 		if pct > 100 {
 			pct = 100
 		}
-		fmt.Fprintf(os.Stderr, "\r\033[K%s:  %*d/%d (%.0f%%)",
+		messagef("\r\033[K%s:  %*d/%d (%.0f%%)",
 			t.label, t.totalWidth, t.current, t.total, pct)
 	} else if t.current > 0 {
-		fmt.Fprintf(os.Stderr, "\r\033[K%s: %d", t.label, t.current)
+		messagef("\r\033[K%s: %d", t.label, t.current)
 	} else {
-		fmt.Fprintf(os.Stderr, "\r\033[K%s: ...", t.label)
+		messagef("\r\033[K%s: ...", t.label)
 	}
 	t.rendered = true
 	t.lastRender = time.Now()
@@ -197,15 +173,7 @@ func (t *TProgressTicker) Step() bool {
 		return false
 	}
 	t.current++
-	select {
-	case line, ok := <-stdinCh:
-		if ok && strings.TrimSpace(line) == "q" && t.interaction != nil {
-			t.interaction.quitRequested = true
-			stderrPrintf("\nInterrupted — committing work done so far before exiting...\n")
-			quitNow()
-		}
-	default:
-	}
+	t.pollForQuit()
 	if t.dueToRender() {
 		t.render()
 	}
@@ -220,15 +188,7 @@ func (t *TProgressTicker) SetCount(n int) bool {
 		return false
 	}
 	t.current = n
-	select {
-	case line, ok := <-stdinCh:
-		if ok && strings.TrimSpace(line) == "q" && t.interaction != nil {
-			t.interaction.quitRequested = true
-			stderrPrintf("\nInterrupted — committing work done so far before exiting...\n")
-			quitNow()
-		}
-	default:
-	}
+	t.pollForQuit()
 	if t.dueToRender() {
 		t.render()
 	}
@@ -242,19 +202,22 @@ func (t *TProgressTicker) Tick() bool {
 	if t == nil {
 		return false
 	}
-	select {
-	case line, ok := <-stdinCh:
-		if ok && strings.TrimSpace(line) == "q" && t.interaction != nil {
-			t.interaction.quitRequested = true
-			stderrPrintf("\nInterrupted — committing work done so far before exiting...\n")
-			quitNow()
-		}
-	default:
-	}
+	t.pollForQuit()
 	if t.dueToRender() {
 		t.render()
 	}
 	return t.interaction != nil && t.interaction.quitRequested
+}
+
+// pollForQuit checks, without blocking, whether the user typed "q", and quits
+// gracefully (committing the work done so far) when so.
+func (t *TProgressTicker) pollForQuit() {
+	line, ok := pollLine()
+	if ok && strings.TrimSpace(line) == "q" && t.interaction != nil {
+		t.interaction.quitRequested = true
+		stderrPrintf("\nInterrupted — committing work done so far before exiting...\n")
+		quitNow()
+	}
 }
 
 // WasAborted reports whether a graceful quit has been requested on the ticker's
@@ -273,9 +236,9 @@ func (t *TProgressTicker) Done() {
 		return
 	}
 	if t.rendered {
-		fmt.Fprint(os.Stderr, "\r\033[K")
+		message("\r\033[K")
 	}
-	fmt.Fprintf(os.Stderr, "%s: done\n", t.label)
+	messagef("%s: done\n", t.label)
 	t.rendered = false
 	activeTicker = nil
 }
@@ -291,7 +254,7 @@ func (t *TProgressTicker) DoneQuiet() {
 		return
 	}
 	if t.rendered {
-		fmt.Fprint(os.Stderr, "\r\033[K")
+		message("\r\033[K")
 	}
 	t.rendered = false
 	activeTicker = nil
@@ -331,15 +294,15 @@ func (r *TInteraction) AskForInput(prompt string) (string, error) {
 		return "", nil
 	}
 	SpinnerInterrupt()
-	fmt.Fprintf(os.Stderr, "\nQUESTION: %s (q=quit): ", prompt)
+	messagef("\nQUESTION: %s (q=quit): ", prompt)
 	line := readStdinLine()
 	if line == "q" {
 		r.quitRequested = true
-		fmt.Fprintln(os.Stderr)
+		messageln()
 		quitNow()
 		return "", nil
 	}
-	fmt.Fprintln(os.Stderr)
+	messageln()
 	return line, nil
 }
 
@@ -370,7 +333,7 @@ func (r *TInteraction) printWarningLine(warning string, context ...any) {
 		return
 	}
 	SpinnerInterrupt()
-	fmt.Fprintf(os.Stderr, "\nWARNING:  "+warning+"\n", context...)
+	messagef("\nWARNING:  "+warning+"\n", context...)
 }
 
 // printWarningLineGrouped is printWarningLine without the leading blank line — for a
@@ -382,7 +345,7 @@ func (r *TInteraction) printWarningLineGrouped(warning string, context ...any) {
 		return
 	}
 	SpinnerInterrupt()
-	fmt.Fprintf(os.Stderr, "WARNING:  "+warning+"\n", context...)
+	messagef("WARNING:  "+warning+"\n", context...)
 }
 
 // printErrorLine prints an ERROR line immediately, bypassing any deferral.
@@ -391,7 +354,7 @@ func (r *TInteraction) printErrorLine(errorMessage string, context ...any) {
 		return
 	}
 	SpinnerInterrupt()
-	fmt.Fprintf(os.Stderr, "\nERROR:    "+errorMessage+"\n", context...)
+	messagef("\nERROR:    "+errorMessage+"\n", context...)
 }
 
 // BeginDeferringMessages enables warning/error deferral and clears any buffered messages.
@@ -415,19 +378,19 @@ func (r *TInteraction) FlushDeferredMessages() {
 		return
 	}
 	if len(r.deferredWarnings) > 0 {
-		fmt.Fprintf(os.Stderr, "\nWarnings:\n")
+		messagef("\nWarnings:\n")
 		for _, w := range r.deferredWarnings {
-			fmt.Fprintf(os.Stderr, "  - %s\n", w)
+			messagef("  - %s\n", w)
 		}
 	}
 	if len(r.deferredErrors) > 0 {
-		fmt.Fprintf(os.Stderr, "\nErrors:\n")
+		messagef("\nErrors:\n")
 		for _, e := range r.deferredErrors {
-			fmt.Fprintf(os.Stderr, "  - %s\n", e)
+			messagef("  - %s\n", e)
 		}
 	}
 	if len(r.deferredWarnings) > 0 || len(r.deferredErrors) > 0 {
-		fmt.Fprintf(os.Stderr, "\n")
+		messagef("\n")
 	}
 	r.deferredWarnings = nil
 	r.deferredErrors = nil
@@ -522,25 +485,25 @@ func (r *TInteraction) warningQuestionCore(question string, options TStringSet, 
 		} else {
 			r.printWarningLine(warning, context...)
 		}
-		fmt.Fprint(os.Stderr, "QUESTION: "+question+" "+optionSet)
+		message("QUESTION: " + question + " " + optionSet)
 	} else {
 		SpinnerInterrupt()
-		fmt.Fprint(os.Stderr, "\nQUESTION: "+question+" "+optionSet)
+		message("\nQUESTION: " + question + " " + optionSet)
 	}
 
 	for {
 		option := readStdinLine()
 		if option == "q" {
 			r.quitRequested = true
-			fmt.Fprintln(os.Stderr)
+			messageln()
 			quitNow()
 			return "q"
 		}
 		if options.Contains(option) {
-			fmt.Fprintln(os.Stderr)
+			messageln()
 			return option
 		}
-		fmt.Fprint(os.Stderr, optionSet)
+		message(optionSet)
 	}
 }
 
@@ -574,25 +537,25 @@ func (r *TInteraction) WarningQuestionOrdered(question string, ordered []string,
 
 	if warning != "" {
 		r.printWarningLine(warning, context...)
-		fmt.Fprint(os.Stderr, "QUESTION: "+question+" "+optionSet)
+		message("QUESTION: " + question + " " + optionSet)
 	} else {
 		SpinnerInterrupt()
-		fmt.Fprint(os.Stderr, "\nQUESTION: "+question+" "+optionSet)
+		message("\nQUESTION: " + question + " " + optionSet)
 	}
 
 	for {
 		option := readStdinLine()
 		if option == "q" {
 			r.quitRequested = true
-			fmt.Fprintln(os.Stderr)
+			messageln()
 			quitNow()
 			return "q"
 		}
 		if valid.Contains(option) {
-			fmt.Fprintln(os.Stderr)
+			messageln()
 			return option
 		}
-		fmt.Fprint(os.Stderr, optionSet)
+		message(optionSet)
 	}
 }
 
@@ -633,16 +596,16 @@ func printStatBlock(header string, rows []statRow, trailingBlank bool) {
 			maxValLen = n
 		}
 	}
-	fmt.Fprintf(os.Stderr, "\n%s\n", header)
+	messagef("\n%s\n", header)
 	for _, r := range rows {
 		if r.comment != "" {
-			fmt.Fprintf(os.Stderr, "  %-*s  %*s  %s\n", maxLabelLen, r.label+":", maxValLen, r.value, r.comment)
+			messagef("  %-*s  %*s  %s\n", maxLabelLen, r.label+":", maxValLen, r.value, r.comment)
 		} else {
-			fmt.Fprintf(os.Stderr, "  %-*s  %*s\n", maxLabelLen, r.label+":", maxValLen, r.value)
+			messagef("  %-*s  %*s\n", maxLabelLen, r.label+":", maxValLen, r.value)
 		}
 	}
 	if trailingBlank {
-		fmt.Fprintf(os.Stderr, "\n")
+		messagef("\n")
 	}
 }
 
@@ -658,20 +621,20 @@ func (r *TInteraction) ConfirmAction(prompt string) bool {
 	}
 	r.questionsAnswered++
 	SpinnerInterrupt()
-	fmt.Fprintf(os.Stderr, "\nCONFIRM:  %s (y/n/q): ", prompt)
+	messagef("\nCONFIRM:  %s (y/n/q): ", prompt)
 	for {
 		answer := readStdinLine()
 		if answer == "y" || answer == "n" {
-			fmt.Fprintln(os.Stderr)
+			messageln()
 			return answer == "y"
 		}
 		if answer == "q" {
 			r.quitRequested = true
-			fmt.Fprintln(os.Stderr)
+			messageln()
 			quitNow()
 			return false
 		}
-		fmt.Fprint(os.Stderr, "(y/n/q): ")
+		message("(y/n/q): ")
 	}
 }
 
@@ -680,7 +643,7 @@ func (r *TInteraction) ConfirmAction(prompt string) bool {
 func (r *TInteraction) Progress(progress string, context ...any) bool {
 	if isTTY && !r.silenced && !r.progressSuppressed {
 		SpinnerInterrupt()
-		fmt.Fprintf(os.Stderr, r.progressPrefix+progress+"\n", context...)
+		messagef(r.progressPrefix+progress+"\n", context...)
 	}
 	return true
 }

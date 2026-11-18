@@ -20,7 +20,6 @@ package main
 import (
 	"crypto/md5"
 	"encoding/hex"
-	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -28,12 +27,12 @@ import (
 	"time"
 )
 
-// subsetSyncBailOut finalises the working database and exits cleanly.
+// subsetSyncBailOut saves the work done so far and ends the run, like "q".
 // Called when the user explicitly rejects a merge that would silently drop fields.
+// (Before 30.9 it finalised without the post-check gate of gracefulQuit.)
 func subsetSyncBailOut() {
 	Library.Progress("Bailing out — finalising database.")
-	finaliseWorkingDatabase()
-	os.Exit(0)
+	quitNow()
 }
 
 // --- Legacy .subset migration (migration-only; remove after step 16 cleanup) ---
@@ -367,7 +366,7 @@ func applySubsetBibToDb(bibEntry TBibTeXEntry, canonicalKey string, trusted bool
 		if len(illegalFields) > 0 {
 			sort.Strings(illegalFields)
 			for _, f := range illegalFields {
-				fmt.Fprintf(os.Stderr, "WARNING: entry %s has field %q which is not allowed for entry type %q — it will be ignored during merge.\n", canonicalKey, f, entryType)
+				messagef("WARNING: entry %s has field %q which is not allowed for entry type %q — it will be ignored during merge.\n", canonicalKey, f, entryType)
 			}
 			if !Library.ConfirmAction("Proceed anyway (illegal fields will be dropped)") {
 				subsetSyncBailOut()
@@ -378,12 +377,12 @@ func applySubsetBibToDb(bibEntry TBibTeXEntry, canonicalKey string, trusted bool
 	toClear := subsetFieldsToClear(cleanEntry.Fields, dbEntry)
 	newType := cleanEntry.Fields[EntryTypeField]
 
-	fmt.Fprintf(os.Stderr, "\nSubset bib entry (changed):\n")
+	messagef("\nSubset bib entry (changed):\n")
 	printEntryFields(cleanEntry.Fields[EntryTypeField], cleanEntry.Key, cleanEntry.Fields)
-	fmt.Fprintf(os.Stderr, "Library entry:\n")
-	fmt.Fprint(os.Stderr, Library.entryDisplayString(canonicalKey))
+	messagef("Library entry:\n")
+	message(Library.entryDisplayString(canonicalKey))
 	if len(toClear) > 0 {
-		fmt.Fprintf(os.Stderr, "Fields to clear: %s\n", strings.Join(toClear, ", "))
+		messagef("Fields to clear: %s\n", strings.Join(toClear, ", "))
 	}
 
 	if !Library.ConfirmAction(QuestionSubsetBibChanged) {
@@ -412,8 +411,8 @@ func applySubsetBibToDb(bibEntry TBibTeXEntry, canonicalKey string, trusted bool
 // moved to <stem>.trash/ alongside the local .files/ folder.
 func deleteSubsetEntry(canonicalKey, localFilesDir, outputKey string, trusted bool) bool {
 	if !trusted {
-		fmt.Fprintf(os.Stderr, "\nEntry deleted from subset bib:\n")
-		fmt.Fprint(os.Stderr, Library.entryDisplayString(canonicalKey))
+		messagef("\nEntry deleted from subset bib:\n")
+		message(Library.entryDisplayString(canonicalKey))
 		if !Library.ConfirmAction(QuestionSubsetDeleteEntry) {
 			return false
 		}
@@ -1094,10 +1093,10 @@ func runSubsetUpSync(cfg TBibGetConfig, sourcePath, keysBasePath string, syncSta
 			continue
 		}
 		if c.status == statusBothChanged && !cfg.TrustedSubset {
-			fmt.Fprintf(os.Stderr, "\nBoth bib and DB changed for %s.\n", c.canonicalKey)
-			fmt.Fprintf(os.Stderr, "DB entry:\n")
-			fmt.Fprint(os.Stderr, Library.entryDisplayString(c.canonicalKey))
-			fmt.Fprintf(os.Stderr, "Bib entry:\n")
+			messagef("\nBoth bib and DB changed for %s.\n", c.canonicalKey)
+			messagef("DB entry:\n")
+			message(Library.entryDisplayString(c.canonicalKey))
+			messagef("Bib entry:\n")
 			printEntryFields(c.bibEntry.Fields[EntryTypeField], c.bibEntry.Key, c.bibEntry.Fields)
 			if !Library.ConfirmAction(QuestionSubsetBothChanged) {
 				continue // keep DB version

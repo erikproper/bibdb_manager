@@ -660,27 +660,27 @@ func DoSetSyncStatus(status, sourceKey, stemPath string) {
 	syncPath, _ := resolveSyncPath(stemPath)
 	conn, err := openSyncDirect(syncPath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "set_sync_status: cannot open %s: %s\n", syncPath, err)
+		messagef("set_sync_status: cannot open %s: %s\n", syncPath, err)
 		return
 	}
 	defer conn.Close()
 
 	if status == "" {
 		if _, err := conn.Exec(`DELETE FROM sync_status WHERE source_key = ?`, sourceKey); err != nil {
-			fmt.Fprintf(os.Stderr, "set_sync_status: delete failed: %s\n", err)
+			messagef("set_sync_status: delete failed: %s\n", err)
 			return
 		}
-		fmt.Fprintf(os.Stderr, "Cleared status for %s in %s\n", sourceKey, syncPath)
+		messagef("Cleared status for %s in %s\n", sourceKey, syncPath)
 	} else {
 		if _, err := conn.Exec(
 			`INSERT INTO sync_status (source_key, status, set_time) VALUES (?, ?, ?)
 			 ON CONFLICT(source_key) DO UPDATE SET status=excluded.status, set_time=excluded.set_time`,
 			sourceKey, status, time.Now().Unix(),
 		); err != nil {
-			fmt.Fprintf(os.Stderr, "set_sync_status: upsert failed: %s\n", err)
+			messagef("set_sync_status: upsert failed: %s\n", err)
 			return
 		}
-		fmt.Fprintf(os.Stderr, "Set status %q for %s in %s\n", status, sourceKey, syncPath)
+		messagef("Set status %q for %s in %s\n", status, sourceKey, syncPath)
 	}
 }
 
@@ -728,18 +728,18 @@ func openSyncDirect(syncPath string) (*sql.DB, error) {
 func DoExportSync(tableSpec, stemPath string) {
 	syncPath, tablesDir := resolveSyncPath(stemPath)
 	if !FileExists(syncPath) {
-		fmt.Fprintf(os.Stderr, "export_sync: %s not found\n", syncPath)
+		messagef("export_sync: %s not found\n", syncPath)
 		return
 	}
 	conn, err := openSyncDirect(syncPath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "export_sync: cannot open %s: %s\n", syncPath, err)
+		messagef("export_sync: cannot open %s: %s\n", syncPath, err)
 		return
 	}
 	defer conn.Close()
 
 	if err := os.MkdirAll(tablesDir, 0o755); err != nil {
-		fmt.Fprintf(os.Stderr, "export_sync: cannot create %s: %s\n", tablesDir, err)
+		messagef("export_sync: cannot create %s: %s\n", tablesDir, err)
 		return
 	}
 
@@ -747,9 +747,9 @@ func DoExportSync(tableSpec, stemPath string) {
 	for _, tbl := range tables {
 		csvPath := filepath.Join(tablesDir, tbl+".csv")
 		if err := exportSyncTableToCSV(conn, tbl, csvPath); err != nil {
-			fmt.Fprintf(os.Stderr, "export_sync: %s: %s\n", tbl, err)
+			messagef("export_sync: %s: %s\n", tbl, err)
 		} else {
-			fmt.Fprintf(os.Stderr, "Exported %s → %s\n", tbl, csvPath)
+			messagef("Exported %s → %s\n", tbl, csvPath)
 		}
 	}
 }
@@ -760,7 +760,7 @@ func DoImportSync(tableSpec, stemPath string) {
 	syncPath, tablesDir := resolveSyncPath(stemPath)
 	conn, err := openSyncDirect(syncPath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "import_sync: cannot open %s: %s\n", syncPath, err)
+		messagef("import_sync: cannot open %s: %s\n", syncPath, err)
 		return
 	}
 	defer conn.Close()
@@ -769,13 +769,13 @@ func DoImportSync(tableSpec, stemPath string) {
 	for _, tbl := range tables {
 		csvPath := filepath.Join(tablesDir, tbl+".csv")
 		if !FileExists(csvPath) {
-			fmt.Fprintf(os.Stderr, "import_sync: %s not found — skipped\n", csvPath)
+			messagef("import_sync: %s not found — skipped\n", csvPath)
 			continue
 		}
 		if err := importSyncTableFromCSV(conn, tbl, csvPath); err != nil {
-			fmt.Fprintf(os.Stderr, "import_sync: %s: %s\n", tbl, err)
+			messagef("import_sync: %s: %s\n", tbl, err)
 		} else {
-			fmt.Fprintf(os.Stderr, "Imported %s ← %s\n", tbl, csvPath)
+			messagef("Imported %s ← %s\n", tbl, csvPath)
 		}
 	}
 }
@@ -792,7 +792,7 @@ func resolveSyncTableSpec(spec string) []string {
 	if _, ok := syncTableColumns[short]; ok {
 		return []string{short}
 	}
-	fmt.Fprintf(os.Stderr, "export/import_sync: unknown table %q (valid: manifest, entries, groups, pdfs, all)\n", spec)
+	messagef("export/import_sync: unknown table %q (valid: manifest, entries, groups, pdfs, all)\n", spec)
 	return nil
 }
 

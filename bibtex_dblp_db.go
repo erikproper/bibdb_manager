@@ -144,14 +144,14 @@ func dblpStmt(name string) *sql.Stmt {
 		if !FileExists(dblpDBPath()) {
 			if !dblpReader.missing {
 				dblpReader.missing = true
-				fmt.Fprintf(os.Stderr, "Warning: no DBLP database at %s; run -update_dblp to build it.\n", dblpDBPath())
+				messagef("Warning: no DBLP database at %s; run -update_dblp to build it.\n", dblpDBPath())
 			}
 			return nil
 		}
 		db, err := sql.Open(sqliteDatabaseDriver,
 			"file:"+dblpDBPath()+"?mode=ro&_pragma=busy_timeout(5000)&_pragma=cache_size(-32768)")
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: could not open %s: %s\n", dblpDBPath(), err)
+			messagef("Warning: could not open %s: %s\n", dblpDBPath(), err)
 			return nil
 		}
 		// Some callers look up from many goroutines at once (e.g. 32 workers in
@@ -164,7 +164,7 @@ func dblpStmt(name string) *sql.Stmt {
 	}
 	s, err := dblpReader.db.Prepare(dblpReadQueries[name])
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: DBLP database %s: %s\n", dblpDBPath(), err)
+		messagef("Warning: DBLP database %s: %s\n", dblpDBPath(), err)
 		return nil
 	}
 	dblpReader.stmts[name] = s

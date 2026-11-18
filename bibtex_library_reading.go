@@ -16,7 +16,6 @@
 package main
 
 import (
-	"fmt"
 	"os"
 	"strings"
 )
@@ -87,7 +86,7 @@ func ReadWatchFile(path string) []TWatchEntry {
 		}
 	})
 	for _, bl := range badLines {
-		fmt.Fprintf(os.Stderr, "WARNING: %s: unrecognised line (expected: name/orcid/contributor \"value\";): %q\n", path, bl)
+		messagef("WARNING: %s: unrecognised line (expected: name/orcid/contributor \"value\";): %q\n", path, bl)
 	}
 	return entries
 }
@@ -107,7 +106,7 @@ func WriteWatchFile(path string, entries []TWatchEntry) {
 		sb.WriteByte('\n')
 	}
 	if err := os.WriteFile(path, []byte(sb.String()), 0644); err != nil {
-		fmt.Fprintf(os.Stderr, "WARNING: could not write watch file %s: %s\n", path, err)
+		messagef("WARNING: could not write watch file %s: %s\n", path, err)
 	}
 }
 

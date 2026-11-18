@@ -118,7 +118,7 @@ func splitCsvLine3(line string) (tag, openLatex, closeLatex string, ok bool) {
 func writeHtmlCommandsMap(path string) {
 	f, err := os.Create(path)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: could not write HTML commands map %s: %s\n", path, err)
+		messagef("Warning: could not write HTML commands map %s: %s\n", path, err)
 		return
 	}
 	defer f.Close()

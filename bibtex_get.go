@@ -101,12 +101,12 @@ func readBibGetConfig() (TBibGetConfig, bool) {
 	const path = "bib.config"
 	data, err := os.ReadFile(path)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "Cannot read bib.config:", err)
+		messageln("Cannot read bib.config:", err)
 		return TBibGetConfig{}, false
 	}
 	var rawMap map[string]json.RawMessage
 	if err := json.Unmarshal(data, &rawMap); err != nil {
-		fmt.Fprintln(os.Stderr, "Cannot parse bib.config:", err)
+		messageln("Cannot parse bib.config:", err)
 		return TBibGetConfig{}, false
 	}
 	needsWriteBack := migrateRawConfigFileNames(rawMap)
@@ -157,11 +157,11 @@ func readBibGetConfig() (TBibGetConfig, bool) {
 		IncludeURL:  true,
 	}
 	if err := json.Unmarshal(data, &cfg); err != nil {
-		fmt.Fprintln(os.Stderr, "Cannot parse bib.config:", err)
+		messageln("Cannot parse bib.config:", err)
 		return TBibGetConfig{}, false
 	}
 	if cfg.FileNames == "" {
-		fmt.Fprintln(os.Stderr, "bib.config: file_names is required")
+		messageln("bib.config: file_names is required")
 		return TBibGetConfig{}, false
 	}
 	return cfg, true
@@ -333,7 +333,7 @@ func readKeysFile(fileName string) (pairs []TBibGetPair, modified bool, ok bool)
 					return
 				}
 				if rawCanonicalSeen[canonical] {
-					fmt.Fprintf(os.Stderr, "WARNING: %s: %q appears more than once (first kept) — deduplicating\n", keysPath, canonical)
+					messagef("WARNING: %s: %q appears more than once (first kept) — deduplicating\n", keysPath, canonical)
 					modified = true // trigger rewrite to remove the duplicate
 					return
 				}
@@ -360,7 +360,7 @@ func readKeysFile(fileName string) (pairs []TBibGetPair, modified bool, ok bool)
 			return
 		}
 		if rawCanonicalSeen[canonical] {
-			fmt.Fprintf(os.Stderr, "WARNING: %s: %q appears more than once (first kept) — deduplicating\n", keysPath, canonical)
+			messagef("WARNING: %s: %q appears more than once (first kept) — deduplicating\n", keysPath, canonical)
 			modified = true // trigger rewrite to remove the duplicate
 			return
 		}
@@ -379,7 +379,7 @@ func rewriteKeysFile(fileName string, pairs []TBibGetPair, keyMapping bool) {
 	FileRename(path, path+".old")
 	f, err := os.Create(path)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "Cannot rewrite keys file:", err)
+		messageln("Cannot rewrite keys file:", err)
 		return
 	}
 	defer f.Close()
@@ -460,7 +460,7 @@ func readSelectFile(fileName string) ([]TSelectStatement, bool) {
 		}
 	})
 	for _, bl := range badLines {
-		fmt.Fprintf(os.Stderr, "WARNING: %s: unrecognised line (expected: kind \"value\";): %q\n", selectPath, bl)
+		messagef("WARNING: %s: unrecognised line (expected: kind \"value\";): %q\n", selectPath, bl)
 	}
 	return stmts, true
 }
@@ -676,13 +676,13 @@ func readHyphenations() THyphenations {
 		}
 		key := strings.ToLower(stripped)
 		if existing, dup := result[key]; dup {
-			fmt.Fprintf(os.Stderr, "WARNING: %s: duplicate entry for %q — keeping %q, ignoring %q\n", path, stripped, existing, line)
+			messagef("WARNING: %s: duplicate entry for %q — keeping %q, ignoring %q\n", path, stripped, existing, line)
 			return
 		}
 		result[key] = line
 	})
 	for _, bl := range bad {
-		fmt.Fprintf(os.Stderr, "WARNING: %s: line has no \\- markers — skipped: %q\n", path, bl)
+		messagef("WARNING: %s: line has no \\- markers — skipped: %q\n", path, bl)
 	}
 	dbInteraction.Progress("Hyphenations: %d entr%s from %s", len(result), map[bool]string{true: "y", false: "ies"}[len(result) == 1], path)
 	return result
@@ -1048,7 +1048,7 @@ func writePullSync(cfg TBibGetConfig, baseDir string) []TBibGetPair {
 
 	pairs, keysModified, ok := readKeysFile(mapFilePath)
 	if !ok {
-		fmt.Fprintln(os.Stderr, "Cannot read keys file:", mapFilePath+KeysFileExtension)
+		messageln("Cannot read keys file:", mapFilePath+KeysFileExtension)
 		return nil
 	}
 
@@ -1486,8 +1486,8 @@ func writePullSync(cfg TBibGetConfig, baseDir string) []TBibGetPair {
 	Reporting.Progress(ProgressWritingGetBib, outPath)
 
 	if err := os.MkdirAll(filepath.Dir(outPath), 0755); err != nil {
-		fmt.Fprintln(os.Stderr, "Cannot create output directory:", err)
-		os.Exit(1)
+		messageln("Cannot create output directory:", err)
+		endRun(1)
 	}
 
 	// Follow mode: emit verbatim sync_harvest entries from the .sync DB.
@@ -1516,14 +1516,14 @@ func writePullSync(cfg TBibGetConfig, baseDir string) []TBibGetPair {
 	}
 
 	if err := os.WriteFile(outPath, newContent, 0644); err != nil {
-		fmt.Fprintln(os.Stderr, "Cannot write output file:", err)
-		os.Exit(1)
+		messageln("Cannot write output file:", err)
+		endRun(1)
 	}
 
 	// Subset mode owns its bib and always regenerates it — no manual-edit detection needed.
 	if cfg.Mode != "subset" {
 		if err := os.WriteFile(md5Path, []byte(newMD5+"\n"), 0644); err != nil {
-			fmt.Fprintln(os.Stderr, "Cannot write MD5 file:", err)
+			messageln("Cannot write MD5 file:", err)
 		}
 	}
 
@@ -1565,7 +1565,7 @@ func defaultSyncConfig() TBibGetConfig {
 // in the JSON. Returns false and prints an error when the JSON is malformed.
 func applyJSONOverlay(cfg *TBibGetConfig, data []byte, path string) bool {
 	if err := json.Unmarshal(data, cfg); err != nil {
-		fmt.Fprintf(os.Stderr, "Cannot parse %s: %s\n", path, err)
+		messagef("Cannot parse %s: %s\n", path, err)
 		return false
 	}
 	return true
@@ -1607,14 +1607,14 @@ func readFileConfig(baseCfg TBibGetConfig, name, baseDir string) (TBibGetConfig,
 	// Parse raw JSON to detect absent keys before overlay.
 	var rawMap map[string]json.RawMessage
 	if jsonErr := json.Unmarshal(rawData, &rawMap); jsonErr != nil {
-		fmt.Fprintf(os.Stderr, "Cannot parse %s: %s\n", cfgPath, jsonErr)
+		messagef("Cannot parse %s: %s\n", cfgPath, jsonErr)
 		return TBibGetConfig{}, false
 	}
 
 	// file_name and file_names are not meaningful in per-file configs — warn and strip.
 	for _, key := range []string{"file_name", "file_names"} {
 		if _, has := rawMap[key]; has {
-			fmt.Fprintf(os.Stderr, "WARNING: %s: %q is not allowed in a per-file config (ignored; using %q)\n", cfgPath, key, name)
+			messagef("WARNING: %s: %q is not allowed in a per-file config (ignored; using %q)\n", cfgPath, key, name)
 			delete(rawMap, key)
 		}
 	}
@@ -1661,7 +1661,7 @@ func readFileConfig(baseCfg TBibGetConfig, name, baseDir string) (TBibGetConfig,
 	// Rebuild clean rawData for overlay (file_name/file_names already stripped).
 	cleanData, marshalErr := json.Marshal(rawMap)
 	if marshalErr != nil {
-		fmt.Fprintf(os.Stderr, "Cannot re-encode %s: %s\n", cfgPath, marshalErr)
+		messagef("Cannot re-encode %s: %s\n", cfgPath, marshalErr)
 		return TBibGetConfig{}, false
 	}
 
@@ -1799,7 +1799,7 @@ func runFullPhase1(cfg TBibGetConfig, baseDir string) bool {
 
 	dbInteraction.Progress("Re-importing edited sync bib: %s", outPath)
 	if !parseSyncBibFile(outPath) {
-		fmt.Fprintf(os.Stderr, "WARNING: re-import failed for %s — skipping write\n", outPath)
+		messagef("WARNING: re-import failed for %s — skipping write\n", outPath)
 		return false
 	}
 	return true
@@ -1807,7 +1807,7 @@ func runFullPhase1(cfg TBibGetConfig, baseDir string) bool {
 
 // writeFullSync writes the full library bib file assuming the library is already open
 // and phase 1 (runFullPhase1) has already run. Always rebuilds content from the DB.
-func writeFullSync(cfg TBibGetConfig, baseDir string) {
+func writeFullSync(cfg TBibGetConfig, baseDir string) error {
 	outPath := fullSyncOutPath(cfg, baseDir)
 
 	entryTypes := map[string]string{}
@@ -1820,20 +1820,21 @@ func writeFullSync(cfg TBibGetConfig, baseDir string) {
 
 	dbInteraction.Progress("\nSync full: %s → %s (%d entries)", cfg.FileName, outPath, len(entryTypes))
 	if err := os.MkdirAll(filepath.Dir(outPath), 0755); err != nil {
-		fmt.Fprintln(os.Stderr, "Cannot create output directory:", err)
-		os.Exit(1)
+		messageln("Cannot create output directory:", err)
+		return errReported
 	}
 	if err := os.WriteFile(outPath, newContent, 0644); err != nil {
-		fmt.Fprintln(os.Stderr, "Cannot write output file:", err)
-		os.Exit(1)
+		messageln("Cannot write output file:", err)
+		return errReported
 	}
 	// Record the bib file's mtime so the next run can detect external edits cheaply.
 	if bibInfo, err := os.Stat(outPath); err == nil {
 		mdate := strconv.FormatInt(bibInfo.ModTime().Unix(), 10)
 		if err := os.WriteFile(mdatePath, []byte(mdate+"\n"), 0644); err != nil {
-			fmt.Fprintln(os.Stderr, "Cannot write mdate file:", err)
+			messageln("Cannot write mdate file:", err)
 		}
 	}
+	return nil
 }
 
 // doFullSync opens the library for update (needed for re-import on edit) and writes.
@@ -1842,7 +1843,7 @@ func doFullSync(cfg TBibGetConfig, baseDir string) {
 		return
 	}
 	if runFullPhase1(cfg, baseDir) {
-		writeFullSync(cfg, baseDir)
+		endRunOnError(writeFullSync(cfg, baseDir))
 	}
 }
 
@@ -1858,10 +1859,10 @@ func doFullSync(cfg TBibGetConfig, baseDir string) {
 //
 // Library access: read-only when all files are pull mode; read-write when any
 // file is full mode (full-mode sync may re-import an edited bib back into DB).
-func doSync(filter string) {
+func doSync(filter string) error {
 	baseCfg, ok := readBibGetConfig()
 	if !ok {
-		os.Exit(1)
+		return errReported
 	}
 
 	var fileNames []string
@@ -1872,8 +1873,8 @@ func doSync(filter string) {
 		}
 	}
 	if len(fileNames) == 0 {
-		fmt.Fprintln(os.Stderr, "sync: file_names is not set in bib.config")
-		os.Exit(1)
+		messageln("sync: file_names is not set in bib.config")
+		return errReported
 	}
 
 	if filter != "" {
@@ -1885,8 +1886,8 @@ func doSync(filter string) {
 			}
 		}
 		if !found {
-			fmt.Fprintf(os.Stderr, "sync: %q is not in the file_names list (%s)\n", filter, baseCfg.FileNames)
-			os.Exit(1)
+			messagef("sync: %q is not in the file_names list (%s)\n", filter, baseCfg.FileNames)
+			return errReported
 		}
 		fileNames = []string{filter}
 	}
@@ -1903,7 +1904,7 @@ func doSync(filter string) {
 	for _, name := range fileNames {
 		cfg, ok := readFileConfig(baseCfg, name, "")
 		if !ok {
-			os.Exit(1)
+			return errReported
 		}
 		cfg = enforceInfoPolicy(cfg)
 		files = append(files, fileEntry{cfg: cfg})
@@ -1929,11 +1930,11 @@ func doSync(filter string) {
 
 	if needsWrite {
 		if !openLibraryToUpdate() {
-			return
+			return nil
 		}
 	} else {
 		if !openLibraryToReport() {
-			return
+			return nil
 		}
 	}
 
@@ -1984,7 +1985,7 @@ func doSync(filter string) {
 		switch f.cfg.Mode {
 		case "full":
 			if !f.skipPhase2 {
-				writeFullSync(f.cfg, "")
+				endRunOnError(writeFullSync(f.cfg, ""))
 			}
 		case "harvest":
 			// harvest has no bib output
@@ -1999,6 +2000,7 @@ func doSync(filter string) {
 		}
 	}
 
+	return nil
 }
 
 // resolveHarvestTransferPath validates the harvest_transfer target and returns the
@@ -2056,23 +2058,23 @@ func appendPairToKeysFile(keysFilePath, localKey, canonicalKey string) {
 // appendToKeysFile appends alias;canonicalKey to the .keys file named in bib.config.
 func appendToKeysFile(alias, canonicalKey string) {
 	if canonicalKey == "" {
-		fmt.Fprintln(os.Stderr, "-map: key not found in library, cannot add to keys file")
+		messageln("-map: key not found in library, cannot add to keys file")
 		return
 	}
 	data, err := os.ReadFile("bib.config")
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "-map: no bib.config in current directory")
+		messageln("-map: no bib.config in current directory")
 		return
 	}
 	var cfg TBibGetConfig
 	if err := json.Unmarshal(data, &cfg); err != nil {
-		fmt.Fprintln(os.Stderr, "-map: cannot parse bib.config:", err)
+		messageln("-map: cannot parse bib.config:", err)
 		return
 	}
 	// Use the first file name from file_names (the most common case for -map).
 	firstName := strings.SplitN(strings.TrimSpace(cfg.FileNames), ";", 2)[0]
 	if firstName == "" {
-		fmt.Fprintln(os.Stderr, "-map: bib.config has no file_names")
+		messageln("-map: bib.config has no file_names")
 		return
 	}
 	pairs, _, _ := readKeysFile(firstName)
@@ -2080,16 +2082,16 @@ func appendToKeysFile(alias, canonicalKey string) {
 	for _, p := range pairs {
 		if p.canonicalKey == canonicalKey {
 			if p.localKey != alias {
-				fmt.Fprintf(os.Stderr, "-map: %s is already in %s as %s\n", canonicalKey, keysPath, p.localKey)
+				messagef("-map: %s is already in %s as %s\n", canonicalKey, keysPath, p.localKey)
 			} else {
-				fmt.Fprintf(os.Stderr, "-map: %s is already in %s\n", alias, keysPath)
+				messagef("-map: %s is already in %s\n", alias, keysPath)
 			}
 			return
 		}
 	}
 	f, err := os.OpenFile(keysPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "-map: cannot open keys file:", err)
+		messageln("-map: cannot open keys file:", err)
 		return
 	}
 	defer f.Close()

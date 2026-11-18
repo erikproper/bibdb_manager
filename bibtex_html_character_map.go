@@ -152,7 +152,7 @@ var xmlEntityPassthrough = map[string]string{}
 func writeHtmlCharacterMap(path string) {
 	f, err := os.Create(path)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: could not write HTML character map %s: %s\n", path, err)
+		messagef("Warning: could not write HTML character map %s: %s\n", path, err)
 		return
 	}
 	defer f.Close()

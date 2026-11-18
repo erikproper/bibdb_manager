@@ -125,7 +125,7 @@ func pushDblpStore() error {
 	}
 
 	start := time.Now()
-	fmt.Fprintf(os.Stderr, "Copying the DBLP store to %s ...\n", dir)
+	messagef("Copying the DBLP store to %s ...\n", dir)
 	if err := os.Remove(dir + dblpBackupStampName); err != nil && !os.IsNotExist(err) {
 		return err
 	}
@@ -155,7 +155,7 @@ func pushDblpStore() error {
 	if err := os.Rename(part, dir+dblpBackupStampName); err != nil {
 		return err
 	}
-	fmt.Fprintf(os.Stderr, "  Copied (%s, %.0fs).\n", xmlFile, time.Since(start).Seconds())
+	messagef("  Copied (%s, %.0fs).\n", xmlFile, time.Since(start).Seconds())
 	return nil
 }
 
@@ -178,7 +178,7 @@ func restoreDblpStore() error {
 	}
 
 	start := time.Now()
-	fmt.Fprintf(os.Stderr, "Restoring the DBLP store (%s, pushed by %s) ...\n", stamp.XMLFile, stamp.Machine)
+	messagef("Restoring the DBLP store (%s, pushed by %s) ...\n", stamp.XMLFile, stamp.Machine)
 	removeDblpDBFiles(dblpDBNewPath())
 	if err := copyFileViaPart(src, dblpDBNewPath()); err != nil {
 		removeDblpDBFiles(dblpDBNewPath())
@@ -200,7 +200,7 @@ func restoreDblpStore() error {
 	if err := swapInDblpDBNew(); err != nil {
 		return err
 	}
-	fmt.Fprintf(os.Stderr, "  Restored (%.0fs).\n", time.Since(start).Seconds())
+	messagef("  Restored (%.0fs).\n", time.Since(start).Seconds())
 	return nil
 }
 

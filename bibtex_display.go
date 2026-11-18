@@ -25,7 +25,6 @@
 package main
 
 import (
-	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -43,12 +42,12 @@ func displayContent(content string) {
 	}
 	if dir := filepath.Dir(displayFile); dir != "" && dir != "." {
 		if err := os.MkdirAll(dir, 0755); err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: could not create display_file directory %s: %s\n", dir, err)
+			messagef("Warning: could not create display_file directory %s: %s\n", dir, err)
 			return
 		}
 	}
 	if err := os.WriteFile(displayFile, []byte(content), 0644); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: could not write display_file %s: %s\n", displayFile, err)
+		messagef("Warning: could not write display_file %s: %s\n", displayFile, err)
 		return
 	}
 	if displayReopen || !displayCommandLaunched {
@@ -66,7 +65,7 @@ func launchDisplayCommand() {
 	}
 	cmd := exec.Command("sh", "-c", displayCommand)
 	if err := cmd.Start(); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: could not run display_command %q: %s\n", displayCommand, err)
+		messagef("Warning: could not run display_command %q: %s\n", displayCommand, err)
 		return
 	}
 	go cmd.Wait() //nolint:errcheck // detached viewer process; nothing to do with its exit status

@@ -1585,7 +1585,7 @@ func (l *TBibTeXLibrary) CheckKeyValidity(entry *TBibTeXEntry) {
 						entry.Fields[EntryTypeField] = input
 						break
 					}
-					fmt.Fprintf(os.Stderr, "  %q is not a recognised entry type either. Try again.\n", input)
+					messagef("  %q is not a recognised entry type either. Try again.\n", input)
 				}
 			}
 		}
@@ -1714,7 +1714,7 @@ func (l *TBibTeXLibrary) CheckDBLP(keyRAW string) {
 					msg := fmt.Sprintf(WarningNoDblpKeyForChild, key, entryDBLP)
 					l.ReportEntryWarning(childKey, "%s", msg)
 					l.EntryInvolvedInWarning(key)
-					fmt.Fprintf(os.Stderr, "\nChild entry:\n%s\nParent entry:\n%s\n",
+					messagef("\nChild entry:\n%s\nParent entry:\n%s\n",
 						l.entryDisplayString(childKey), l.entryDisplayString(key))
 					// First offer unassigned DBLP children of the parent as candidates.
 					var candidates []string
@@ -1890,7 +1890,9 @@ func (l *TBibTeXLibrary) CheckEntry(entry *TBibTeXEntry) {
 					l.deleteEntryField(entry, field)
 				} else if !l.QuitWasRequested() {
 					l.Warning("Stopping programme. Please fix this manually.")
-					os.Exit(0)
+					// Saves the work done so far, as "q" would (before 30.9 it
+					// exited without saving, leaving an unfinished session behind).
+					quitNow()
 				}
 			})
 			if l.QuitWasRequested() {
@@ -2205,9 +2207,9 @@ func (l *TBibTeXLibrary) CheckLoneProceedings() {
 			}
 		}
 
-		fmt.Fprint(os.Stderr, "\n")
+		message("\n")
 		l.printWarningLine(WarningLoneProceedings, key)
-		fmt.Fprint(os.Stderr, l.entryDisplayString(key))
+		message(l.entryDisplayString(key))
 
 		switch l.WarningQuestion(QuestionLoneProceedings, validAnswers, "") {
 		case "k":

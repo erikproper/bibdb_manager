@@ -1790,7 +1790,9 @@ func (l *TBibTeXLibrary) FinishRecordingLibraryEntry(key string) bool {
 			l.deleteEntryField(entry, field)
 		} else if !l.QuitWasRequested() {
 			l.Warning("Stopping programme. Please fix this manually.")
-			os.Exit(0)
+			// Saves the work done so far, as "q" would (before 30.9 it
+			// exited without saving, leaving an unfinished session behind).
+			quitNow()
 		}
 	})
 

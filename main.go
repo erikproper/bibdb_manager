@@ -16,6 +16,7 @@
 package main
 
 import (
+	"errors"
 	"bufio"
 	"database/sql"
 	"flag"
@@ -53,7 +54,7 @@ var (
 	Reporting TInteraction
 )
 
-const AppVersion = "30.8"
+const AppVersion = "30.9"
 
 // Run-state flags consumed by the write tail in main.
 var (
@@ -74,9 +75,32 @@ var (
 
 // stderrPrintf writes to stderr only when running in a TTY session.
 // Use for section headers and status lines that are noise in piped/scripted runs.
+// errReported is returned by a command that failed and has already told the user
+// why; the caller only ends the run with exit code 1.
+var errReported = errors.New("reported")
+
+// endRun ends the run with the given exit code. It is the one place where the
+// programme ends (besides main returning); step 22.1 turns it into the end of a
+// job, so that a service can go on.
+func endRun(code int) {
+	os.Exit(code) //nolint:forbidigo // the only exit
+}
+
+// endRunOnError ends the run with exit code 1 when err is set, telling the user
+// why unless the command already did.
+func endRunOnError(err error) {
+	if err == nil {
+		return
+	}
+	if !errors.Is(err, errReported) {
+		messageln(err)
+	}
+	endRun(1)
+}
+
 func stderrPrintf(format string, args ...any) {
 	if isTTY {
-		fmt.Fprintf(os.Stderr, format, args...)
+		messagef(format, args...)
 	}
 }
 
@@ -279,7 +303,7 @@ bibParseLoop:
 		rollbackBibTransaction()
 		if safeOk {
 			rollbackSafeParse()
-			os.Exit(1)
+			endRun(1)
 		}
 		return false
 	}
@@ -436,7 +460,7 @@ func openLibraryToUpdate() bool {
 			}
 			buildTitleIndexFromDb(&Library)
 		} else {
-			fmt.Fprintln(os.Stderr, "Database not initialised — run '-import_bib <file.bib>' to import the bib file first.")
+			messageln("Database not initialised — run '-import_bib <file.bib>' to import the bib file first.")
 			return false
 		}
 	}
@@ -480,7 +504,7 @@ func openLibraryToReport() bool {
 			skipBibValidation = false
 		}
 	} else {
-		fmt.Fprintln(os.Stderr, "Database not initialised — run '-import_bib <file.bib>' to import the bib file first.")
+		messageln("Database not initialised — run '-import_bib <file.bib>' to import the bib file first.")
 		return false
 	}
 
@@ -746,7 +770,7 @@ func doAllChecks(key string) {
 					continue
 				}
 				if !maybeFindDBLPCandidates(s) {
-					fmt.Fprintf(os.Stderr, "%s\n", Library.EntryString(s, "", "  "))
+					messagef("%s\n", Library.EntryString(s, "", "  "))
 					if dblpKey, err := Reporting.AskForInput(fmt.Sprintf("No DBLP match found after merge for %s — enter DBLP key or Enter to skip", s)); err == nil && dblpKey != "" {
 						Library.AssociateDblpKey(s, dblpKey)
 					}
@@ -781,12 +805,12 @@ var (
 func flockPath(lockPath string) *os.File {
 	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_WRONLY, 0600)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Could not open lock file %s: %s\n", lockPath, err)
-		os.Exit(1)
+		messagef("Could not open lock file %s: %s\n", lockPath, err)
+		endRun(1)
 	}
 	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		fmt.Fprintf(os.Stderr, "Another instance is already running (%s)\n", lockPath)
-		os.Exit(1)
+		messagef("Another instance is already running (%s)\n", lockPath)
+		endRun(1)
 	}
 	return f
 }
@@ -809,8 +833,8 @@ func requireNoDblpImport() {
 	}
 	defer f.Close()
 	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		fmt.Fprintln(os.Stderr, "DBLP import in progress — try again later.")
-		os.Exit(1)
+		messageln("DBLP import in progress — try again later.")
+		endRun(1)
 	}
 	syscall.Flock(int(f.Fd()), syscall.LOCK_UN) //nolint — check only, not holding
 }
@@ -1783,7 +1807,7 @@ func doFindEntries(args []string) {
 			matches = findBibEntriesByField(field, value)
 		}
 		for _, m := range matches {
-			fmt.Printf("%s\t%s\n", m.Key, m.Value)
+			resultf("%s\t%s\n", m.Key, m.Value)
 		}
 	}
 }
@@ -1793,7 +1817,7 @@ func doAddToGroup(args []string) {
 		key := Library.MapEntryKey(cleanKey(args[0]))
 		group := args[1]
 		if err := addBibGroupEntry(group, key); err != nil {
-			fmt.Fprintf(os.Stderr, "Could not add %s to group %s: %s\n", key, group, err)
+			messagef("Could not add %s to group %s: %s\n", key, group, err)
 			return
 		}
 		Library.GroupEntries.AddValueToStringSetMap(group, key)
@@ -1810,11 +1834,11 @@ func doCreateGroup(args []string) {
 		for _, rawKey := range args[1:] {
 			key := Library.MapEntryKey(cleanKey(rawKey))
 			if key == "" {
-				fmt.Fprintf(os.Stderr, "Unknown key: %s\n", rawKey)
+				messagef("Unknown key: %s\n", rawKey)
 				continue
 			}
 			if err := addBibGroupEntry(groupName, key); err != nil {
-				fmt.Fprintf(os.Stderr, "Could not add %s to group %s: %s\n", key, groupName, err)
+				messagef("Could not add %s to group %s: %s\n", key, groupName, err)
 				continue
 			}
 			Library.GroupEntries.AddValueToStringSetMap(groupName, key)
@@ -1825,7 +1849,7 @@ func doCreateGroup(args []string) {
 
 func doRenderAsBibTeX(args []string) {
 	if openLibraryToReport() {
-		fmt.Print(Library.renderAsBibTeX(resolveInputKey(cleanKey(args[0]))))
+		result(Library.renderAsBibTeX(resolveInputKey(cleanKey(args[0]))))
 	}
 }
 
@@ -1842,11 +1866,11 @@ func doRenderGroup(args []string, useAliases bool) {
 		}
 		writeFile := func(path, content string) {
 			if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-				fmt.Fprintf(os.Stderr, "Could not create directory for %s: %s\n", path, err)
+				messagef("Could not create directory for %s: %s\n", path, err)
 				return
 			}
 			if err := os.WriteFile(path, []byte(content), 0644); err != nil {
-				fmt.Fprintf(os.Stderr, "Could not write %s: %s\n", path, err)
+				messagef("Could not write %s: %s\n", path, err)
 			}
 		}
 		for _, m := range findBibEntriesByGroup(group) {
@@ -1890,9 +1914,9 @@ func doRenderGroup(args []string, useAliases bool) {
 			writeFile(citationsFolder+fileKey+".tex", Library.renderAsTeX(key)+"\n")
 
 			if useAliases {
-				fmt.Printf("%s|%s|%s|%s|%s\n", year, fileKey, rg, dblp, key)
+				resultf("%s|%s|%s|%s|%s\n", year, fileKey, rg, dblp, key)
 			} else {
-				fmt.Printf("%s|%s|%s|%s\n", year, key, rg, dblp)
+				resultf("%s|%s|%s|%s\n", year, key, rg, dblp)
 			}
 		}
 	}
@@ -1909,26 +1933,26 @@ func doListGroupAliases(args []string) {
 			if alias == "" {
 				alias = key
 			}
-			fmt.Printf("%s|%s\n", key, alias)
+			resultf("%s|%s\n", key, alias)
 		}
 	}
 }
 
 func doRenderAsTex(args []string) {
 	if openLibraryToReport() {
-		fmt.Println(Library.renderAsTeX(resolveInputKey(cleanKey(args[0]))))
+		resultln(Library.renderAsTeX(resolveInputKey(cleanKey(args[0]))))
 	}
 }
 
 func doRenderAsHTML(args []string) {
 	if openLibraryToReport() {
-		fmt.Println(Library.renderAsHTML(resolveInputKey(cleanKey(args[0]))))
+		resultln(Library.renderAsHTML(resolveInputKey(cleanKey(args[0]))))
 	}
 }
 
 func doRenderAsText(args []string) {
 	if openLibraryToReport() {
-		fmt.Println(Library.renderAsText(resolveInputKey(cleanKey(args[0]))))
+		resultln(Library.renderAsText(resolveInputKey(cleanKey(args[0]))))
 	}
 }
 
@@ -1936,7 +1960,7 @@ func doSetField(args []string) {
 	if openLibraryToUpdate() {
 		key := Library.MapEntryKey(cleanKey(args[0]))
 		if !Library.EntryExists(key) {
-			fmt.Fprintf(os.Stderr, "set_field: entry not found: %s\n", args[0])
+			messagef("set_field: entry not found: %s\n", args[0])
 			return
 		}
 		field := args[1]
@@ -1955,7 +1979,7 @@ func doRemoveFromGroup(args []string) {
 		key := Library.MapEntryKey(cleanKey(args[0]))
 		group := args[1]
 		if err := removeBibGroupEntry(group, key); err != nil {
-			fmt.Fprintf(os.Stderr, "Could not remove %s from group %s: %s\n", key, group, err)
+			messagef("Could not remove %s from group %s: %s\n", key, group, err)
 			return
 		}
 		Library.GroupEntries.DeleteValueFromStringSetMap(group, key)
@@ -1972,7 +1996,7 @@ func doSetGroups(args []string) {
 	}
 	key := Library.MapEntryKey(cleanKey(args[0]))
 	if !Library.EntryExists(key) {
-		fmt.Fprintf(os.Stderr, "Unknown entry key: %s\n", args[0])
+		messagef("Unknown entry key: %s\n", args[0])
 		return
 	}
 
@@ -1988,7 +2012,7 @@ func doSetGroups(args []string) {
 		// Remove the entry from all its current groups.
 		rows, err := db.Query(`SELECT group_name FROM bib_groups WHERE entry_key = ?`, key)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Could not query current groups for %s: %s\n", key, err)
+			messagef("Could not query current groups for %s: %s\n", key, err)
 			return
 		}
 		var current []string
@@ -2001,7 +2025,7 @@ func doSetGroups(args []string) {
 		rows.Close()
 		for _, g := range current {
 			if err := removeBibGroupEntry(g, key); err != nil {
-				fmt.Fprintf(os.Stderr, "Could not remove %s from group %s: %s\n", key, g, err)
+				messagef("Could not remove %s from group %s: %s\n", key, g, err)
 				return
 			}
 			Library.GroupEntries.DeleteValueFromStringSetMap(g, key)
@@ -2013,7 +2037,7 @@ func doSetGroups(args []string) {
 			continue
 		}
 		if err := addBibGroupEntry(g, key); err != nil {
-			fmt.Fprintf(os.Stderr, "Could not add %s to group %s: %s\n", key, g, err)
+			messagef("Could not add %s to group %s: %s\n", key, g, err)
 			return
 		}
 		Library.GroupEntries.AddValueToStringSetMap(g, key)
@@ -2035,7 +2059,7 @@ func resolveInputKey(raw string) string {
 
 func doEntryKey(args []string) {
 	if openLibraryToReport() {
-		fmt.Println(resolveInputKey(cleanKey(args[0])))
+		resultln(resolveInputKey(cleanKey(args[0])))
 	}
 }
 
@@ -2059,7 +2083,7 @@ func doEntryKeyAlias(args []string, withMap bool) {
 			}
 		}
 		if alias != "" {
-			fmt.Println(alias)
+			resultln(alias)
 			if withMap {
 				appendToKeysFile(alias, key)
 			}
@@ -2091,7 +2115,7 @@ func loadBackupKeyOldies(path string) map[string]string {
 // Processes in batches of 10 000 rows for performance.
 func doRestoreKeyHints(csvPath string) {
 	if csvPath == "" {
-		fmt.Fprintln(os.Stderr, "-restore_key_hints requires -hints_csv <path>")
+		messageln("-restore_key_hints requires -hints_csv <path>")
 		return
 	}
 	if !openLibraryToUpdate() {
@@ -2107,7 +2131,7 @@ func doRestoreKeyHints(csvPath string) {
 
 	f, err := os.Open(csvPath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Could not open %s: %s\n", csvPath, err)
+		messagef("Could not open %s: %s\n", csvPath, err)
 		return
 	}
 	defer f.Close()
@@ -2154,7 +2178,7 @@ func doRestoreKeyHints(csvPath string) {
 
 	tx, err := db.Begin()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Could not begin transaction: %s\n", err)
+		messagef("Could not begin transaction: %s\n", err)
 		return
 	}
 
@@ -2194,7 +2218,7 @@ func doRestoreKeyHints(csvPath string) {
 			Library.Progress("Restoring key hints: %d processed, %d imported, %d skipped, %d remapped, %d ambiguous", total, imported, skipped, remapped, ambiguous)
 			tx, err = db.Begin()
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "Could not begin transaction: %s\n", err)
+				messagef("Could not begin transaction: %s\n", err)
 				return
 			}
 		}
@@ -2210,7 +2234,7 @@ func doRestoreKeyHints(csvPath string) {
 
 func doShowEntry(args []string) {
 	if openLibraryToReport() {
-		fmt.Println(Library.EntryString(resolveInputKey(cleanKey(args[0])), ""))
+		resultln(Library.EntryString(resolveInputKey(cleanKey(args[0])), ""))
 	}
 }
 
@@ -2462,7 +2486,7 @@ func doUpsertDblpEntries() {
 }
 
 func doNewKey() {
-	fmt.Println(KeyFromTime(time.Now()))
+	resultln(KeyFromTime(time.Now()))
 }
 
 func doUpsertDblpFor(args []string) {
@@ -2490,10 +2514,10 @@ func doUpsertDblpEntryFromDblpKeys(args []string) {
 		for _, dblpKey := range args {
 			dblpKey = normalizeDblpKey(dblpKey)
 			if existing := Library.LookupDBLPKey(dblpKey); existing != "" {
-				fmt.Println(existing)
+				resultln(existing)
 			} else if added := Library.MaybeAddDBLPEntry(dblpKey); added != "" {
 				Library.MarkDblpKeyMissing(added, dblpKey)
-				fmt.Println(added)
+				resultln(added)
 				doAllChecks(added)
 			}
 		}
@@ -2981,14 +3005,14 @@ func doMergeEntries(args []string) {
 		for _, rawKey := range keys {
 			resolved := resolveOrImportKey(rawKey, &importedCount)
 			if resolved == "" {
-				fmt.Fprintf(os.Stderr, "Unknown key: %s\n", rawKey)
+				messagef("Unknown key: %s\n", rawKey)
 				return
 			}
 			resolvedKeys = append(resolvedKeys, resolved)
 			rawKeys = append(rawKeys, rawKey)
 		}
 		if importedCount > 1 {
-			fmt.Fprintln(os.Stderr, "Error: -merge_entries accepts at most one not-yet-imported DBLP entry")
+			messageln("Error: -merge_entries accepts at most one not-yet-imported DBLP entry")
 			return
 		}
 		target := resolvedKeys[len(resolvedKeys)-1]
@@ -3006,7 +3030,7 @@ func doMergeEntries(args []string) {
 					Library.Progress("  Ghost entry %s found (alias for %s) — merging fields before cleanup", rawKey, target)
 					Library.MergeEntries(rawKey, target)
 				} else {
-					fmt.Fprintf(os.Stderr, "  %s is already an alias for %s — nothing to merge.\n", rawKey, target)
+					messagef("  %s is already an alias for %s — nothing to merge.\n", rawKey, target)
 				}
 				continue
 			}
@@ -3022,7 +3046,7 @@ func doSetPreferredAlias(args []string) {
 		key := Library.MapEntryKey(cleanKey(args[1]))
 		entry := Library.buildEntry(key)
 		if !entry.Exists() {
-			fmt.Fprintf(os.Stderr, "Entry %s does not exist\n", key)
+			messagef("Entry %s does not exist\n", key)
 			return
 		}
 		if !validPreferredKeyAlias.MatchString(alias) {
@@ -3041,7 +3065,7 @@ func doSetPreferredAlias(args []string) {
 func doApplyScript() {
 	scriptPath := libraryBase() + ScriptFilePath
 	if _, err := os.Stat(scriptPath); os.IsNotExist(err) {
-		fmt.Fprintf(os.Stderr, "No script file found at %s\n", scriptPath)
+		messagef("No script file found at %s\n", scriptPath)
 		return
 	}
 	if openLibraryToUpdate() {
@@ -3057,14 +3081,14 @@ func resolveContributorArg(arg string) (id, name string, ok bool) {
 	if strings.HasPrefix(arg, "EP-") {
 		c, exists := Library.ContributorByID[arg]
 		if !exists {
-			fmt.Fprintf(os.Stderr, "No contributor found with ID %q\n", arg)
+			messagef("No contributor found with ID %q\n", arg)
 			return "", "", false
 		}
 		return arg, c.Name, true
 	}
 	cid, found := Library.NameToContributorID[arg]
 	if !found {
-		fmt.Fprintf(os.Stderr, "No contributor found for %q\n", arg)
+		messagef("No contributor found for %q\n", arg)
 		return "", "", false
 	}
 	return cid, Library.ContributorByID[cid].Name, true
@@ -3101,7 +3125,7 @@ func doCorrectName(args []string) {
 	}
 	oldName, newName := args[0], args[1]
 	if oldName == newName {
-		fmt.Fprintln(os.Stderr, "Old and new names are identical — nothing to do.")
+		messageln("Old and new names are identical — nothing to do.")
 		return
 	}
 
@@ -3121,11 +3145,11 @@ func doCorrectName(args []string) {
 	oldRows.Close()
 
 	if len(oldIDs) == 0 {
-		fmt.Fprintf(os.Stderr, "Name not found in contributor_names: %q\n", oldName)
+		messagef("Name not found in contributor_names: %q\n", oldName)
 		return
 	}
 	if len(oldIDs) > 1 {
-		fmt.Fprintf(os.Stderr, "Name %q is stored for %d contributors — resolve ambiguity manually.\n", oldName, len(oldIDs))
+		messagef("Name %q is stored for %d contributors — resolve ambiguity manually.\n", oldName, len(oldIDs))
 		return
 	}
 	oldID := oldIDs[0]
@@ -3143,7 +3167,7 @@ func doCorrectName(args []string) {
 		Library.Progress("New name is already the canonical of a different contributor — merging.")
 	}
 
-	fmt.Fprintln(os.Stderr, "")
+	messageln("")
 	if !Reporting.ConfirmAction("Proceed?") {
 		return
 	}
@@ -3262,7 +3286,7 @@ func doMergeContributors(args []string) {
 			continue
 		}
 		if toID == fromID {
-			fmt.Fprintf(os.Stderr, "%q resolves to the same contributor as %q — skipping.\n", fromArg, into)
+			messagef("%q resolves to the same contributor as %q — skipping.\n", fromArg, into)
 			continue
 		}
 		Library.Progress("Merging %q (%s) into %q (%s)", fromName, fromID, toName, toID)
@@ -3558,33 +3582,32 @@ func doEnrichOrcidProfilesCore() {
 			options.Add("i")
 		}
 		options.Add("e")
-		fmt.Fprintf(os.Stderr,
-			"ORCID %s  %s\n  Current canonical : %q\n  Credit-name       : %q\n",
+		messagef("ORCID %s  %s\n  Current canonical : %q\n  Credit-name       : %q\n",
 			p.orcid, p.id, contrib.Name, person.CreditName)
 		if person.DeclaredName != "" {
-			fmt.Fprintf(os.Stderr, "  Declared name     : %q\n", person.DeclaredName)
+			messagef("  Declared name     : %q\n", person.DeclaredName)
 		}
 		if surnameBoundaryDiffers {
-			fmt.Fprintf(os.Stderr, "  ^ surname boundary differs from current canonical\n")
+			messagef("  ^ surname boundary differs from current canonical\n")
 		}
 		if offerInferred {
-			fmt.Fprintf(os.Stderr, "  Inferred name     : %q  (credit-name parsed using declared surname)\n", inferredName)
+			messagef("  Inferred name     : %q  (credit-name parsed using declared surname)\n", inferredName)
 		}
-		fmt.Fprintf(os.Stderr, "  k=keep current  c=use credit-name")
+		messagef("  k=keep current  c=use credit-name")
 		if offerDeclared {
 			if person.DeclaredName == contrib.Name {
-				fmt.Fprintf(os.Stderr, "  d=use declared (%q = current)", person.DeclaredName)
+				messagef("  d=use declared (%q = current)", person.DeclaredName)
 			} else {
-				fmt.Fprintf(os.Stderr, "  d=use declared (%q)", person.DeclaredName)
+				messagef("  d=use declared (%q)", person.DeclaredName)
 			}
 		}
 		if options.Contains("n") {
-			fmt.Fprintf(os.Stderr, "  n=natural order of declared (%q)", passportNatural)
+			messagef("  n=natural order of declared (%q)", passportNatural)
 		}
 		if offerInferred {
-			fmt.Fprintf(os.Stderr, "  i=use inferred (%q)", inferredName)
+			messagef("  i=use inferred (%q)", inferredName)
 		}
-		fmt.Fprintf(os.Stderr, "  e=edit\n")
+		messagef("  e=edit\n")
 
 		answer := Library.WarningQuestion("", options,
 			"ORCID %s: credit-name %q differs from canonical %q for %s",
@@ -3799,7 +3822,7 @@ func doAssignOrcid(args []string) {
 	orcid := strings.ToUpper(strings.TrimSpace(args[1]))
 
 	if !isValidORCID(orcid) {
-		fmt.Fprintf(os.Stderr, "Invalid ORCID format %q — expected NNNN-NNNN-NNNN-NNN[0-9X]\n", orcid)
+		messagef("Invalid ORCID format %q — expected NNNN-NNNN-NNNN-NNN[0-9X]\n", orcid)
 		return
 	}
 
@@ -3813,7 +3836,7 @@ func doAssignOrcid(args []string) {
 	// Check for ownership conflict.
 	if existingID := orcidToContributorID(&Library, orcid); existingID != "" && existingID != id {
 		existing := Library.ContributorByID[existingID]
-		fmt.Fprintf(os.Stderr, "ORCID %s is already assigned to contributor %s (%s)\n",
+		messagef("ORCID %s is already assigned to contributor %s (%s)\n",
 			orcid, existingID, existing.Name)
 		return
 	}
@@ -4028,23 +4051,23 @@ flag.BoolVar(&cmdAlignBooktitleCountries, "align_booktitle_countries", false, "d
 	}
 
 	if cmdVersion {
-		os.Exit(0)
+		endRun(0)
 	}
 
 	// -set_sync_status operates on an explicit .sync file; no -base needed.
 	if cmdSetSyncStatus != "" {
 		if len(args) < 2 {
-			fmt.Fprintln(os.Stderr, "Usage: bibtex_check -set_sync_status <status|''> <source_key> <sync-file-stem>")
-			os.Exit(1)
+			messageln("Usage: bibtex_check -set_sync_status <status|''> <source_key> <sync-file-stem>")
+			endRun(1)
 		}
 		DoSetSyncStatus(cmdSetSyncStatus, args[0], args[1])
-		os.Exit(0)
+		endRun(0)
 	}
 
 	if *baseFlag == "" {
-		fmt.Fprintln(os.Stderr, "Usage: bibtex_check -base <path/basename> [-command] [args...]")
+		messageln("Usage: bibtex_check -base <path/basename> [-command] [args...]")
 		flag.PrintDefaults()
-		os.Exit(1)
+		endRun(1)
 	}
 
 	if absBase, err := filepath.Abs(*baseFlag); err == nil {
@@ -4074,11 +4097,11 @@ flag.BoolVar(&cmdAlignBooktitleCountries, "align_booktitle_countries", false, "d
 
 	if cmdNewKey {
 		doNewKey()
-		os.Exit(0)
+		endRun(0)
 	}
 
 	// Acquired here, before cmdUpdateDblp, rather than further down: -update_dblp
-	// does a slow (multi-minute) import and does not os.Exit() afterward — it
+	// does a slow (multi-minute) import and does not endRun() afterward — it
 	// falls through into the normal session below. acquireDblpLock alone does
 	// not stop a second, unrelated invocation (e.g. -watch) from acquiring this same
 	// instance lock and running a full session against the same working DB while
@@ -4090,8 +4113,8 @@ flag.BoolVar(&cmdAlignBooktitleCountries, "align_booktitle_countries", false, "d
 	if cmdPushDblp || cmdRestoreDblp {
 		lock := tryLockDblp()
 		if lock == nil {
-			fmt.Fprintln(os.Stderr, "DBLP import in progress — try again later.")
-			os.Exit(1)
+			messageln("DBLP import in progress — try again later.")
+			endRun(1)
 		}
 		var err error
 		if cmdPushDblp {
@@ -4101,10 +4124,10 @@ flag.BoolVar(&cmdAlignBooktitleCountries, "align_booktitle_countries", false, "d
 		}
 		lock.Close()
 		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
+			messageln(err)
+			endRun(1)
 		}
-		os.Exit(0)
+		endRun(0)
 	}
 
 	if !cmdUpdateDblp && !cmdLoadDblpXml {
@@ -4114,44 +4137,44 @@ flag.BoolVar(&cmdAlignBooktitleCountries, "align_booktitle_countries", false, "d
 	if cmdUpdateDblp {
 		acquireDblpLock()
 		maybeStartDblpTrashCleanup()
-		doUpdateDblp()
+		endRunOnError(doUpdateDblp())
 	}
 
 	if cmdLoadDblpXml {
 		if len(args) == 0 {
-			fmt.Fprintln(os.Stderr, "Usage: -load_dblp_xml <path.xml.gz>")
-			os.Exit(1)
+			messageln("Usage: -load_dblp_xml <path.xml.gz>")
+			endRun(1)
 		}
 		acquireDblpLock()
 		maybeStartDblpTrashCleanup()
-		doLoadDblpXml(args)
-		os.Exit(0)
+		endRunOnError(doLoadDblpXml(args))
+		endRun(0)
 	}
 
 	if cmdDeleteGarbage {
 		des, err := os.ReadDir(dblpTrashFolder())
 		if err != nil || len(des) == 0 {
-			fmt.Fprintf(os.Stderr, "No DBLP trash to delete.\n")
-			os.Exit(0)
+			messagef("No DBLP trash to delete.\n")
+			endRun(0)
 		}
-		fmt.Fprintf(os.Stderr, "Deleting DBLP trash...\n")
+		messagef("Deleting DBLP trash...\n")
 		start := time.Now()
 		if err := os.RemoveAll(dblpTrashFolder()); err != nil {
-			fmt.Fprintf(os.Stderr, "Error deleting trash: %s\n", err)
-			os.Exit(1)
+			messagef("Error deleting trash: %s\n", err)
+			endRun(1)
 		}
-		fmt.Fprintf(os.Stderr, "Done (%.0fs).\n", time.Since(start).Seconds())
-		os.Exit(0)
+		messagef("Done (%.0fs).\n", time.Since(start).Seconds())
+		endRun(0)
 	}
 
 	if cmdRestoreFromDump {
-		doRestoreFromDump()
-		os.Exit(0)
+		endRunOnError(doRestoreFromDump())
+		endRun(0)
 	}
 
 	if cmdRestoreBackupName != "" {
-		doRestoreFromBackup(cmdRestoreBackupName)
-		os.Exit(0)
+		endRunOnError(doRestoreFromBackup(cmdRestoreBackupName))
+		endRun(0)
 	}
 
 	maybeMigrateDblpFolder()
@@ -4168,50 +4191,50 @@ flag.BoolVar(&cmdAlignBooktitleCountries, "align_booktitle_countries", false, "d
 		if len(args) > 0 {
 			filter = args[0]
 		}
-		doSync(filter)
+		endRunOnError(doSync(filter))
 
 	case cmdGetPdfs:
 		doGetPdfs()
 
 	case cmdFindEntries:
 		if len(args) == 0 || len(args) > 2 {
-			fmt.Fprintln(os.Stderr, "Usage: -find_entries <field> [<value>]")
-			os.Exit(1)
+			messageln("Usage: -find_entries <field> [<value>]")
+			endRun(1)
 		}
 		doFindEntries(args)
 
 	case cmdEntryKey:
 		if len(args) == 0 {
-			fmt.Fprintln(os.Stderr, "Usage: -entry_key <alias>")
-			os.Exit(1)
+			messageln("Usage: -entry_key <alias>")
+			endRun(1)
 		}
 		doEntryKey(args)
 
 	case cmdEntryKeyAlias:
 		if len(args) == 0 {
-			fmt.Fprintln(os.Stderr, "Usage: -entry_key_alias <key>")
-			os.Exit(1)
+			messageln("Usage: -entry_key_alias <key>")
+			endRun(1)
 		}
 		doEntryKeyAlias(args, cmdMap)
 
 	case cmdMap:
 		if len(args) < 2 {
-			fmt.Fprintln(os.Stderr, "Usage: -map <alias>... <canonical>")
-			os.Exit(1)
+			messageln("Usage: -map <alias>... <canonical>")
+			endRun(1)
 		}
 		doAddKeyMapping(args)
 
 	case cmdShowEntry:
 		if len(args) == 0 {
-			fmt.Fprintln(os.Stderr, "Usage: -show_entry <key>")
-			os.Exit(1)
+			messageln("Usage: -show_entry <key>")
+			endRun(1)
 		}
 		doShowEntry(args)
 
 	case cmdFixEntries:
 		if len(args) == 0 {
-			fmt.Fprintln(os.Stderr, "Usage: -fix_entries <key>...")
-			os.Exit(1)
+			messageln("Usage: -fix_entries <key>...")
+			endRun(1)
 		}
 		doFixEntries(args)
 
@@ -4232,8 +4255,8 @@ flag.BoolVar(&cmdAlignBooktitleCountries, "align_booktitle_countries", false, "d
 
 	case cmdAssignOrcid:
 		if len(args) != 2 {
-			fmt.Fprintln(os.Stderr, "Usage: -assign_orcid <name-or-EP-id> <orcid>")
-			os.Exit(1)
+			messageln("Usage: -assign_orcid <name-or-EP-id> <orcid>")
+			endRun(1)
 		}
 		doAssignOrcid(args)
 
@@ -4248,8 +4271,8 @@ flag.BoolVar(&cmdAlignBooktitleCountries, "align_booktitle_countries", false, "d
 
 	case cmdMergeContributors:
 		if len(args) < 2 {
-			fmt.Fprintln(os.Stderr, "Usage: -merge_contributors <from...> <into>")
-			os.Exit(1)
+			messageln("Usage: -merge_contributors <from...> <into>")
+			endRun(1)
 		}
 		doMergeContributors(args)
 
@@ -4272,8 +4295,8 @@ flag.BoolVar(&cmdAlignBooktitleCountries, "align_booktitle_countries", false, "d
 	case cmdAddDblpEntry:
 		requireNoDblpImport()
 		if len(args) == 0 {
-			fmt.Fprintln(os.Stderr, "Usage: -add_dblp_entry <key>...")
-			os.Exit(1)
+			messageln("Usage: -add_dblp_entry <key>...")
+			endRun(1)
 		}
 		// Route each argument: DBLP keys (containing "/") go to doAddDblpEntry;
 		// library keys go to doFixDblpFor.
@@ -4298,56 +4321,56 @@ case cmdWatch:
 
 	case cmdAddGroup:
 		if len(args) < 1 {
-			fmt.Fprintln(os.Stderr, "Usage: -add_group <group_name> [key...]")
-			os.Exit(1)
+			messageln("Usage: -add_group <group_name> [key...]")
+			endRun(1)
 		}
 		doCreateGroup(args)
 
 	case cmdAddKeyMapping:
 		if len(args) < 2 {
-			fmt.Fprintln(os.Stderr, "Usage: -add_key_mapping <alias>... <canonical>")
-			os.Exit(1)
+			messageln("Usage: -add_key_mapping <alias>... <canonical>")
+			endRun(1)
 		}
 		doAddKeyMapping(args)
 
 	case cmdMergeEntries:
 		if len(args) < 2 {
-			fmt.Fprintln(os.Stderr, "Usage: -merge_entries <key>... <target>")
-			os.Exit(1)
+			messageln("Usage: -merge_entries <key>... <target>")
+			endRun(1)
 		}
 		doMergeEntries(args)
 
 	case cmdAddNameMapping:
 		if len(args) != 2 {
-			fmt.Fprintln(os.Stderr, "Usage: -add_name_mapping <canonical> <alias>")
-			os.Exit(1)
+			messageln("Usage: -add_name_mapping <canonical> <alias>")
+			endRun(1)
 		}
 		doAddNameMapping(args)
 
 	case cmdCorrectName:
 		if len(args) != 2 {
-			fmt.Fprintln(os.Stderr, "Usage: -correct_name <bad_name> <correct_name>")
-			os.Exit(1)
+			messageln("Usage: -correct_name <bad_name> <correct_name>")
+			endRun(1)
 		}
 		doCorrectName(args)
 
 	case cmdAddDoiAlias:
 		if len(args) != 2 {
-			fmt.Fprintln(os.Stderr, "Usage: -add_doi_alias <doi> <entry_key>")
-			os.Exit(1)
+			messageln("Usage: -add_doi_alias <doi> <entry_key>")
+			endRun(1)
 		}
 		if !openLibraryToUpdate() {
-			os.Exit(1)
+			endRun(1)
 		}
 		addEntryDoiAlias(args[1], args[0])
 
 	case cmdDeleteEntry:
 		if len(args) == 0 {
-			fmt.Fprintln(os.Stderr, "Usage: -delete_entry <key>...")
-			os.Exit(1)
+			messageln("Usage: -delete_entry <key>...")
+			endRun(1)
 		}
 		if !openLibraryToUpdate() {
-			os.Exit(1)
+			endRun(1)
 		}
 		for _, rawKey := range args {
 			key := Library.MapEntryKey(rawKey)
@@ -4355,10 +4378,10 @@ case cmdWatch:
 				key = rawKey
 			}
 			if !Library.EntryExists(key) {
-				fmt.Fprintf(os.Stderr, "Entry not found: %s\n", rawKey)
+				messagef("Entry not found: %s\n", rawKey)
 				continue
 			}
-			fmt.Fprintf(os.Stderr, "\nEntry to delete:\n%s\n", Library.entryDisplayString(key))
+			messagef("\nEntry to delete:\n%s\n", Library.entryDisplayString(key))
 			if !Library.ConfirmAction(fmt.Sprintf("Delete %s?", key)) {
 				continue
 			}
@@ -4368,78 +4391,78 @@ case cmdWatch:
 
 	case cmdSetPreferredAlias:
 		if len(args) != 2 {
-			fmt.Fprintln(os.Stderr, "Usage: -set_preferred_alias <key> <alias>")
-			os.Exit(1)
+			messageln("Usage: -set_preferred_alias <key> <alias>")
+			endRun(1)
 		}
 		doSetPreferredAlias(args)
 
 	case cmdSetField:
 		if len(args) < 2 || len(args) > 3 {
-			fmt.Fprintln(os.Stderr, "Usage: -set_field <key> <field> [<value>]")
-			os.Exit(1)
+			messageln("Usage: -set_field <key> <field> [<value>]")
+			endRun(1)
 		}
 		doSetField(args)
 
 	case cmdAddToGroup:
 		if len(args) != 2 {
-			fmt.Fprintln(os.Stderr, "Usage: -add_to_group <key> <group>")
-			os.Exit(1)
+			messageln("Usage: -add_to_group <key> <group>")
+			endRun(1)
 		}
 		doAddToGroup(args)
 
 	case cmdRemoveFromGroup:
 		if len(args) != 2 {
-			fmt.Fprintln(os.Stderr, "Usage: -remove_from_group <key> <group>")
-			os.Exit(1)
+			messageln("Usage: -remove_from_group <key> <group>")
+			endRun(1)
 		}
 		doRemoveFromGroup(args)
 
 	case cmdSetGroups:
 		if len(args) < 2 {
-			fmt.Fprintln(os.Stderr, "Usage: -set_groups <key> [+] <group>...")
-			os.Exit(1)
+			messageln("Usage: -set_groups <key> [+] <group>...")
+			endRun(1)
 		}
 		doSetGroups(args)
 
 	case cmdRenderGroup:
 		if len(args) != 3 {
-			fmt.Fprintln(os.Stderr, "Usage: -render_group [-use_aliases] <group> <pubs_folder> <citations_folder>")
-			os.Exit(1)
+			messageln("Usage: -render_group [-use_aliases] <group> <pubs_folder> <citations_folder>")
+			endRun(1)
 		}
 		doRenderGroup(args, cmdUseAliases)
 
 	case cmdListGroupAliases:
 		if len(args) != 1 {
-			fmt.Fprintln(os.Stderr, "Usage: -list_group_aliases <group>")
-			os.Exit(1)
+			messageln("Usage: -list_group_aliases <group>")
+			endRun(1)
 		}
 		doListGroupAliases(args)
 
 	case cmdRenderAsBibTeX:
 		if len(args) == 0 {
-			fmt.Fprintln(os.Stderr, "Usage: -render_as_bibtex <key>")
-			os.Exit(1)
+			messageln("Usage: -render_as_bibtex <key>")
+			endRun(1)
 		}
 		doRenderAsBibTeX(args)
 
 	case cmdRenderAsTex:
 		if len(args) == 0 {
-			fmt.Fprintln(os.Stderr, "Usage: -render_as_tex <key>")
-			os.Exit(1)
+			messageln("Usage: -render_as_tex <key>")
+			endRun(1)
 		}
 		doRenderAsTex(args)
 
 	case cmdRenderAsHTML:
 		if len(args) == 0 {
-			fmt.Fprintln(os.Stderr, "Usage: -render_as_html <key>")
-			os.Exit(1)
+			messageln("Usage: -render_as_html <key>")
+			endRun(1)
 		}
 		doRenderAsHTML(args)
 
 	case cmdRenderAsText:
 		if len(args) == 0 {
-			fmt.Fprintln(os.Stderr, "Usage: -render_as_text <key>")
-			os.Exit(1)
+			messageln("Usage: -render_as_text <key>")
+			endRun(1)
 		}
 		doRenderAsText(args)
 
@@ -4486,8 +4509,8 @@ case cmdAlignBooktitleCountries:
 
 	case cmdImportBib:
 		if len(args) == 0 {
-			fmt.Fprintln(os.Stderr, "Usage: -import_bib <file.bib>")
-			os.Exit(1)
+			messageln("Usage: -import_bib <file.bib>")
+			endRun(1)
 		}
 		doImportBib(args[0])
 
@@ -4500,15 +4523,15 @@ case cmdAlignBooktitleCountries:
 
 	default:
 		if len(args) > 0 {
-			fmt.Fprintln(os.Stderr, "Unexpected arguments (did you forget a command flag?):", args)
-			os.Exit(1)
+			messageln("Unexpected arguments (did you forget a command flag?):", args)
+			endRun(1)
 		}
 		doDefaultRun()
 	}
 
 	if writeSessionOpenFailed {
 		stderrPrintf("\n")
-		os.Exit(1)
+		endRun(1)
 	}
 
 	Library.CheckDblpKeyMissingWarnings()
@@ -4557,13 +4580,13 @@ func gracefulQuit() {
 	} else {
 		finaliseWorkingDatabase()
 	}
-	os.Exit(0)
+	endRun(0)
 }
 
 // quitOnce guards quitNow so a second trigger (another Ctrl-C while the first is
 // still committing/finalising, or a racing SIGINT and typed "q") cannot re-enter
 // the commit/finalise sequence. The second (and any later) caller just blocks on
-// Do — harmlessly, since the first caller's os.Exit(0) tears down the whole
+// Do — harmlessly, since the first caller's endRun(0) tears down the whole
 // process, including that blocked goroutine, the moment it completes.
 var quitOnce sync.Once
 
@@ -4585,7 +4608,7 @@ func quitNow() {
 			// possibly-uninitialised DB/Library state (the same nil pointer panic
 			// class reported 2026-07-30 from a Ctrl-C during a bare -render_as_tex).
 			// There is nothing to lose by exiting immediately.
-			os.Exit(0)
+			endRun(0)
 		}
 		gracefulQuit()
 	})

@@ -88,7 +88,7 @@ func ensureLibraryBackup() {
 	backupDir := filepath.Join(backupFolder, bibTeXBaseName+"-"+ts)
 
 	if err := os.MkdirAll(backupDir, 0755); err != nil {
-		fmt.Fprintf(os.Stderr, "WARNING: could not create library backup directory %s: %s\n", backupDir, err)
+		messagef("WARNING: could not create library backup directory %s: %s\n", backupDir, err)
 		return
 	}
 

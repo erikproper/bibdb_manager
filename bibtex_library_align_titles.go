@@ -19,7 +19,6 @@ package main
 
 import (
 	"fmt"
-	"os"
 	"regexp"
 	"strings"
 	"time"
@@ -234,18 +233,18 @@ func (l *TBibTeXLibrary) handleAlignHit(key string, h titleAlignHit, autoAccept 
 		return false
 	}
 	l.printWarningLine("Title/booktitle alignment (%s) for %s", h.kind, key)
-	fmt.Fprintf(os.Stderr, "Field(s): %s\n", strings.Join(h.fields, ", "))
-	fmt.Fprintf(os.Stderr, "Current:  %s\n", h.original)
+	messagef("Field(s): %s\n", strings.Join(h.fields, ", "))
+	messagef("Current:  %s\n", h.original)
 	if h.kind != "country" {
 		label := strings.ToUpper(h.kind[:1]) + h.kind[1:]
 		value := h.extracted
 		if h.targetField != "" && strings.Trim(h.targetField, "{}") != h.extracted {
 			value += fmt.Sprintf(" (%s field: %s)", h.kind, h.targetField)
 		}
-		fmt.Fprintf(os.Stderr, "%-9s %s\n", label+":", value)
+		messagef("%-9s %s\n", label+":", value)
 	}
-	fmt.Fprintf(os.Stderr, "Proposed: %s\n", h.proposed)
-	fmt.Fprint(os.Stderr, "QUESTION: Action (a=accept, m=modify, s=skip, w=waive, q=quit): ")
+	messagef("Proposed: %s\n", h.proposed)
+	message("QUESTION: Action (a=accept, m=modify, s=skip, w=waive, q=quit): ")
 	for {
 		option := readStdinLine()
 		switch option {
@@ -271,7 +270,7 @@ func (l *TBibTeXLibrary) handleAlignHit(key string, h titleAlignHit, autoAccept 
 			quitNow()
 			return true
 		default:
-			fmt.Fprint(os.Stderr, "(a/m/s/w/q): ")
+			message("(a/m/s/w/q): ")
 		}
 	}
 }
@@ -331,22 +330,22 @@ func (l *TBibTeXLibrary) CheckAlignBooktitleCountries() {
 	ticker.Done()
 
 	if len(allHits) == 0 {
-		fmt.Fprintf(os.Stderr, "No booktitle country normalisation candidates found.\n")
+		messagef("No booktitle country normalisation candidates found.\n")
 		return
 	}
 
 	// Phase 1: report.
 	for _, kh := range allHits {
-		fmt.Printf("Key:      %s\n", kh.key)
-		fmt.Printf("Field(s): %s\n", strings.Join(kh.hit.fields, ", "))
-		fmt.Printf("Current:  %s\n", kh.hit.original)
-		fmt.Printf("Proposed: %s\n", kh.hit.proposed)
-		fmt.Println()
+		messagef("Key:      %s\n", kh.key)
+		messagef("Field(s): %s\n", strings.Join(kh.hit.fields, ", "))
+		messagef("Current:  %s\n", kh.hit.original)
+		messagef("Proposed: %s\n", kh.hit.proposed)
+		messageln()
 	}
-	fmt.Fprintf(os.Stderr, "Found %d candidate(s)\n", len(allHits))
+	messagef("Found %d candidate(s)\n", len(allHits))
 
 	// Phase 2: action.
-	fmt.Fprint(os.Stderr, "QUESTION: Proceed? (a=accept all, i=interactive, q=quit): ")
+	message("QUESTION: Proceed? (a=accept all, i=interactive, q=quit): ")
 	for {
 		option := readStdinLine()
 		switch option {
@@ -369,7 +368,7 @@ func (l *TBibTeXLibrary) CheckAlignBooktitleCountries() {
 			quitNow()
 			return
 		default:
-			fmt.Fprint(os.Stderr, "(a/i/q): ")
+			message("(a/i/q): ")
 		}
 	}
 }
@@ -404,7 +403,7 @@ func (l *TBibTeXLibrary) CheckAlignTitles(autoAccept bool) {
 	})
 	ticker.Done()
 	if found > 0 {
-		fmt.Fprintf(os.Stderr, "  Found %d title/volume/edition alignment candidate(s)\n", found)
+		messagef("  Found %d title/volume/edition alignment candidate(s)\n", found)
 	}
 }
 

@@ -925,14 +925,14 @@ func writeDatabaseDump(src string) {
 // The dump is loaded into a fresh SQLite file via the sqlite3 CLI; the old home
 // copy is moved to the backups folder first. Must be called before
 // connectToDatabase (bibTeXFolder, bibTeXBaseName and the folders must be set).
-func doRestoreFromDump() {
+func doRestoreFromDump() error {
 	dumpPath := libraryDumpPath()
 	info, err := os.Stat(dumpPath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "No dump file found at %s\n", dumpPath)
-		os.Exit(1)
+		messagef("No dump file found at %s\n", dumpPath)
+		return errReported
 	}
-	fmt.Fprintf(os.Stderr, "Restoring from %s (%.0f MB)...\n", dumpPath, float64(info.Size())/1e6)
+	messagef("Restoring from %s (%.0f MB)...\n", dumpPath, float64(info.Size())/1e6)
 
 	homePath := dbHomePath()
 	workPath := dbPath()
@@ -941,8 +941,8 @@ func doRestoreFromDump() {
 
 	f, err := os.Open(dumpPath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Cannot open dump file: %s\n", err)
-		os.Exit(1)
+		messagef("Cannot open dump file: %s\n", err)
+		return errReported
 	}
 	defer f.Close()
 
@@ -951,9 +951,9 @@ func doRestoreFromDump() {
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
-		fmt.Fprintf(os.Stderr, "sqlite3 restore failed: %s\n%s\n", err, stderr.String())
+		messagef("sqlite3 restore failed: %s\n%s\n", err, stderr.String())
 		removeDblpDBFiles(newPath)
-		os.Exit(1)
+		return errReported
 	}
 
 	if _, err := os.Stat(homePath); err == nil {
@@ -961,7 +961,7 @@ func doRestoreFromDump() {
 		corruptBackup := backupFolder + bibTeXBaseName + "_corrupt_" + ts + cacheFileExtension
 		if mkErr := os.MkdirAll(backupFolder, 0755); mkErr == nil {
 			if cpErr := copyFile(homePath, corruptBackup); cpErr == nil {
-				fmt.Fprintf(os.Stderr, "Saved the old database as %s\n", corruptBackup)
+				messagef("Saved the old database as %s\n", corruptBackup)
 			}
 		}
 	}
@@ -970,45 +970,47 @@ func doRestoreFromDump() {
 	os.Remove(workPath + "-wal")
 	os.Remove(workPath + "-shm")
 	if err := os.Rename(newPath, workPath); err != nil {
-		fmt.Fprintf(os.Stderr, "Could not install restored DB at %s: %s\n", workPath, err)
-		os.Exit(1)
+		messagef("Could not install restored DB at %s: %s\n", workPath, err)
+		return errReported
 	}
 	if err := installRestoredDatabase(); err != nil {
-		fmt.Fprintf(os.Stderr, "Restored %s, but could not push it to %s: %s\n", workPath, homeFolder, err)
-		os.Exit(1)
+		messagef("Restored %s, but could not push it to %s: %s\n", workPath, homeFolder, err)
+		return errReported
 	}
-	fmt.Fprintf(os.Stderr, "Restore complete: %s\n", workPath)
+	messagef("Restore complete: %s\n", workPath)
+	return nil
 }
 
 // doRestoreFromBackup copies a named backup file into the local database and
 // pushes it with a new generation. backupName is the base of the backup filename
 // (e.g. "ErikProper_20260709_123456"); the full path is
 // backupFolder/backupName.sqlite3.
-func doRestoreFromBackup(backupName string) {
+func doRestoreFromBackup(backupName string) error {
 	// Tolerate a name typed with its extension, or with a trailing dot left by
 	// tab completion.
 	backupName = strings.TrimRight(strings.TrimSuffix(backupName, cacheFileExtension), ".")
 	backupPath := backupFolder + backupName + cacheFileExtension
 	info, err := os.Stat(backupPath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Backup not found: %s\n", backupPath)
-		os.Exit(1)
+		messagef("Backup not found: %s\n", backupPath)
+		return errReported
 	}
-	fmt.Fprintf(os.Stderr, "Restoring from %s (%.0f MB)...\n", backupPath, float64(info.Size())/1e6)
+	messagef("Restoring from %s (%.0f MB)...\n", backupPath, float64(info.Size())/1e6)
 
 	workPath := dbPath()
 	os.Remove(workPath + "-wal")
 	os.Remove(workPath + "-shm")
 	if err := copyFileAtomic(backupPath, workPath); err != nil {
-		fmt.Fprintf(os.Stderr, "Could not restore %s → %s: %s\n", backupPath, workPath, err)
-		os.Exit(1)
+		messagef("Could not restore %s → %s: %s\n", backupPath, workPath, err)
+		return errReported
 	}
 	if err := installRestoredDatabase(); err != nil {
-		fmt.Fprintf(os.Stderr, "Restored %s, but could not push it to %s: %s\n", workPath, homeFolder, err)
-		os.Exit(1)
+		messagef("Restored %s, but could not push it to %s: %s\n", workPath, homeFolder, err)
+		return errReported
 	}
 	restored, _ := os.Stat(workPath)
-	fmt.Fprintf(os.Stderr, "Restore complete: %s (%d bytes)\n", workPath, restored.Size())
+	messagef("Restore complete: %s (%d bytes)\n", workPath, restored.Size())
+	return nil
 }
 
 // --- write-session markers ---

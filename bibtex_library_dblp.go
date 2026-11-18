@@ -502,12 +502,12 @@ func (l *TBibTeXLibrary) AssociateDblpKey(key, dblpKey string) {
 // entry and asks the user to choose one (0 = none of them match).
 // Returns the chosen DBLP key, or "" when the user picks 0.
 func (l *TBibTeXLibrary) AskCandidateDblpKey(key string, candidates []string) string {
-	fmt.Fprintf(os.Stderr, "\nLibrary entry:\n%s\n", l.entryDisplayString(key))
+	messagef("\nLibrary entry:\n%s\n", l.entryDisplayString(key))
 	for i, dblpKey := range candidates {
-		fmt.Fprintf(os.Stderr, "[%d] %s", i+1, dblpKey)
+		messagef("[%d] %s", i+1, dblpKey)
 		if entry := dblpEntryFromStore(dblpKey); entry != nil {
 			if entryType := entry.EntryType(); entryType != "" {
-				fmt.Fprintf(os.Stderr, " (%s)", entryType)
+				messagef(" (%s)", entryType)
 			}
 			priorityFields := []string{
 				"title", "booktitle", "journal", "year",
@@ -518,7 +518,7 @@ func (l *TBibTeXLibrary) AskCandidateDblpKey(key string, candidates []string) st
 			for _, field := range priorityFields {
 				shown.Add(field)
 				if v := entry.Fields[field]; v != "" {
-					fmt.Fprintf(os.Stderr, "\n    %-12s: %s", field, v)
+					messagef("\n    %-12s: %s", field, v)
 				}
 			}
 			remaining := []string{}
@@ -529,7 +529,7 @@ func (l *TBibTeXLibrary) AskCandidateDblpKey(key string, candidates []string) st
 			}
 			sort.Strings(remaining)
 			for _, field := range remaining {
-				fmt.Fprintf(os.Stderr, "\n    %-12s: %s", field, entry.Fields[field])
+				messagef("\n    %-12s: %s", field, entry.Fields[field])
 			}
 			// Show children count to let the user estimate cascading work on acceptance.
 			// For bookish candidates (proceedings/book): show their own children count.
@@ -543,7 +543,7 @@ func (l *TBibTeXLibrary) AskCandidateDblpKey(key string, candidates []string) st
 							alreadyIn++
 						}
 					}
-					fmt.Fprintf(os.Stderr, "\n    %-12s: %d total, %d already in library, %d new",
+					messagef("\n    %-12s: %d total, %d already in library, %d new",
 						"children", len(children), alreadyIn, len(children)-alreadyIn)
 				}
 			}
@@ -551,17 +551,17 @@ func (l *TBibTeXLibrary) AskCandidateDblpKey(key string, candidates []string) st
 				showChildrenCount(dblpKey)
 			} else if crossref := entry.Fields["crossref"]; crossref != "" {
 				if parent := dblpEntryFromStore(crossref); parent != nil {
-					fmt.Fprintf(os.Stderr, "\n  Parent: %s", crossref)
+					messagef("\n  Parent: %s", crossref)
 					for _, field := range []string{"title", "booktitle", "year", "editor", "publisher", "series"} {
 						if v := parent.Fields[field]; v != "" {
-							fmt.Fprintf(os.Stderr, "\n    %-12s: %s", field, v)
+							messagef("\n    %-12s: %s", field, v)
 						}
 					}
 					showChildrenCount(crossref)
 				}
 			}
 		}
-		fmt.Fprintf(os.Stderr, "\n")
+		messagef("\n")
 	}
 	options := TStringSetNew()
 	options.Add("0", "k")

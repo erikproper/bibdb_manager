@@ -22,7 +22,6 @@ import (
 	"fmt"
 	stdlib_html "html"
 	"io"
-	"os"
 	"regexp"
 	"strings"
 	"time"
@@ -300,7 +299,7 @@ func (l *TBibTeXLibrary) CheckTitleFromURL(entry *TBibTeXEntry) {
 
 	l.Warning("Entry %s has no title; fetched from URL: %s", entry.Key, fetchedTitle)
 
-	fmt.Fprint(os.Stderr, "QUESTION: Accept title (y), skip (n), or type alternative: ")
+	message("QUESTION: Accept title (y), skip (n), or type alternative: ")
 	for {
 		input := readStdinLine()
 		switch input {

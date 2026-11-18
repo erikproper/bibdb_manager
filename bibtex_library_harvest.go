@@ -58,7 +58,7 @@ func loadHarvestIgnoreKeys(path string) {
 func writeDefaultHarvestIgnoreKeys(path string) {
 	f, err := os.Create(path)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: could not write harvest ignore-keys file %s: %s\n", path, err)
+		messagef("Warning: could not write harvest ignore-keys file %s: %s\n", path, err)
 		return
 	}
 	defer f.Close()
@@ -354,19 +354,19 @@ func (l *TBibTeXLibrary) harvestFindDblpCandidates(e TBibTeXEntry, excludeDblpKe
 	// being matched, especially since the candidates themselves can be only loosely
 	// related (the title hash ignores case/hyphenation on purpose, to still catch
 	// near-duplicate titles).
-	fmt.Fprintf(os.Stderr, "\nSource entry:\n")
+	messagef("\nSource entry:\n")
 	printEntryFields(e.Fields[EntryTypeField], e.Key, e.Fields)
-	fmt.Fprintf(os.Stderr, "\n")
+	messagef("\n")
 	for i, c := range candidates {
-		fmt.Fprintf(os.Stderr, "  [%d] %s", i+1, c)
+		messagef("  [%d] %s", i+1, c)
 		if entry := dblpEntryFromStore(c); entry != nil {
 			for _, field := range []string{"title", "year", "author", "booktitle", "journal"} {
 				if v := entry.Fields[field]; v != "" {
-					fmt.Fprintf(os.Stderr, "\n      %-12s: %s", field, v)
+					messagef("\n      %-12s: %s", field, v)
 				}
 			}
 		}
-		fmt.Fprintln(os.Stderr)
+		messageln()
 	}
 	options := TStringSetNew()
 	options.Add("0", "k")
@@ -393,7 +393,7 @@ func (l *TBibTeXLibrary) harvestFindDblpCandidates(e TBibTeXEntry, excludeDblpKe
 
 // printEntryFields prints all non-empty fields of a TBibTeXEntry to stderr.
 func printEntryFields(entryType, key string, fields map[string]string) {
-	fmt.Fprintf(os.Stderr, "  @%s{%s,\n", entryType, key)
+	messagef("  @%s{%s,\n", entryType, key)
 	sorted := make([]string, 0, len(fields))
 	for f := range fields {
 		if f != EntryTypeField {
@@ -403,10 +403,10 @@ func printEntryFields(entryType, key string, fields map[string]string) {
 	sort.Strings(sorted)
 	for _, field := range sorted {
 		if v := fields[field]; v != "" {
-			fmt.Fprintf(os.Stderr, "    %-*s = {%s},\n", BibTeXFieldColumnWidth, field, v)
+			messagef("    %-*s = {%s},\n", BibTeXFieldColumnWidth, field, v)
 		}
 	}
-	fmt.Fprintf(os.Stderr, "  }\n")
+	messagef("  }\n")
 }
 
 
@@ -780,7 +780,7 @@ func (l *TBibTeXLibrary) runHarvestEntry(e TBibTeXEntry, syncState *TSyncState) 
 	}
 
 	// Always show the source entry first.
-	fmt.Fprintf(os.Stderr, "\nSource entry:\n")
+	messagef("\nSource entry:\n")
 	printEntryFields(e.Fields[EntryTypeField], e.Key, e.Fields)
 
 	// Step 1: key hint / alias match.
@@ -797,8 +797,8 @@ func (l *TBibTeXLibrary) runHarvestEntry(e TBibTeXEntry, syncState *TSyncState) 
 	// content or plain field additions resolve without asking) but, unlike before,
 	// may occasionally prompt when the two sides genuinely conflict.
 	if keyMatch := l.harvestKeyMatch(e); keyMatch != "" {
-		fmt.Fprintf(os.Stderr, "Key match:\n")
-		fmt.Fprint(os.Stderr, l.entryDisplayString(keyMatch))
+		messagef("Key match:\n")
+		message(l.entryDisplayString(keyMatch))
 		l.Progress("Already in library as %s", keyMatch)
 		finalKey := mergeAndCheck(addHarvestEntry(l, e), keyMatch)
 		l.fixMiscJournalField(finalKey, e.Fields)
@@ -825,8 +825,8 @@ func (l *TBibTeXLibrary) runHarvestEntry(e TBibTeXEntry, syncState *TSyncState) 
 	if dblpKey := e.Fields[DBLPField]; dblpKey != "" {
 		if canon := LookupDblpCanonical(dblpKey); canon != "" {
 			if matched := l.MapEntryKey(canon); l.EntryExists(matched) {
-				fmt.Fprintf(os.Stderr, "DBLP key match in library:\n")
-				fmt.Fprint(os.Stderr, l.entryDisplayString(matched))
+				messagef("DBLP key match in library:\n")
+				message(l.entryDisplayString(matched))
 				finalKey := mergeAndCheck(addHarvestEntry(l, e), matched)
 				maybeCollectKeyHint(l, e.Key, finalKey)
 				l.maybeHarvestPDF(e, finalKey)
@@ -844,10 +844,10 @@ func (l *TBibTeXLibrary) runHarvestEntry(e TBibTeXEntry, syncState *TSyncState) 
 
 	// Step 2: title match in library (may find multiple).
 	if titleMatches := l.harvestTitleMatches(e); len(titleMatches) > 0 {
-		fmt.Fprintf(os.Stderr, "Title match(es) in library:\n")
+		messagef("Title match(es) in library:\n")
 		for i, k := range titleMatches {
-			fmt.Fprintf(os.Stderr, "[%d]\n", i+1)
-			fmt.Fprint(os.Stderr, l.entryDisplayString(k))
+			messagef("[%d]\n", i+1)
+			message(l.entryDisplayString(k))
 		}
 		pick := l.askHarvestLibraryChoice(len(titleMatches))
 		if l.QuitWasRequested() {
@@ -928,14 +928,14 @@ func (l *TBibTeXLibrary) runHarvestEntry(e TBibTeXEntry, syncState *TSyncState) 
 		return "", false
 	case "m":
 		for {
-			fmt.Fprint(os.Stderr, "Merge into EP key: ")
+			message("Merge into EP key: ")
 			targetKey := readStdinLine()
 			canon := l.MapEntryKey(targetKey)
 			if !l.EntryExists(canon) {
-				fmt.Fprintf(os.Stderr, "  Entry %q not found in library — try again.\n", targetKey)
+				messagef("  Entry %q not found in library — try again.\n", targetKey)
 				continue
 			}
-			fmt.Fprint(os.Stderr, l.entryDisplayString(canon))
+			message(l.entryDisplayString(canon))
 			finalKey := mergeAndCheck(addHarvestEntry(l, e), canon)
 			maybeCollectKeyHint(l, e.Key, finalKey)
 			l.maybeHarvestPDF(e, finalKey)
@@ -1049,14 +1049,14 @@ func doHarvest(sourcePath string) {
 	if sourcePath == "" {
 		tmpFile, err := os.CreateTemp("", "harvest_*.bib")
 		if err != nil {
-			fmt.Fprintln(os.Stderr, "harvest: cannot create temp file:", err)
+			messageln("harvest: cannot create temp file:", err)
 			return
 		}
 		tmpPath = tmpFile.Name()
 		if _, err := io.Copy(tmpFile, os.Stdin); err != nil {
 			tmpFile.Close()
 			os.Remove(tmpPath)
-			fmt.Fprintln(os.Stderr, "harvest: cannot read stdin:", err)
+			messageln("harvest: cannot read stdin:", err)
 			return
 		}
 		tmpFile.Close()
@@ -1066,7 +1066,7 @@ func doHarvest(sourcePath string) {
 		if tty, err := os.Open("/dev/tty"); err == nil {
 			os.Stdin = tty
 		} else {
-			fmt.Fprintln(os.Stderr, "harvest: cannot open /dev/tty for interactive input:", err)
+			messageln("harvest: cannot open /dev/tty for interactive input:", err)
 			os.Remove(tmpPath)
 			return
 		}
