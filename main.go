@@ -54,7 +54,7 @@ var (
 	Reporting TInteraction
 )
 
-const AppVersion = "30.13"
+const AppVersion = "30.14"
 
 // Run-state flags consumed by the write tail in main.
 var (
@@ -4053,6 +4053,7 @@ flag.BoolVar(&cmdAlignBooktitleCountries, "align_booktitle_countries", false, "d
 	}
 
 	if cmdVersion {
+		resultln(AppVersion) // on stdout, for scripts (bib.common compares it)
 		endRun(0)
 	}
 
