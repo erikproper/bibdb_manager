@@ -19,7 +19,7 @@
  *
  * Creator: Henderik A. Proper (e.proper@acm.org), Luxembourg, in collaboration with Claude.ai
  *
- * Version of: 13.11.2026
+ * Version of: 19.11.2026
  *
  */
 
@@ -32,6 +32,7 @@ import (
 	"fmt"
 	"io"
 	"errors"
+	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -799,7 +800,7 @@ func doLoadDblpXml(args []string) error {
 
 // --- CLI: -update_dblp ---
 
-const dblpXMLDownloadURL = "https://dblp.uni-trier.de/xml/dblp.xml.gz"
+const dblpXMLDownloadURL = "https://dblp.org/xml/dblp.xml.gz"
 
 var reDblpXMLFilename = regexp.MustCompile(`dblp-\d{4}-\d{2}-\d{2}\.xml\.gz`)
 
@@ -877,10 +878,101 @@ func gzipFileAtomic(src, dst string) error {
 	return err
 }
 
-// doUpdateDblp imports a DBLP XML export that the user has downloaded by hand
-// into their Downloads folder. DBLP's site added a bot check that rejects
-// automated fetches, so dblp.xml.gz can no longer be pulled programmatically —
-// the user must fetch it in a browser first.
+// downloadDblpExport downloads the DBLP export from dblp_url into dlFolder as
+// dblp.xml.gz, via a .part file, and gives it the release's Last-Modified time,
+// which names the dated copy. It returns current = true, without downloading,
+// when that release is already imported.
+func downloadDblpExport(dlFolder string) (current bool, err error) {
+	client := &http.Client{} // no timeout: the export is over a gigabyte
+	head, err := http.NewRequest("HEAD", dblpURL, nil)
+	if err != nil {
+		return false, err
+	}
+	head.Header.Set("User-Agent", bibCheckHTTPUserAgent)
+	resp, err := client.Do(head)
+	if err != nil {
+		return false, err
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return false, fmt.Errorf("%s", resp.Status)
+	}
+	released, _ := http.ParseTime(resp.Header.Get("Last-Modified"))
+	if !released.IsZero() {
+		latest := "dblp-" + released.Format("2006-01-02") + ".xml.gz"
+		if readDblpCurrentXML() == latest {
+			messagef("Already have %s — nothing to do.\n", latest)
+			return true, nil
+		}
+	}
+
+	req, err := newBibCheckHTTPRequest(dblpURL)
+	if err != nil {
+		return false, err
+	}
+	resp, err = client.Do(req)
+	if err != nil {
+		return false, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return false, fmt.Errorf("%s", resp.Status)
+	}
+	if err := os.MkdirAll(dlFolder, 0755); err != nil {
+		return false, err
+	}
+	dest := filepath.Join(dlFolder, "dblp.xml.gz")
+	part := dest + ".part"
+	out, err := os.Create(part)
+	if err != nil {
+		return false, err
+	}
+	totalMB := 0
+	if resp.ContentLength > 0 {
+		totalMB = int(resp.ContentLength >> 20)
+	}
+	ticker := Library.NewProgressTicker("Downloading "+dblpURL+" (MB)", totalMB)
+	var written int64
+	buf := make([]byte, 1<<20)
+	for {
+		n, readErr := resp.Body.Read(buf)
+		if n > 0 {
+			if _, err = out.Write(buf[:n]); err != nil {
+				break
+			}
+			written += int64(n)
+			ticker.SetCount(int(written >> 20))
+		}
+		if readErr == io.EOF {
+			break
+		}
+		if readErr != nil {
+			err = readErr
+			break
+		}
+	}
+	if closeErr := out.Close(); err == nil {
+		err = closeErr
+	}
+	if err == nil && resp.ContentLength > 0 && written != resp.ContentLength {
+		err = fmt.Errorf("download incomplete: %d of %d bytes", written, resp.ContentLength)
+	}
+	if err != nil {
+		ticker.DoneQuiet()
+		os.Remove(part)
+		return false, err
+	}
+	ticker.Done()
+	if !released.IsZero() {
+		os.Chtimes(part, released, released) //nolint:errcheck
+	}
+	return false, os.Rename(part, dest)
+}
+
+// doUpdateDblp imports a DBLP XML export. With dblp_url set in the settings it
+// downloads the export first (downloadDblpExport); otherwise, or when that
+// fails, it expects one that the user downloaded by hand into their Downloads
+// folder (DBLP's site has at times rejected automated fetches).
 // The dated destination filename is derived from the download's mtime, so
 // re-running after a fresh manual download is detected as a new release; the
 // previous .xml.gz is left in place (files have distinct dated names).
@@ -890,11 +982,23 @@ func doUpdateDblp() error {
 		messagef("Could not determine your Downloads folder.\n")
 		return errReported
 	}
+	if dblpURL != "" {
+		current, err := downloadDblpExport(dlFolder)
+		if err != nil {
+			messagef("Could not download %s: %s\n", dblpURL, err)
+			messagef("Looking for a manual download in %s instead.\n", dlFolder)
+		} else if current {
+			return nil
+		}
+	}
 	sourcePath, info := findDblpDownload(dlFolder)
 	if sourcePath == "" {
-		messagef("DBLP no longer allows automated downloads.\n")
-		messagef("Please download %s manually in your browser,\n", dblpXMLDownloadURL)
+		messagef("No DBLP export (dblp.xml.gz) in %s.\n", dlFolder)
+		messagef("Please download %s in your browser,\n", dblpXMLDownloadURL)
 		messagef("save it to %s, then re-run -update_dblp.\n", dlFolder)
+		if dblpURL == "" {
+			messagef("(Or set dblp_url in the settings file to download it automatically.)\n")
+		}
 		return errReported
 	}
 

@@ -54,7 +54,7 @@ var (
 	Reporting TInteraction
 )
 
-const AppVersion = "30.16"
+const AppVersion = "30.17"
 
 // Run-state flags consumed by the write tail in main.
 var (
@@ -803,6 +803,7 @@ var (
 // Exits immediately if another instance already holds that lock.
 // The OS releases the lock automatically when the process exits.
 func flockPath(lockPath string) *os.File {
+	os.MkdirAll(filepath.Dir(lockPath), 0755) //nolint:errcheck // OpenFile reports a failure
 	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_WRONLY, 0600)
 	if err != nil {
 		messagef("Could not open lock file %s: %s\n", lockPath, err)
@@ -4016,7 +4017,7 @@ flag.BoolVar(&cmdAlignBooktitleCountries, "align_booktitle_countries", false, "d
 	flag.BoolVar(&cmdLoadDblpXml, "load_dblp_xml", false, "load a DBLP .xml.gz export into the local DBLP store")
 	flag.BoolVar(&cmdPushDblp, "push_dblp", false, "copy the local DBLP store to DBLP/ in the shared DB folder (Nextcloud)")
 	flag.BoolVar(&cmdRestoreDblp, "restore_dblp", false, "replace the local DBLP store with the copy in DBLP/ in the shared DB folder")
-	flag.BoolVar(&cmdUpdateDblp, "update_dblp", false, "import a manually downloaded DBLP XML export (dblp.xml.gz) found in your Downloads folder")
+	flag.BoolVar(&cmdUpdateDblp, "update_dblp", false, "import the DBLP XML export: downloaded from dblp_url (settings) when set, else found in your Downloads folder")
 	flag.BoolVar(&cmdRestoreKeyHints, "restore_key_hints", false, "restore key hints from a backup CSV, remapping old keys via key_oldies")
 	flag.StringVar(&restoreKeyHintsPath, "hints_csv", "", "path to the backup key_hints.csv for -restore_key_hints")
 	flag.BoolVar(&cmdDeleteGarbage, "delete_garbage", false, "delete DBLP trash folder contents and exit")

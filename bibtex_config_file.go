@@ -47,6 +47,9 @@ type TBibTeXFolders struct {
 	SharedDBFolder string `json:"shared_db_folder,omitempty"`
 	// BackupFolder holds the timestamped backups. Machine-local.
 	BackupFolder string `json:"backup_folder,omitempty"`
+	// DblpURL is where -update_dblp downloads the DBLP export from. When absent,
+	// -update_dblp expects the export in the Downloads folder.
+	DblpURL string `json:"dblp_url,omitempty"`
 
 	// Old keys (before 30.11): read once, when the new ones are absent, and
 	// dropped from the file.
@@ -79,6 +82,7 @@ var (
 	localDBFolder  = ""   // set by loadBibTeXFolders; default: the bibtex folder
 	sharedDBFolder = ""   // set by loadBibTeXFolders; default: the bibtex folder
 	backupFolder   = ""   // set by loadBibTeXFolders; default: libraryBase()+".backups/"
+	dblpURL        = ""   // set by loadBibTeXFolders; see doUpdateDblp
 	displayFile    = ""   // set by loadBibTeXFolders; see displayContent
 	displayCommand = ""   // set by loadBibTeXFolders; see displayContent
 	displayReopen  = true // set by loadBibTeXFolders; see displayContent
@@ -224,6 +228,7 @@ func loadBibTeXFolders(settingsPath string) {
 		f.BackupFolder = tildePath(backupFolder) // from a legacy .config
 	}
 	backupFolder = fill(&f.BackupFolder, libraryBase()+".backups/")
+	dblpURL = f.DblpURL
 	if f.DisplayFile != "" {
 		displayFile = expandHome(f.DisplayFile)
 	}
