@@ -347,7 +347,8 @@ func exportBibEntries() {
 func importBibEntriesReplace() {
 	path := tablesFilePath(BibEntriesFilePath)
 	upsert := `INSERT INTO bib_entries (entry_key, field, value) VALUES (?, ?, ?)
-	             ON CONFLICT(entry_key, field) DO UPDATE SET value = excluded.value`
+	             ON CONFLICT(entry_key, field) DO UPDATE SET value = excluded.value
+							 WHERE bib_entries.value <> excluded.value`
 	validate := func(f []string) bool { return len(f) >= 3 && f[0] != "" && f[1] != "" }
 	clearFn := func() { db.Exec(`DELETE FROM bib_entries`) }
 	n, ok := importTwoPhase(path, validate, clearFn, func(tx *sql.Tx, f []string) {

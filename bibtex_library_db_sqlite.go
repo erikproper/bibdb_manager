@@ -723,17 +723,18 @@ func finaliseWorkingDatabase() {
 		preCloseHook = nil
 	}
 
-	// Mark session closed and check whether anything real was written.
+	// Check whether anything real was written, then mark the session closed.
 	// total_changes() is cumulative for this connection; changesAtSessionOpen was
-	// recorded right after markWriteSessionOpen(). The close marker itself accounts
-	// for one more change, so if total_changes() == changesAtSessionOpen+1, only
-	// session markers were written — no need to copy the working DB back to home.
+	// recorded right after markWriteSessionOpen(). It is read before the close
+	// markers (two rows) are written: equal means only session markers were
+	// written — no need to copy the working DB back to home. (Upserts that store an
+	// unchanged value do not count: they update nothing, see bib_entries.)
 	var gen int64
 	if db != nil {
-		markWriteSessionClosed()
 		var totalChanges int64
 		db.QueryRow(`SELECT total_changes()`).Scan(&totalChanges)
-		if totalChanges <= changesAtSessionOpen+1 && !libraryPushNeeded {
+		markWriteSessionClosed()
+		if totalChanges <= changesAtSessionOpen && !libraryPushNeeded {
 			db.Close()
 			db = nil
 			return // nothing real was written; home DB is already up to date

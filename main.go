@@ -54,7 +54,7 @@ var (
 	Reporting TInteraction
 )
 
-const AppVersion = "30.14"
+const AppVersion = "30.16"
 
 // Run-state flags consumed by the write tail in main.
 var (
@@ -3951,6 +3951,7 @@ func main() {
 	}()
 
 	baseFlag := flag.String("base", "", "path/basename of the library (required)")
+	jobsFile := flag.String("jobs_file", "", "(test) run the commands in a file, one job per line, in one process")
 	flag.BoolVar(&forceWrite, "force_write", false, "force write even if unchanged")
 
 	flag.BoolVar(&cmdTrustHints, "trust_hints", false, "harvest: auto-accept key-hint matches without confirmation")
@@ -4189,44 +4190,11 @@ flag.BoolVar(&cmdAlignBooktitleCountries, "align_booktitle_countries", false, "d
 		maybeStartDblpTrashCleanup()
 	}
 
-	selectCommand().run(args)
-
-	if writeSessionOpenFailed {
-		stderrPrintf("\n")
-		endRun(1)
+	if *jobsFile != "" {
+		runJobsFromFile(*jobsFile)
+		return
 	}
-
-	Library.CheckDblpKeyMissingWarnings()
-
-	// Drain any author/editor superseded-values backlog this run produced, rather than
-	// leaving it as a separate manual step every command has to remember to trigger.
-	// Still interactive where a real judgment call is needed — doTriageAuthorMappings
-	// only prompts for cases it can't auto-resolve, and is a silent no-op when nothing
-	// is pending. Runs once here for every command, instead of being wired into each
-	// write path individually: only meaningful once a write session actually started
-	// (dbWriteSessionActive), and skipped if the user quit early — they asked to stop,
-	// so leave the backlog for the next run rather than pushing more questions at them.
-	if dbWriteSessionActive && !Library.QuitWasRequested() {
-		doTriageAuthorMappings()
-	}
-
-	// DB-primary (step 13.6 + 22.7): the bib file is never written during a normal run.
-	// Bib file writes happen only via -sync (full mode). All entry changes are already
-	// persisted to the working DB by setEntryField; finaliseWorkingDatabase flushes them home.
-	if (forceWrite || bibEntriesModified) && !skipBibDbRefresh {
-		clearTableDirty("bib_entries")
-		refreshBibDbTimestamp()
-	}
-
-	saveKeyNonDoublesToDb(&Library)
-
-	if !postCheckGate() {
-		dbInteraction.Warning("Post-check gate failed — home database not updated")
-		abandonWorkingDatabase()
-	} else {
-		finaliseWorkingDatabase()
-	}
-	stderrPrintf("\n")
+	runJob(selectCommand(), args)
 }
 
 // gracefulQuit runs the normal post-check and DB finalisation sequence, then
@@ -4234,14 +4202,7 @@ flag.BoolVar(&cmdAlignBooktitleCountries, "align_booktitle_countries", false, "d
 // resolution so that changes made earlier in the run are not lost.
 func gracefulQuit() {
 	forceCommitBibTransaction()
-	saveKeyNonDoublesToDb(&Library)
-
-	if !postCheckGate() {
-		dbInteraction.Warning("Post-check gate failed — home database not updated")
-		abandonWorkingDatabase()
-	} else {
-		finaliseWorkingDatabase()
-	}
+	saveJobWork()
 	endRun(0)
 }
 

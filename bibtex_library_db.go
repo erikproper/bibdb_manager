@@ -3410,7 +3410,8 @@ func closeEntry(entry *TBibTeXEntry) bool {
 				} else {
 					err = bibExec(
 						`INSERT INTO bib_entries (entry_key, field, value) VALUES (?, ?, ?)
-						   ON CONFLICT(entry_key, field) DO UPDATE SET value = excluded.value;`,
+						   ON CONFLICT(entry_key, field) DO UPDATE SET value = excluded.value
+							 WHERE bib_entries.value <> excluded.value;`,
 						entry.Key, field, value)
 				}
 				if err != nil {
@@ -3902,7 +3903,8 @@ func upsertBibEntryField(key, field, value string) {
 		}
 		err = bibExec(
 			`INSERT INTO bib_entries (entry_key, field, value) VALUES (?, ?, ?)
-			   ON CONFLICT(entry_key, field) DO UPDATE SET value = excluded.value;`,
+			   ON CONFLICT(entry_key, field) DO UPDATE SET value = excluded.value
+							 WHERE bib_entries.value <> excluded.value;`,
 			key, field, value)
 		if field == DBLPField {
 			// No delete of any prior dblp_key row for this entry before adding the new
