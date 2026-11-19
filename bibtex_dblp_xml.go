@@ -899,7 +899,8 @@ func downloadDblpExport(dlFolder string) (current bool, err error) {
 	}
 	released, _ := http.ParseTime(resp.Header.Get("Last-Modified"))
 	if !released.IsZero() {
-		latest := "dblp-" + released.Format("2006-01-02") + ".xml.gz"
+		// Local time, as doUpdateDblp names the copy from the file's mtime.
+		latest := "dblp-" + released.Local().Format("2006-01-02") + ".xml.gz"
 		if readDblpCurrentXML() == latest {
 			messagef("Already have %s — nothing to do.\n", latest)
 			return true, nil
@@ -1012,6 +1013,9 @@ func doUpdateDblp() error {
 	if FileExists(destPath) {
 		if readDblpCurrentXML() == latest {
 			messagef("Already have %s — nothing to do.\n", latest)
+			if err := os.Remove(sourcePath); err != nil {
+				messagef("Warning: could not remove %s: %s\n", sourcePath, err)
+			}
 			return nil
 		}
 		messagef("Found %s but import incomplete — re-importing...\n", latest)
