@@ -78,6 +78,7 @@ type (
 		LineageMap                 map[string]map[string]TLineageRecord    // (entry_key, field) → lineage; see bibtex_library_lineage.go
 		SourceSignatures           map[string]map[string]map[string]string // (entry_key, field, source) → last-delivered signature
 		DblpSourceData             TSourceFieldData                        // pre-computed delivery snapshot; set around MaybeMergeDBLPEntry calls
+		DblpSourcePersons          map[string][]TDblpJSONPerson            // role → DBLP persons of the entry being merged; set around MaybeMergeDBLPEntry calls
 		EntryFlags                 map[string]TStringSet                   // canonical key → set of flag strings
 		harvestNameAliases         bool
 		harvestCapturePDFFields    bool            // when true: file/local-url pass through for harvest PDF copy

@@ -993,6 +993,11 @@ func doUpdateDblp() error {
 		}
 	}
 	sourcePath, info := findDblpDownload(dlFolder)
+	if sourcePath == "" && dblpURL != "" && readDblpCurrentXML() != "" {
+		// The download failed (e.g. off-line), but a release is imported: go on with it.
+		messagef("Going on with the imported %s.\n", readDblpCurrentXML())
+		return nil
+	}
 	if sourcePath == "" {
 		messagef("No DBLP export (dblp.xml.gz) in %s.\n", dlFolder)
 		messagef("Please download %s in your browser,\n", dblpXMLDownloadURL)

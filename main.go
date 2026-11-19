@@ -54,7 +54,7 @@ var (
 	Reporting TInteraction
 )
 
-const AppVersion = "30.18"
+const AppVersion = "30.20"
 
 // Run-state flags consumed by the write tail in main.
 var (
@@ -1113,7 +1113,9 @@ outer:
 		if len(wNames) == len(lNames) {
 			var diffPos []int
 			for i := range normW {
-				if normW[i] != normL[i] {
+				// The same name in the other order ("Santos, Ricardo" / "Ricardo
+				// Santos") is no difference: the current form stays, no question.
+				if normW[i] != normL[i] && !sameNameOtherOrder(wNames[i], lNames[i]) {
 					diffPos = append(diffPos, i)
 				}
 			}

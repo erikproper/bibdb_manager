@@ -562,6 +562,37 @@ func (l *TBibTeXLibrary) resolveNamePair(key, field string, namePos, nameTotal, 
 	return currentName, false, false
 }
 
+// dblpSamePerson reports whether the DBLP person at position (1-based) of the
+// entry being merged is the contributor already at that position, so the names
+// need no resolving. A name shared by several people cannot answer this: looking
+// up an ORCID by name finds one of them, often not this one, and made the merge
+// flip such names on every run (Erik, 2026-11-19). So the evidence is, in order:
+//  1. DBLP gives an ORCID there and the contributor has one: equal means same.
+//  2. Otherwise, the two names differ only in order ("Jin Li" vs "Li, Jin"):
+//     keep the contributor in place.
+// Anything else is left to resolveNamePair.
+func (l *TBibTeXLibrary) dblpSamePerson(key, role string, position, names int, current, challenger string) bool {
+	persons := l.DblpSourcePersons[role]
+	if len(persons) != names || position < 1 || position > len(persons) {
+		return false
+	}
+	if orcid := persons[position-1].ORCID; orcid != "" {
+		var id string
+		bibQueryRow(`SELECT contributor_id FROM contributor_roles WHERE entry_key = ? AND role = ? AND position = ?`,
+			key, role, position).Scan(&id) //nolint:errcheck
+		if c := l.ContributorByID[id]; c != nil && c.ORCID != "" {
+			return c.ORCID == orcid
+		}
+	}
+	return sameNameOtherOrder(current, challenger)
+}
+
+// sameNameOtherOrder reports whether a and b are the same name, one as "Last, First"
+// and the other as "First Last".
+func sameNameOtherOrder(a, b string) bool {
+	return swapBibTeXNameFormat(a) == b || swapBibTeXNameFormat(b) == a
+}
+
 // resolveAuthorBreakdown interactively resolves per-name differences in an author/editor
 // challenge using resolveNamePair for each differing position. Returns the resolved author
 // string (or "" when breakdown is impossible due to different name counts), and a quit bool
@@ -604,6 +635,9 @@ func (l *TBibTeXLibrary) resolveAuthorBreakdown(key, field, challengeSource, cha
 			cID, cOK := resolveNameToContributorID(l, currentNames[i])
 			chID, chOK := resolveNameToContributorID(l, challengeNames[i])
 			same = cOK && chOK && cID == chID
+		}
+		if !same && challengeSource == "dblp" && contributorRolesActive {
+			same = l.dblpSamePerson(key, field, i+1, nChallenge, currentNames[i], challengeNames[i])
 		}
 		if !same {
 			diffPositions = append(diffPositions, i)

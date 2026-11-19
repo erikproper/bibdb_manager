@@ -320,6 +320,10 @@ func (l *TBibTeXLibrary) MaybeMergeDBLPEntry(DBLPKey, key string, allowURLFetch 
 	}
 
 	l.DblpSourceData = buildDblpSourceData(l, key, dblpEntry)
+	l.DblpSourcePersons = nil
+	if je := readDblpJSONEntry(DBLPKey); je != nil {
+		l.DblpSourcePersons = map[string][]TDblpJSONPerson{"author": je.Authors, "editor": je.Editors}
+	}
 	beginBibTransaction()
 	changed := l.MergeInMemoryDBLPEntry(dblpEntry, key)
 	// Apply per-author ORCID evidence from the DBLP store. When DBLP provides an
@@ -358,6 +362,7 @@ func (l *TBibTeXLibrary) MaybeMergeDBLPEntry(DBLPKey, key string, allowURLFetch 
 	}
 	commitBibTransaction()
 	l.DblpSourceData = TSourceFieldData{}
+	l.DblpSourcePersons = nil
 
 	if changed {
 		bibEntriesModified = true
