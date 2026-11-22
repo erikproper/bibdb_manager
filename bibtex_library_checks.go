@@ -1293,6 +1293,18 @@ func (l *TBibTeXLibrary) CheckCrossref(entry *TBibTeXEntry) {
 	if crossrefety == "" {
 		crossrefety = crossrefetyRAW
 	}
+	// A crossref by alias (a harvested bib file names the parent by its preferred
+	// alias, "society2008aswec"): the alias is a key hint, not a key_oldie, so
+	// MapEntryKey left it as it was and the check reported the target missing
+	// (2026-11-22). Resolve it through the hints, and store the library key.
+	if crossrefety != "" && !l.EntryExists(crossrefety) {
+		if hinted := l.MapEntryKey(l.HintToKey.GetValue(crossrefety)); hinted != "" && l.EntryExists(hinted) {
+			crossrefety = hinted
+		}
+	}
+	if crossrefety != crossrefetyRAW && crossrefety != "" && l.EntryExists(crossrefety) {
+		l.setEntryField(entry, "crossref", crossrefety)
+	}
 
 	if crossrefety == entry.Key {
 		l.ReportEntryWarning(entry.Key, "Found self-referencing crossref; cleaned up.")
