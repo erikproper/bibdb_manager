@@ -320,19 +320,16 @@ func (l *TBibTeXLibrary) MaybeMergeDBLPEntry(DBLPKey, key string, allowURLFetch 
 	}
 
 	l.DblpSourceData = buildDblpSourceData(l, key, dblpEntry)
-	l.DblpSourcePersons = nil
+	l.DblpSourcePersons, l.DblpSourceKey = nil, key
 	if je := readDblpJSONEntry(DBLPKey); je != nil {
 		l.DblpSourcePersons = map[string][]TDblpJSONPerson{"author": je.Authors, "editor": je.Editors}
 	}
 	beginBibTransaction()
 	changed := l.MergeInMemoryDBLPEntry(dblpEntry, key)
-	// Apply per-author ORCID evidence from the DBLP store. When DBLP provides an
-	// orcid= attribute on an <author> element in a publication entry, use it to
-	// correct any name-based mis-assignment and record the evidence in
-	// entry_contributor_names.orcid_used. The je (TDblpJSONEntry) is cheap to re-read
-	// because readDblpJSONEntry is cached within the run.
-	if je := readDblpJSONEntry(DBLPKey); je != nil {
-		applyDblpAuthorORCIDs(l, key, je)
+	// Decide every author/editor position with DBLP's persons as evidence, also in
+	// the fields the merge left unchanged (ARCHITECTURE.md 7.6).
+	if l.DblpSourcePersons != nil {
+		applyDblpIdentity(l, key)
 	}
 	if l.EntryFieldValueity(key, DBLPField) != DBLPKey {
 		changed = true
@@ -362,7 +359,7 @@ func (l *TBibTeXLibrary) MaybeMergeDBLPEntry(DBLPKey, key string, allowURLFetch 
 	}
 	commitBibTransaction()
 	l.DblpSourceData = TSourceFieldData{}
-	l.DblpSourcePersons = nil
+	l.DblpSourcePersons, l.DblpSourceKey = nil, ""
 
 	if changed {
 		bibEntriesModified = true

@@ -37,6 +37,7 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"runtime/debug"
 	"sort"
 	"strings"
 	"time"
@@ -151,13 +152,18 @@ func foreignKeyViolationsFound(context string) bool {
 // If the machine is too constrained, entryCache stays nil and callers fall back
 // to per-query DB reads.
 func initEntryCache() {
+	// Hand memory no longer in use back first (a DBLP import earlier in the run leaves
+	// gigabytes), and count only what is held: ms.Sys alone still includes the
+	// released memory, which made the run after an import go without the cache.
+	debug.FreeOSMemory()
 	var ms runtime.MemStats
 	runtime.ReadMemStats(&ms)
 	count := int64(countBibEntries())
 	const bytesPerEntry = 2048
 	estimatedBytes := count * bytesPerEntry
 	totalRAM := int64(systemTotalRAM())
-	if totalRAM > 0 && estimatedBytes > (totalRAM-int64(ms.Sys))/2 {
+	held := int64(ms.Sys - ms.HeapReleased)
+	if totalRAM > 0 && estimatedBytes > (totalRAM-held)/2 {
 		return
 	}
 
@@ -556,7 +562,7 @@ func ensureEntryContributorNamesTableExists() {
 		  FOREIGN KEY (entry_key, role, position)
 		      REFERENCES contributor_roles(entry_key, role, position) ON DELETE CASCADE
 		);`)
-	// dblp_key_used, used by applyDblpAuthorORCIDs, was for a long time only present on
+	// dblp_key_used, written by the identity decision (storeDecision), was for a long time only present on
 	// databases that had it added out-of-band — the CREATE TABLE above never had it.
 	// A genuinely fresh database (e.g. a new install, or a from-scratch test DB) would
 	// hit "no such column: dblp_key_used" on every DBLP-with-ORCID entry. Add it to
@@ -983,6 +989,12 @@ func upsertNameMapping(alias, name string) {
 	}
 	id, ok := Library.NameToContributorID[name]
 	if !ok {
+		// A name shared by several contributors ("Wang, Qi") cannot take an alias by
+		// name: it is not one person, and creating a contributor for it made an orphan
+		// on every start (step 23.2). The mapping stays in memory only.
+		if _, shared := Library.AmbiguousNameToContributorIDs[name]; shared {
+			return
+		}
 		id = Library.NewKey()
 		Library.ContributorByID[id] = &TContributor{Name: name}
 		Library.NameToContributorID[name] = id
@@ -1079,7 +1091,8 @@ func deleteNameMapping(alias string) {
 }
 
 // maybeMergeSpuriousContributors detects and merges contributors whose canonical
-// name appears as a non-canonical entry in another contributor's name list.
+// name appears as a non-canonical entry in another contributor's name list, or that
+// share a name; only when neither has an ORCID or DBLP key (step 23.2.3).
 // This repairs data produced by the transitivity-blind migration: chains like
 // A→B→C produced two contributors (B and C) instead of one; B's canonical
 // appears in C's name list, identifying B as spurious.
@@ -1095,9 +1108,11 @@ func maybeMergeSpuriousContributors() {
 		JOIN contributor_names cn ON cn.name = c1.name AND cn.id != c1.id
 		JOIN contributors c2 ON c2.id = cn.id
 		WHERE c2.name != c1.name
-		  -- Homonyms: different DBLP persons or ORCIDs are different people.
-		  AND NOT (COALESCE(c1.dblp_key, '') != '' AND COALESCE(c2.dblp_key, '') != '' AND c1.dblp_key != c2.dblp_key)
-		  AND NOT (COALESCE(c1.orcid, '') != '' AND COALESCE(c2.orcid, '') != '' AND c1.orcid != c2.orcid)
+		  -- Only contributors without an identity (step 23.2.3): one with an ORCID or
+		  -- DBLP key is told apart by the decisions per position (ARCHITECTURE.md 7.6).
+		  AND COALESCE(c1.dblp_key, '') = '' AND COALESCE(c2.dblp_key, '') = ''
+		  AND COALESCE(c1.orcid, '') = '' AND COALESCE(c2.orcid, '') = ''
+		  AND NOT EXISTS (SELECT 1 FROM contributor_orcids co WHERE co.contributor_id IN (c1.id, c2.id))
 		  AND NOT EXISTS (
 		        SELECT 1 FROM non_double_contributors ndc
 		        WHERE ndc.contributor_id_a = CASE WHEN c1.id < c2.id THEN c1.id ELSE c2.id END
@@ -1127,9 +1142,11 @@ func maybeMergeSpuriousContributors() {
 		FROM contributors c1
 		JOIN contributors c2 ON c1.name = c2.name AND c1.id < c2.id
 		WHERE 1 = 1
-		  -- Homonyms: different DBLP persons or ORCIDs are different people.
-		  AND NOT (COALESCE(c1.dblp_key, '') != '' AND COALESCE(c2.dblp_key, '') != '' AND c1.dblp_key != c2.dblp_key)
-		  AND NOT (COALESCE(c1.orcid, '') != '' AND COALESCE(c2.orcid, '') != '' AND c1.orcid != c2.orcid)
+		  -- Only contributors without an identity (step 23.2.3): one with an ORCID or
+		  -- DBLP key is told apart by the decisions per position (ARCHITECTURE.md 7.6).
+		  AND COALESCE(c1.dblp_key, '') = '' AND COALESCE(c2.dblp_key, '') = ''
+		  AND COALESCE(c1.orcid, '') = '' AND COALESCE(c2.orcid, '') = ''
+		  AND NOT EXISTS (SELECT 1 FROM contributor_orcids co WHERE co.contributor_id IN (c1.id, c2.id))
 		  AND NOT EXISTS (
 		        SELECT 1 FROM non_double_contributors ndc
 		        WHERE ndc.contributor_id_a = c1.id AND ndc.contributor_id_b = c2.id
@@ -1202,15 +1219,17 @@ func mergeContributorInDB(fromID, toID string) bool {
 	// Re-point entry_contributor_names rows that still reference fromID. This covers
 	// both the normal migration path and the case where contributor_roles was already
 	// updated to a different contributor (e.g. by ORCID re-assignment via
-	// applyDblpAuthorORCIDs) without a matching update to entry_contributor_names,
+	// applyDblpIdentity) without a matching update to entry_contributor_names,
 	// which would otherwise leave a dangling FK that blocks the DELETE below.
 	dbExecSave("merge_contributors: reassign entry_contributor_names",
 		`UPDATE entry_contributor_names SET contributor_id = ? WHERE contributor_id = ?`, toID, fromID)
 
-	// Move contributor_orcids as non-canonical additional ORCIDs for toID.
+	// Move contributor_orcids to toID as non-canonical additional ORCIDs. Re-pointed,
+	// not copied: orcid is the primary key, so a copy (INSERT OR IGNORE) collided with
+	// the row it copied and was skipped, and the CASCADE delete below then dropped
+	// fromID's ORCIDs (found 2026-11-19).
 	dbExecSave("merge_contributors: move contributor_orcids",
-		`INSERT OR IGNORE INTO contributor_orcids (orcid, contributor_id, is_canonical) `+
-			`SELECT orcid, ?, 0 FROM contributor_orcids WHERE contributor_id = ?`, toID, fromID)
+		`UPDATE contributor_orcids SET contributor_id = ?, is_canonical = 0 WHERE contributor_id = ?`, toID, fromID)
 
 	// If toID has no canonical ORCID but fromID does, promote it.
 	if toOrcid == "" && fromOrcid != "" {
@@ -1219,6 +1238,8 @@ func mergeContributorInDB(fromID, toID string) bool {
 		dbExecSave("merge_contributors: seed promoted ORCID",
 			`INSERT OR IGNORE INTO contributor_orcids (orcid, contributor_id, is_canonical) VALUES (?, ?, 1)`,
 			fromOrcid, toID)
+		dbExecSave("merge_contributors: mark promoted ORCID canonical",
+			`UPDATE contributor_orcids SET is_canonical = 1 WHERE orcid = ? AND contributor_id = ?`, fromOrcid, toID)
 	}
 
 	// Carry over ORCID enrichment records. contributor_orcid_seen has no FK
@@ -1396,7 +1417,7 @@ func maybeCleanupOrphanedContributors(l *TBibTeXLibrary) {
 	// before this function runs (loadMappingFiles → loadContributorORCIDsFromDB,
 	// called from openLibraryToUpdate before maybeCleanupOrphanedContributors) — so
 	// an orphan with a recorded ORCID/DBLP key leaves a stale map entry for the rest
-	// of the run if not cleared here. A later lookup (e.g. applyDblpAuthorORCIDs)
+	// of the run if not cleared here. A later lookup (e.g. applyDblpIdentity)
 	// then resolves to a contributor ID that no longer exists in contributors,
 	// and the next write through it hits a FOREIGN KEY violation.
 	for orcid, id := range l.ORCIDToContributorID {
@@ -1820,39 +1841,13 @@ func ensureOthersContributor(l *TBibTeXLibrary) {
 	upsertContributorNameToDB(id, "others")
 }
 
-// lookupEntryContributorID returns the recorded contributor ID for
-// (key, role, position) from entry_contributor_names when the stored name_used
-// matches name. Returns ("", false) if no matching record exists.
-//
-// Must read via the active transaction (bibQueryRow), not db.QueryRow directly —
-// see the matching comment in applyDblpAuthorORCIDs for the full rationale. This
-// is resolveContributorForPosition's step 1, called from
-// upsertContributorRolesForField, which runs inside the same large transaction
-// wrapping "Fixing DBLP entries" (beginBibTransaction in main.go). A plain
-// db.QueryRow only ever sees the pre-transaction committed state, so a
-// contributor merged away earlier in this same transaction (contributors row
-// deleted, entry_contributor_names repointed) still reads back here as the old,
-// now-nonexistent ID — and the write below (via bibExec → activeTx) correctly
-// sees the live, already-mutated state and rejects it: a real, deterministic FK
-// violation caused by this stale read, not by the data itself.
-func lookupEntryContributorID(key, role string, position int, name string) (string, bool) {
-	var storedID, storedName string
-	err := bibQueryRow(
-		`SELECT contributor_id, name_used FROM entry_contributor_names
-		 WHERE entry_key = ? AND role = ? AND position = ?`,
-		key, role, position).Scan(&storedID, &storedName)
-	if err != nil || storedName != name {
-		return "", false
-	}
-	return storedID, true
-}
-
 // coauthorInference returns the candidate ID that has the most entries in
 // contributor_roles shared with the already-resolved contributors in the same
 // (entry, role). Returns "" when no candidate has any shared entries.
-// Reads via bibQueryRow, not db.QueryRow — see the matching comment in
-// lookupEntryContributorID; this is resolveContributorForPosition's step 3,
-// called from the same transaction-wrapped context.
+// Reads via bibQueryRow, not db.QueryRow: it runs inside the large transaction
+// wrapping "Fixing DBLP entries", and a plain db.QueryRow only sees the state before
+// it (a contributor merged away earlier in the transaction would still read back).
+// Used by settleDecision for a shared name nothing else decides.
 func coauthorInference(candidates, resolvedSoFar []string) string {
 	if len(resolvedSoFar) == 0 {
 		return ""
@@ -1877,38 +1872,6 @@ func coauthorInference(candidates, resolvedSoFar []string) string {
 		}
 	}
 	return bestID
-}
-
-// resolveContributorForPosition implements the 4-step resolution hierarchy for
-// a contributor name at a specific (key, role, position):
-//
-//  1. Entry-specific override — look up entry_contributor_names.
-//  2. Global unambiguous — NameToContributorID has exactly one match.
-//  3. Co-author inference — pick the candidate with the most shared entries
-//     with already-resolved co-contributors in resolvedSoFar.
-//  4. Fallback — use the first ambiguous candidate and emit a warning.
-//
-// Returns ("", false) when name is entirely unknown (step 4 never triggers for
-// unknown names; the caller should create a new contributor in that case).
-func resolveContributorForPosition(l *TBibTeXLibrary, key, role string, position int, name string, resolvedSoFar []string) (string, bool) {
-	if id, ok := lookupEntryContributorID(key, role, position, name); ok {
-		return id, true
-	}
-	if id, ok := resolveNameToContributorID(l, name); ok {
-		return id, true
-	}
-	candidates := l.AmbiguousNameToContributorIDs[name]
-	if len(candidates) == 0 {
-		return "", false
-	}
-	if id := coauthorInference(candidates, resolvedSoFar); id != "" {
-		return id, true
-	}
-	l.ambiguousAssignmentCount[name]++
-	if _, seen := l.ambiguousAssignmentPick[name]; !seen {
-		l.ambiguousAssignmentPick[name] = candidates[0]
-	}
-	return candidates[0], true
 }
 
 // FlushAmbiguousAssignments reports any accumulated fallback contributor assignments as
@@ -3676,68 +3639,59 @@ func repairDirtyMappingTables() (entryFieldMappingsRepaired bool) {
 // entry_contributor_names rows for (key, role) with the names parsed from
 // value. An empty value deletes all rows for the role without inserting new
 // ones. Uses bibExec so writes participate in any active bib transaction.
+//
+// Each position's contributor comes from decideContributor (ARCHITECTURE.md 7.6),
+// decided before the old rows go, since the decision reads them (the contributor in
+// place, the entry's own record). During a DBLP merge, DBLP's persons are evidence.
 func upsertContributorRolesForField(l *TBibTeXLibrary, key, field, value string) {
-	dbExecSave("upsertContributorRolesForField: clear roles", `DELETE FROM contributor_roles WHERE entry_key = ? AND role = ?`, key, field)
-	dbExecSave("upsertContributorRolesForField: clear names", `DELETE FROM entry_contributor_names WHERE entry_key = ? AND role = ?`, key, field)
-	if value == "" {
-		setTableDate("contributor_roles", time.Now().UnixMicro())
-		return
-	}
-	value = normalizeEtAlTail(value) // §4.6 step 2: normalise "et al." tails
-	position := 0
-	var resolvedIDs []string
-	var newParts []string
-	anyWrapped := false
-	for _, name := range splitBibNameField(value) {
-		lc := strings.ToLower(name)
-		if lc == "et.al." || lc == "et al." {
-			continue
-		}
+	names := contributorFieldNames(value)
 
-		storeName := name
-		garbled := false
-		if isGarbledContributorName(name) {
-			if !strings.HasPrefix(name, "{") {
-				storeName = "{" + name + "}"
-				anyWrapped = true
-			}
-			garbled = true
-		}
-		newParts = append(newParts, storeName)
-
-		position++
-		var id string
-		if garbled {
-			var ok bool
-			id, ok = resolveNameToContributorID(l, storeName)
+	// Decide first.
+	ids := make([]string, len(names))
+	evs := make([]TPositionEvidence, len(names))
+	decisions := make([]TPositionDecision, len(names))
+	for i, n := range names {
+		if n.garbled {
+			id, ok := resolveNameToContributorID(l, n.name)
 			if !ok {
 				id = l.NewKey()
-				l.ContributorByID[id] = &TContributor{Name: storeName, Garbled: true}
-				l.NameToContributorID[storeName] = id
-				upsertGarbledContributorToDB(id, storeName)
-				upsertContributorNameToDB(id, storeName)
+				l.ContributorByID[id] = &TContributor{Name: n.name, Garbled: true}
+				l.NameToContributorID[n.name] = id
+				upsertGarbledContributorToDB(id, n.name)
+				upsertContributorNameToDB(id, n.name)
 			} else if c := l.ContributorByID[id]; c != nil {
 				c.Garbled = true
 			}
-		} else {
-			var resolved bool
-			id, resolved = resolveContributorForPosition(l, key, field, position, name, resolvedIDs)
-			if !resolved {
-				id = l.NewKey()
-				l.ContributorByID[id] = &TContributor{Name: name}
-				l.NameToContributorID[name] = id
-				upsertContributorToDB(id, name, "")
-				upsertContributorNameToDB(id, name)
-			}
+			ids[i] = id
+			continue
 		}
-		resolvedIDs = append(resolvedIDs, id)
+		evs[i] = l.positionEvidence(key, field, i+1, len(names), n.name)
+		decisions[i] = l.decideContributor(evs[i])
+		inPlace := contributorInPlace(key, field, i+1)
+		ids[i] = l.settleDecision(evs[i], &decisions[i], ids[:i])
+		l.reportMove(evs[i], inPlace, ids[i], decisions[i])
+	}
+
+	// Then write.
+	dbExecSave("upsertContributorRolesForField: clear roles", `DELETE FROM contributor_roles WHERE entry_key = ? AND role = ?`, key, field)
+	dbExecSave("upsertContributorRolesForField: clear names", `DELETE FROM entry_contributor_names WHERE entry_key = ? AND role = ?`, key, field)
+	anyWrapped := false
+	var newParts []string
+	for i, n := range names {
+		newParts = append(newParts, n.name)
+		anyWrapped = anyWrapped || n.wrapped
 		dbExecSave("upsertContributorRolesForField: insert role",
 			`INSERT OR IGNORE INTO contributor_roles (entry_key, role, position, contributor_id) VALUES (?, ?, ?, ?)`,
-			key, field, position, id)
-		if contrib := l.ContributorByID[id]; contrib != nil && storeName != contrib.Name {
-			dbExecSave("upsertContributorRolesForField: insert name_used",
-				`INSERT OR IGNORE INTO entry_contributor_names (entry_key, role, position, contributor_id, name_used) VALUES (?, ?, ?, ?, ?)`,
-				key, field, position, id, storeName)
+			key, field, i+1, ids[i])
+		switch {
+		case !n.garbled && l.worthStoring(evs[i], decisions[i]):
+			storeDecision(evs[i], decisions[i])
+		case n.garbled:
+			if contrib := l.ContributorByID[ids[i]]; contrib != nil && n.name != contrib.Name {
+				dbExecSave("upsertContributorRolesForField: insert name_used",
+					`INSERT OR IGNORE INTO entry_contributor_names (entry_key, role, position, contributor_id, name_used) VALUES (?, ?, ?, ?, ?)`,
+					key, field, i+1, ids[i], n.name)
+			}
 		}
 	}
 	// When any name was garble-wrapped, register the original field value as an alias
@@ -3745,90 +3699,11 @@ func upsertContributorRolesForField(l *TBibTeXLibrary, key, field, value string)
 	// point to the new canonical wrapped form.  This prevents winner-mismatch and
 	// ambiguous-alias warnings on subsequent checks.
 	if anyWrapped {
-		if newValue := strings.Join(newParts, " and "); newValue != value {
+		if value, newValue := normalizeEtAlTail(value), strings.Join(newParts, " and "); newValue != value {
 			l.UpdateEntryFieldAlias(key, field, value, newValue)
 		}
 	}
 	setTableDate("contributor_roles", time.Now().UnixMicro())
-}
-
-// applyDblpAuthorORCIDs uses the per-author ORCID data from a TDblpJSONEntry to:
-//  1. Re-assign contributor_roles when the ORCID-identified contributor differs from
-//     the name-based assignment (ORCID takes priority as a more precise identifier).
-//  2. Record orcid_used evidence in entry_contributor_names for every author/editor
-//     whose DBLP entry carries an ORCID, regardless of whether a re-assignment occurred.
-//
-// Called immediately after MergeInMemoryDBLPEntry so the name-based assignment is
-// already in place and can be corrected here.
-func applyDblpAuthorORCIDs(l *TBibTeXLibrary, key string, je *TDblpJSONEntry) {
-	process := func(role string, persons []TDblpJSONPerson) {
-		for i, p := range persons {
-			if p.ORCID == "" {
-				continue
-			}
-			position := i + 1
-			nameLatex := dblpPersonNameToLaTeX(p.Name)
-
-			// What contributor is currently assigned to this position? Must read via
-			// the active transaction (bibQueryRow), not db.QueryRow directly — this
-			// runs inside the single large transaction wrapping "Fixing DBLP entries"
-			// (beginBibTransaction in main.go), and a plain db.QueryRow only ever sees
-			// the pre-transaction committed state, not writes already made earlier in
-			// this same transaction (e.g. a contributor merge). Reading through it
-			// returned a stale contributor_id for an already-merged-away contributor;
-			// the write below (via bibExec → activeTx) then correctly saw the live,
-			// already-mutated state and rejected it — a real, deterministic FK
-			// violation caused by this read, not by the data.
-			var currentID string
-			bibQueryRow(`SELECT contributor_id FROM contributor_roles WHERE entry_key = ? AND role = ? AND position = ?`,
-				key, role, position).Scan(&currentID) //nolint:errcheck
-			if currentID == "" {
-				continue // no role record yet — nothing to annotate
-			}
-
-			targetID := l.ORCIDToContributorID[p.ORCID]
-			if targetID != "" && targetID != currentID {
-				if _, exists := l.ContributorByID[targetID]; !exists {
-					// ORCIDToContributorID points at a contributor that no longer exists
-					// (a merge absorbed it without fully redirecting this ORCID) — using
-					// it would fail contributor_roles'/entry_contributor_names' FK on
-					// contributors(id). Fall back to the already-valid currentID instead
-					// of failing the whole write; the stale map entry is the real bug and
-					// belongs in the merge path, not here.
-					dbInteraction.Warning("applyDblpAuthorORCIDs: ORCID %s maps to unknown contributor %s (stale merge?) — keeping %s for %s", p.ORCID, targetID, currentID, key)
-				} else {
-					// ORCID identifies a different contributor — re-assign.
-					dbExecSave("applyDblpAuthorORCIDs: reassign role",
-						`UPDATE contributor_roles SET contributor_id = ? WHERE entry_key = ? AND role = ? AND position = ?`,
-						targetID, key, role, position)
-					currentID = targetID
-				}
-			}
-
-			// Upsert the evidence record with orcid_used. Alias defaults to the
-			// DBLP name form; if a row already exists, update orcid_used and
-			// contributor_id (in case of re-assignment above).
-			if nameLatex == "" {
-				if c := l.ContributorByID[currentID]; c != nil {
-					nameLatex = c.Name
-				}
-			}
-			personDblpKey := ""
-			if c := l.ContributorByID[currentID]; c != nil {
-				personDblpKey = c.DblpKey
-			}
-			dbExecSave("applyDblpAuthorORCIDs: upsert evidence",
-				`INSERT INTO entry_contributor_names (entry_key, role, position, contributor_id, name_used, orcid_used, dblp_key_used) `+
-					`VALUES (?, ?, ?, ?, ?, ?, ?) `+
-					`ON CONFLICT(entry_key, role, position) DO UPDATE SET `+
-					`contributor_id = excluded.contributor_id, `+
-					`orcid_used = excluded.orcid_used, `+
-					`dblp_key_used = COALESCE(excluded.dblp_key_used, dblp_key_used)`,
-				key, role, position, currentID, nameLatex, p.ORCID, personDblpKey)
-		}
-	}
-	process("author", je.Authors)
-	process("editor", je.Editors)
 }
 
 // Outside a transaction it compares the old cache value and only marks

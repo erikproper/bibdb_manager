@@ -54,7 +54,7 @@ var (
 	Reporting TInteraction
 )
 
-const AppVersion = "30.20"
+const AppVersion = "30.36"
 
 // Run-state flags consumed by the write tail in main.
 var (
@@ -1129,6 +1129,10 @@ outer:
 					markKept(p.key, p.field, p.superseded)
 					continue
 				}
+				if _, ok := Library.autoResolveByORCIDSide(p.key, p.field, wNames[pos], lNames[pos]); ok {
+					retireSuperseded(p.key, p.field, p.superseded)
+					continue
+				}
 				Library.Progress("\nEntry: %s / field: %s\n  Current:    %s\n  Superseded: %s", p.key, p.field, winner, p.superseded)
 				resultName, quit, mapped := Library.resolveNamePair(p.key, p.field, pos+1, len(wNames), 1, 1, wNames[pos], lNames[pos])
 				if quit {
@@ -1212,6 +1216,21 @@ outer:
 			break outer
 		}
 	}
+	reportORCIDSideAutoResolves()
+}
+
+// reportORCIDSideAutoResolves reports the name questions autoResolveByORCIDSide
+// answered, with the details in orcid_side_auto_resolves.log.
+func reportORCIDSideAutoResolves() {
+	lines := Library.orcidSideAutoResolves
+	if len(lines) == 0 {
+		return
+	}
+	logPath := libraryBase() + tablesFolderSuffix + "/orcid_side_auto_resolves.log"
+	os.MkdirAll(libraryBase()+tablesFolderSuffix, 0o755)                 //nolint:errcheck
+	os.WriteFile(logPath, []byte(strings.Join(lines, "\n")+"\n"), 0o644) //nolint:errcheck
+	Library.Progress("  Answered by the name with the ORCID: %d name question(s) (see orcid_side_auto_resolves.log).", len(lines))
+	Library.orcidSideAutoResolves = nil
 }
 
 func doTriageContributorAliases() {
@@ -2304,19 +2323,6 @@ func doUpsertDblpEntries() {
 	if openLibraryToUpdate() {
 		Library.ReadKeyNonDoublesFile()
 
-		// Load DBLP person maps once for contributor role cross-checking during
-		// entry processing. If unavailable (no dblp import yet), the check is skipped.
-		pm, pmOk := loadDblpPersonMaps()
-		keyToNames := make(map[string][]string)
-		if pmOk {
-			for name, key := range pm.nameToKey {
-				if key != "" {
-					keyToNames[key] = append(keyToNames[key], name)
-				}
-			}
-		}
-		contribPersonEntries := make(map[string]map[string]map[string]bool)
-		contribExistingKey := make(map[string]string)
 
 		// Collect bookish and non-bookish keys separately so bookish entries are
 		// processed first — proceedings/books establish venue field mappings that
@@ -2382,12 +2388,6 @@ func doUpsertDblpEntries() {
 					dblpUpdated++
 				}
 				doC3Checks(key)
-				if pmOk {
-					if normKey := normalizeDblpKey(dblpVal); normKey != "" {
-						accumulateContributorMatchesFromEntry(key, normKey, pm,
-							contribPersonEntries, contribExistingKey)
-					}
-				}
 			}
 		}
 		for _, key := range bookishKeys {
@@ -2464,24 +2464,8 @@ func doUpsertDblpEntries() {
 			Library.Progress("  Auto-accepted DBLP name form: %d (see dblp_name_form_auto_accepts.log)", len(Library.dblpNameFormAutoAccepts))
 			Library.dblpNameFormAutoAccepts = nil
 		}
-		if pmOk && len(contribPersonEntries) > 0 {
-			logPath := libraryBase() + tablesFolderSuffix + "/dblp_contributor_splits.log"
-			os.MkdirAll(libraryBase()+tablesFolderSuffix, 0o755) //nolint:errcheck
-			var splitLog *os.File
-			if f, err := os.Create(logPath); err == nil {
-				splitLog = f
-				fmt.Fprintf(splitLog, "DBLP contributor role cross-check splits on %s\n\n",
-					time.Now().Format("2006-01-02 15:04:05"))
-			}
-			n := applyContributorMatchesFromEntries(&Library, pm, keyToNames,
-				contribPersonEntries, contribExistingKey, splitLog)
-			if splitLog != nil {
-				splitLog.Close()
-			}
-			if n > 0 {
-				Library.Progress("  DBLP contributor role cross-check: %d assignment(s)/split(s) (see dblp_contributor_splits.log).", n)
-			}
-		}
+		// The role cross-check (accumulate/applyContributorMatchesFromEntries) is gone
+		// (step 23.2.3): the DBLP merge decides the positions (ARCHITECTURE.md 7.6).
 		Library.Progress("  Absorbing DBLP name data...")
 		absorbDblpNamesCore()
 		Library.FlushAmbiguousAssignments()
@@ -2755,8 +2739,12 @@ func addDoiEntry(entry *TBibTeXEntry, label string) string {
 	}
 	key := Library.NewKey()
 	Library.SetEntryType(key, entryType)
+	// Only the fields this entry type allows: Crossref gives e.g. publisher and the
+	// (special issue) editor for a journal article, which the checks would then ask
+	// about one by one.
+	allowed := BibTeXAllowedEntryFields[entryType].Set()
 	for field, value := range entry.Fields {
-		if field == EntryTypeField || !BibTeXAllowedFields.Contains(field) {
+		if field == EntryTypeField || !allowed.Contains(field) {
 			continue
 		}
 		Library.SetEntryFieldValue(key, field, Library.NormaliseFieldValue(field, value))
@@ -2854,12 +2842,13 @@ func runWatch() bool {
 	}
 
 	ticker := Library.NewProgressTicker("Watching", len(entries))
-	totalAdded := 0
+	totalAdded, watched := 0, 0
 
 	for _, w := range entries {
 		if ticker.Step() {
 			break
 		}
+		watched++
 		keys := watchEntryDblpKeys(w)
 
 		label := w.Tag
@@ -2924,6 +2913,10 @@ func runWatch() bool {
 		if Online && !Library.QuitWasRequested() {
 			runWatchORCID(w, label)
 		}
+	}
+	if Library.QuitWasRequested() {
+		Library.Progress("Watching stopped after %d of %d, added %d entries.", watched, len(entries), totalAdded)
+		return true
 	}
 	ticker.Done()
 	Library.Progress("Watched %d, added %d entries.", len(entries), totalAdded)
@@ -3875,6 +3868,7 @@ var (
 	cmdEnrichContributorData    bool // -enrich_contributor_data: run full contributor enrichment pipeline
 	cmdHomework                 bool // -homework: run all pending homework in priority order
 	cmdMergeContributors     bool // -merge_contributors: merge two contributors into one
+	cmdMergeOrcidDuplicates  bool // -merge_orcid_duplicates: merge contributors sharing an ORCID, or by ORCID's duplicates
 	cmdAddDblpEntry   bool
 	cmdAddDblpEntries bool
 	cmdWatch             bool
@@ -3941,7 +3935,7 @@ func main() {
 	// the main goroutine's own db use — observed live as a storm of "database is
 	// locked" errors followed by a nil-pointer panic once finaliseWorkingDatabase
 	// closed out from under a still-running main-goroutine query. So this handler
-	// only sets quitRequested and returns; every outer scan loop already checks
+	// only sets the interrupted flag and returns; every outer scan loop already checks
 	// QuitWasRequested() at the top of each iteration (that's what quitNow()'s
 	// v29.29 unification was for), so the main goroutine unwinds itself to main()'s
 	// own cleanup tail on its own — the only goroutine ever touching db.
@@ -3950,7 +3944,7 @@ func main() {
 	go func() {
 		<-sigCh
 		stderrPrintf("\nInterrupted — finishing the current step, then committing and saving...\n")
-		Reporting.quitRequested = true
+		interrupted.Store(true)
 	}()
 
 	baseFlag := flag.String("base", "", "path/basename of the library (required)")
@@ -3985,6 +3979,7 @@ func main() {
 	flag.BoolVar(&cmdHomework, "homework", false, "run all pending homework in priority order: enrich contributors, triage superseded values, fix DBLP candidates, fix duplicates")
 	flag.BoolVar(&cmdMatchedOrcidDataOnly, "matched_orcid_data_only", false, "with -enrich_contributor_data: skip ORCID challenges in step 3, leaving them as homework")
 	flag.BoolVar(&cmdMergeContributors, "merge_contributors", false, "merge one or more contributors into another: -merge_contributors <from...> <into>")
+	flag.BoolVar(&cmdMergeOrcidDuplicates, "merge_orcid_duplicates", false, "merge contributors that share an ORCID, or whose ORCIDs ORCID itself merged (step 4 of -enrich_contributor_data)")
 	flag.BoolVar(&cmdAddDblpEntries, "update_all_dblp_entries", false, "update all library entries that have a DBLP key with fresh DBLP data")
 	flag.BoolVar(&cmdFixCandidates, "fix_candidates", false, "interactively link library entries without a DBLP key to DBLP records")
 	flag.BoolVar(&cmdFix, "fix", false, "apply full per-entry checks when combined with -sync or -harvest")

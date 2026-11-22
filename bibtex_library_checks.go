@@ -512,6 +512,7 @@ func splitOnUnbracedSpaces(s string) []string {
 // "John {Smith Kline}" → "smithkline".
 // Name fallback chain: author → editor → crossref parent author/editor →
 // publisher → crossref parent publisher → DBLP venue code (second-to-last segment).
+// A publisher gives its first word ("Springer Nature Switzerland" → "springer").
 // Year falls back to the crossref parent's year if the entry has none.
 // Warns and returns "" if surname or year cannot be determined after all fallbacks.
 func (l *TBibTeXLibrary) deriveAliasBase(entry *TBibTeXEntry) string {
@@ -534,11 +535,14 @@ func (l *TBibTeXLibrary) deriveAliasBase(entry *TBibTeXEntry) string {
 			nameField = parent.FieldValue("editor")
 		}
 	}
+	fromPublisher := false
 	if nameField == "" {
 		nameField = entry.FieldValue("publisher")
+		fromPublisher = nameField != ""
 	}
 	if nameField == "" && parent != nil {
 		nameField = parent.FieldValue("publisher")
+		fromPublisher = nameField != ""
 	}
 	// Last resort: venue code from the DBLP key (second-to-last segment,
 	// e.g. "bled" from "conf/bled/2006").
@@ -565,12 +569,25 @@ func (l *TBibTeXLibrary) deriveAliasBase(entry *TBibTeXEntry) string {
 	first := strings.TrimSpace(strings.Split(nameField, " and ")[0])
 
 	var surnameRaw string
-	if idx := strings.Index(first, ", "); idx >= 0 {
+	if idx := strings.Index(first, ", "); fromPublisher {
+		// A publisher is an organisation, not a person: its first word names it
+		// ("Springer Nature Switzerland" → "springer", "Cambridge University Press" →
+		// "cambridge"); the last word gave "switzerland" and "press" (2026-11-22).
+		tokens := splitOnUnbracedSpaces(first)
+		if len(tokens) > 1 && strings.EqualFold(tokens[0], "The") {
+			tokens = tokens[1:]
+		}
+		if len(tokens) == 0 {
+			l.Warning(WarningCannotDeriveAliasNoName)
+			return ""
+		}
+		surnameRaw = tokens[0]
+	} else if idx >= 0 {
 		surnameRaw = first[:idx]
 	} else {
 		tokens := splitOnUnbracedSpaces(first)
 		if len(tokens) == 0 {
-			l.Warning(WarningCannotDeriveAliasNoName, entry.Key)
+			l.Warning(WarningCannotDeriveAliasNoName)
 			return ""
 		}
 		surnameRaw = tokens[len(tokens)-1]
@@ -1486,14 +1503,16 @@ func (l *TBibTeXLibrary) CheckNeedToSplitBookishEntry(keyRAW string) string {
 				// split-off parent does not silently duplicate a known publication.
 				l.CheckNeedToMergeForEqualTitles(crossrefKey)
 				resolvedCrossrefKey := l.MapEntryKey(crossrefKey)
+				if into, merged := l.tempKeyMergedInto[crossrefKey]; merged {
+					resolvedCrossrefKey = l.MapEntryKey(into)
+				}
 				if resolvedCrossrefKey != crossrefKey {
-					// crossrefKey lost the title-duplicate merge (it's KeyIsTemporary, so
-					// MergeEntries deletes it outright without registering a key_oldie —
-					// MapEntryKey has nothing to resolve through). key's crossref field
-					// was already written above with the now-deleted temp key; without this
-					// rewrite it is left permanently dangling — CheckCrossref would report
-					// "Crossref target does not exist" forever, since the temp key has no
-					// alias trail to ever recover through. Repoint at the survivor instead.
+					// crossrefKey lost the title-duplicate merge. It is KeyIsTemporary, so
+					// MergeEntries deletes it outright without a key_oldie, and MapEntryKey
+					// cannot resolve it; MergeEntries notes the survivor in
+					// tempKeyMergedInto instead (before 30.36 it did not, and the child kept
+					// a crossref to a key that no longer existed: "Crossref target ... does
+					// not exist", 2026-11-22). Repoint at the survivor.
 					l.SetEntryFieldValue(key, "crossref", resolvedCrossrefKey)
 				}
 				crossrefKey = resolvedCrossrefKey

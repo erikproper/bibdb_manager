@@ -26,16 +26,39 @@ import (
 	"time"
 )
 
-const (
-	orcidAPIBase = "https://pub.orcid.org/v3.0"
-	httpTimeout  = 10 * time.Second
-)
+const httpTimeout = 10 * time.Second
+
+// orcidAPIBase is a variable so that a test can point it at a fake server.
+var orcidAPIBase = "https://pub.orcid.org/v3.0"
+
+// reORCIDiD finds an ORCID iD, e.g. in the Location of a deprecated record's 301.
+var reORCIDiD = regexp.MustCompile(`\d{4}-\d{4}-\d{4}-\d{3}[\dX]`)
+
+// newORCIDHTTPClient does not follow redirects: ORCID answers a deprecated iD with
+// 301 to its primary record, and following it would store the primary's data under
+// the deprecated iD (step 23.3).
+func newORCIDHTTPClient() *http.Client {
+	return &http.Client{
+		Timeout:       httpTimeout,
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
+}
+
+// isORCIDRedirect reports whether resp is a redirect (a deprecated iD).
+func isORCIDRedirect(resp *http.Response) bool {
+	switch resp.StatusCode {
+	case 301, 302, 303, 307, 308:
+		return true
+	}
+	return false
+}
 
 // orcidPersonResult holds name information extracted from an ORCID /person response.
 type orcidPersonResult struct {
 	CreditName   string   // preferred published name (natural order, may be empty)
 	DeclaredName string   // "Family, Given" from the ORCID name record (may be empty)
 	OtherNames   []string // additional name forms from other-names list
+	PrimaryORCID string   // set for a deprecated iD: the record it was merged into
 }
 
 // orcidFetchStatus classifies the outcome of a fetchORCIDPerson call.
@@ -46,6 +69,7 @@ const (
 	orcidFetchNotFound                            // 404/410: profile absent or deactivated
 	orcidFetchRateLimited                         // 429: back off and retry later
 	orcidFetchError                               // other transient error
+	orcidFetchDeprecated                          // 301: a duplicate; result.PrimaryORCID names the primary
 )
 
 // fetchORCIDPersonWithStatus fetches the ORCID person record and returns both the
@@ -58,13 +82,17 @@ func fetchORCIDPersonWithStatus(orcid string) (*orcidPersonResult, orcidFetchSta
 		return nil, orcidFetchError
 	}
 	req.Header.Set("Accept", "application/json")
-	client := &http.Client{Timeout: httpTimeout}
-	resp, err := client.Do(req)
+	resp, err := newORCIDHTTPClient().Do(req)
 	if err != nil {
 		return nil, orcidFetchError
 	}
 	defer resp.Body.Close()
 	switch {
+	case isORCIDRedirect(resp):
+		if primary := reORCIDiD.FindString(resp.Header.Get("Location")); primary != "" && primary != orcid {
+			return &orcidPersonResult{PrimaryORCID: primary}, orcidFetchDeprecated
+		}
+		return nil, orcidFetchError
 	case resp.StatusCode == 200:
 		// handled below
 	case resp.StatusCode == 429:
@@ -159,11 +187,16 @@ type orcidCacheEntry struct {
 	FetchedAt      time.Time         `json:"fetched_at"`
 	Works          []orcidCachedWork `json:"works,omitempty"`
 	WorksFetchedAt time.Time         `json:"works_fetched_at,omitempty"`
+	PrimaryORCID   string            `json:"primary_orcid,omitempty"` // a deprecated iD's primary record
 }
 
 // loadCachedORCIDPerson reads a cached person record from disk.
 // Returns nil when the cache file is absent or unreadable.
 func loadCachedORCIDPerson(orcid string) *orcidCacheEntry {
+	if e := readOrcidRecord(orcid); e != nil {
+		return e
+	}
+	// Not in the table: a JSON file written while there was no store.
 	path := orcidCachePath(orcid)
 	if path == "" {
 		return nil
@@ -176,51 +209,35 @@ func loadCachedORCIDPerson(orcid string) *orcidCacheEntry {
 	if err := json.Unmarshal(data, &e); err != nil {
 		return nil
 	}
+	if db := orcidStoreDB(); db != nil {
+		writeOrcidRecord(db, orcid, &e) //nolint:errcheck
+	}
 	return &e
 }
 
 // saveCachedORCIDPerson writes a person record to the disk cache.
 func saveCachedORCIDPerson(orcid string, result *orcidPersonResult) {
-	path := orcidCachePath(orcid)
-	if path == "" {
-		return
+	e := orcidCacheEntry{}
+	if old := loadCachedORCIDPerson(orcid); old != nil {
+		e.Works, e.WorksFetchedAt = old.Works, old.WorksFetchedAt // keep the works
 	}
-	dir := path[:strings.LastIndex(path, "/")]
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return
-	}
-	e := orcidCacheEntry{
-		CreditName:   result.CreditName,
-		DeclaredName: result.DeclaredName,
-		OtherNames:   result.OtherNames,
-		FetchedAt:    time.Now().UTC(),
-	}
-	data, err := json.Marshal(e)
-	if err != nil {
-		return
-	}
-	os.WriteFile(path, data, 0644) //nolint:errcheck
+	e.CreditName, e.DeclaredName, e.OtherNames = result.CreditName, result.DeclaredName, result.OtherNames
+	e.PrimaryORCID = result.PrimaryORCID
+	e.FetchedAt = time.Now().UTC()
+	saveOrcidRecord(orcid, &e)
 }
 
 // saveCachedORCIDWorks updates the works fields in the cache entry for orcid.
 // Loads the existing entry (preserving person data), sets Works and WorksFetchedAt,
 // and writes back. Works may be nil or empty when the profile has no public works.
 func saveCachedORCIDWorks(orcid string, works []orcidCachedWork) {
-	path := orcidCachePath(orcid)
-	if path == "" {
-		return
-	}
-	var e orcidCacheEntry
-	if data, err := os.ReadFile(path); err == nil {
-		json.Unmarshal(data, &e) //nolint:errcheck
+	e := orcidCacheEntry{}
+	if old := loadCachedORCIDPerson(orcid); old != nil {
+		e = *old
 	}
 	e.Works = works
 	e.WorksFetchedAt = time.Now().UTC()
-	data, err := json.Marshal(e)
-	if err != nil {
-		return
-	}
-	os.WriteFile(path, data, 0644) //nolint:errcheck
+	saveOrcidRecord(orcid, &e)
 }
 
 // getORCIDPerson returns the ORCID person record for orcid, using the disk cache
@@ -247,6 +264,9 @@ func getORCIDPerson(orcid string) *orcidPersonResult {
 		// Permanently absent — save empty markers for both person and works so future
 		// runs skip both network calls without retrying known-broken profiles.
 		saveCachedORCIDPerson(orcid, &orcidPersonResult{})
+		saveCachedORCIDWorks(orcid, nil)
+	case orcidFetchDeprecated:
+		saveCachedORCIDPerson(orcid, result) // marks the primary
 		saveCachedORCIDWorks(orcid, nil)
 	}
 	return nil
@@ -373,7 +393,7 @@ func doUpdateOrcidCache() {
 		Library.Progress("Refreshing ORCID cache: %d person(s) to fetch (%d missing, %d stale); %d fresh, skipped. q+Enter to stop.",
 			len(entries), missing, stale, fresh)
 		ticker := Library.NewProgressTicker("Refreshing ORCID cache", len(entries))
-		fetched, failed, consecutiveFails := 0, 0, 0
+		fetched, failed, deprecated, consecutiveFails := 0, 0, 0, 0
 		for i, e := range entries {
 			select {
 			case <-quitCh:
@@ -400,6 +420,10 @@ func doUpdateOrcidCache() {
 				saveCachedORCIDPerson(e.orcid, &orcidPersonResult{})
 				saveCachedORCIDWorks(e.orcid, nil)
 				failed++
+			case orcidFetchDeprecated:
+				saveCachedORCIDPerson(e.orcid, result) // marks the primary
+				saveCachedORCIDWorks(e.orcid, nil)
+				deprecated++
 			case orcidFetchRateLimited:
 				failed++
 				consecutiveFails++
@@ -423,7 +447,7 @@ func doUpdateOrcidCache() {
 			}
 		}
 		ticker.Done()
-		Library.Progress("ORCID cache refresh complete: %d fetched, %d failed.", fetched, failed)
+		Library.Progress("ORCID cache refresh complete: %d fetched, %d failed, %d deprecated (merged into another iD).", fetched, failed, deprecated)
 	}
 
 	// Works-backfill pass — one API call per entry; person data already fresh.
@@ -471,8 +495,7 @@ func fetchORCIDWorks(orcid string) ([]orcidCachedWork, orcidFetchStatus) {
 		return nil, orcidFetchError
 	}
 	req.Header.Set("Accept", "application/json")
-	client := &http.Client{Timeout: httpTimeout}
-	resp, err := client.Do(req)
+	resp, err := newORCIDHTTPClient().Do(req)
 	if err != nil {
 		return nil, orcidFetchError
 	}
@@ -482,8 +505,8 @@ func fetchORCIDWorks(orcid string) ([]orcidCachedWork, orcidFetchStatus) {
 		// handled below
 	case resp.StatusCode == 429:
 		return nil, orcidFetchRateLimited
-	case resp.StatusCode == 404 || resp.StatusCode == 410 || resp.StatusCode == 403:
-		return nil, orcidFetchNotFound
+	case resp.StatusCode == 404 || resp.StatusCode == 410 || resp.StatusCode == 403 || isORCIDRedirect(resp):
+		return nil, orcidFetchNotFound // a deprecated iD has no works of its own
 	default:
 		return nil, orcidFetchError
 	}

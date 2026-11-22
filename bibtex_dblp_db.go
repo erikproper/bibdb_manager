@@ -28,6 +28,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 )
@@ -71,6 +72,16 @@ var dblpDBSchema = []string{
 	`CREATE TABLE person_entries (name TEXT, key TEXT, PRIMARY KEY (name, key)) WITHOUT ROWID`,
 	`CREATE TABLE orcid_entries (orcid TEXT, key TEXT, PRIMARY KEY (orcid, key)) WITHOUT ROWID`,
 	`CREATE TABLE meta (name TEXT PRIMARY KEY, value TEXT NOT NULL) WITHOUT ROWID`,
+	// The DBLP persons (homepages records), from Pass 1 (step 23.1; before, CSV files).
+	// persons: display name and, when it differs, the bibtex= form (both LaTeX).
+	`CREATE TABLE persons (key TEXT PRIMARY KEY, canonical TEXT NOT NULL, bibtex TEXT) WITHOUT ROWID`,
+	// person_names: every name form with every person that has it; a name with
+	// several keys is shared by several persons.
+	`CREATE TABLE person_names (name TEXT, key TEXT, PRIMARY KEY (name, key)) WITHOUT ROWID`,
+	// person_orcids: every ORCID of a person; preferred = 1 for the one DBLP shows first.
+	`CREATE TABLE person_orcids (orcid TEXT, key TEXT, preferred INTEGER NOT NULL, PRIMARY KEY (orcid, key)) WITHOUT ROWID`,
+	// person_oldies: a homepages record that only redirects (crossref) to another.
+	`CREATE TABLE person_oldies (key TEXT PRIMARY KEY, target TEXT NOT NULL) WITHOUT ROWID`,
 }
 
 // dblpDBStagingSchema holds the links during a build, in a separate file that
@@ -132,7 +143,18 @@ var dblpReadQueries = map[string]string{
 	"search": `SELECT key FROM entries INDEXED BY entries_key
 		WHERE instr(key, ?) > 0 ORDER BY key LIMIT ?`,
 	"meta": `SELECT name, value FROM meta`,
+	// Person tables (step 23.1); absent in a store built before 30.21.
+	"person_names":  `SELECT key FROM person_names WHERE name = ? ORDER BY key`,
+	"person_orcids": `SELECT orcid FROM person_orcids WHERE key = ? ORDER BY preferred DESC, orcid`,
+	"orcid_persons": `SELECT key FROM person_orcids WHERE orcid = ? ORDER BY key`,
+	// The whole table, read once (personORCIDs): its key is (orcid, key), so a lookup
+	// by person key would scan it.
+	"all_person_orcids": `SELECT key, orcid FROM person_orcids ORDER BY key, preferred DESC, orcid`,
 }
+
+// dblpQuietQueries fail silently when their table is absent (an older store).
+var dblpQuietQueries = map[string]bool{"person_names": true, "person_orcids": true, "orcid_persons": true,
+	"all_person_orcids": true}
 
 // dblpStmt returns the prepared statement for a named read query, opening the
 // store when needed. Returns nil when there is no store (warned once per open
@@ -164,7 +186,10 @@ func dblpStmt(name string) *sql.Stmt {
 	}
 	s, err := dblpReader.db.Prepare(dblpReadQueries[name])
 	if err != nil {
-		messagef("Warning: DBLP database %s: %s\n", dblpDBPath(), err)
+		if !dblpQuietQueries[name] {
+			messagef("Warning: DBLP database %s: %s\n", dblpDBPath(), err)
+		}
+		dblpReader.stmts[name] = nil // tried once per open; not again
 		return nil
 	}
 	dblpReader.stmts[name] = s
@@ -468,6 +493,168 @@ func (b *TDblpDBBuilder) flush() error {
 	return nil
 }
 
+// addPersonMaps writes the person tables from Pass 1, each in key order (a
+// WITHOUT ROWID table fills fastest in its own order).
+func (b *TDblpDBBuilder) addPersonMaps(pm dblpPersonMaps) error {
+	if err := b.flush(); err != nil {
+		return err
+	}
+	insert := func(query string, rows [][]any) error {
+		// Prepared in the transaction: the builder has one connection, and the open
+		// transaction holds it (b.db.Prepare would wait for it forever).
+		stmt, err := b.tx.Prepare(query)
+		if err != nil {
+			return err
+		}
+		for i, r := range rows {
+			if _, err := stmt.Exec(r...); err != nil {
+				return fmt.Errorf("%s: %w", query, err)
+			}
+			if i%dblpDBRowsPerTransaction == dblpDBRowsPerTransaction-1 {
+				stmt.Close()
+				if err := b.tx.Commit(); err != nil {
+					return err
+				}
+				if b.tx, err = b.db.Begin(); err != nil {
+					return err
+				}
+				if stmt, err = b.tx.Prepare(query); err != nil {
+					return err
+				}
+			}
+		}
+		return stmt.Close()
+	}
+	sorted := func(m map[string]string) []string {
+		keys := make([]string, 0, len(m))
+		for k := range m {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		return keys
+	}
+
+	var rows [][]any
+	for _, key := range sorted(pm.keyToCanonical) {
+		var bibtex any
+		if bt := pm.keyToBibtex[key]; bt != "" {
+			bibtex = bt
+		}
+		rows = append(rows, []any{key, pm.keyToCanonical[key], bibtex})
+	}
+	if err := insert(`INSERT INTO persons VALUES (?, ?, ?)`, rows); err != nil {
+		return err
+	}
+
+	rows = rows[:0]
+	names := make([]string, 0, len(pm.nameKeys))
+	for n := range pm.nameKeys {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	for _, n := range names {
+		keys := append([]string(nil), pm.nameKeys[n]...)
+		sort.Strings(keys)
+		for _, k := range keys {
+			rows = append(rows, []any{n, k})
+		}
+	}
+	if err := insert(`INSERT INTO person_names VALUES (?, ?)`, rows); err != nil {
+		return err
+	}
+
+	type orcidRow struct {
+		orcid, key string
+		preferred  int
+	}
+	var orcids []orcidRow
+	for key, list := range pm.keyOrcids {
+		for i, o := range list {
+			pref := 0
+			if i == 0 {
+				pref = 1
+			}
+			orcids = append(orcids, orcidRow{o, key, pref})
+		}
+	}
+	sort.Slice(orcids, func(i, j int) bool {
+		if orcids[i].orcid != orcids[j].orcid {
+			return orcids[i].orcid < orcids[j].orcid
+		}
+		return orcids[i].key < orcids[j].key
+	})
+	rows = rows[:0]
+	for _, o := range orcids {
+		rows = append(rows, []any{o.orcid, o.key, o.preferred})
+	}
+	if err := insert(`INSERT INTO person_orcids VALUES (?, ?, ?)`, rows); err != nil {
+		return err
+	}
+
+	rows = rows[:0]
+	for _, key := range sorted(pm.keyOldies) {
+		rows = append(rows, []any{key, pm.keyOldies[key]})
+	}
+	return insert(`INSERT INTO person_oldies VALUES (?, ?)`, rows)
+}
+
+// loadDblpPersonMapsFromDB reads the person maps from the person tables. ok is
+// false for a store built before step 23.1 (no person tables): the caller then
+// reads the CSV files.
+func loadDblpPersonMapsFromDB() (pm dblpPersonMaps, ok bool) {
+	if !FileExists(dblpDBPath()) {
+		return pm, false
+	}
+	db, err := sql.Open(sqliteDatabaseDriver, "file:"+dblpDBPath()+"?mode=ro&_pragma=busy_timeout(5000)")
+	if err != nil {
+		return pm, false
+	}
+	defer db.Close()
+	var n int
+	if db.QueryRow(`SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'persons'`).Scan(&n) != nil || n == 0 {
+		return pm, false
+	}
+	pm = dblpPersonMaps{
+		nameToKey:      make(map[string]string),
+		orcidToKey:     make(map[string]string),
+		keyToCanonical: make(map[string]string),
+		keyToBibtex:    make(map[string]string),
+		keyOldies:      make(map[string]string),
+	}
+	read := func(query string, fn func(a, b string)) bool {
+		rows, err := db.Query(query)
+		if err != nil {
+			return false
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var a, b string
+			if rows.Scan(&a, &b) == nil {
+				fn(a, b)
+			}
+		}
+		return rows.Err() == nil
+	}
+	ok = read(`SELECT key, canonical FROM persons`, func(k, c string) { pm.keyToCanonical[k] = c }) &&
+		read(`SELECT key, bibtex FROM persons WHERE bibtex IS NOT NULL`, func(k, b string) { pm.keyToBibtex[k] = b }) &&
+		// A name shared by several persons maps to "" (as Pass 1 marks it).
+		read(`SELECT name, CASE WHEN count(*) = 1 THEN min(key) ELSE '' END FROM person_names GROUP BY name`,
+			func(n, k string) {
+				if k != "" {
+					pm.nameToKey[n] = k
+				}
+			}) &&
+		// An ORCID listed by several persons: the one that prefers it, else the first.
+		read(`SELECT orcid, key FROM person_orcids ORDER BY orcid, preferred DESC, key`,
+			func(o, k string) {
+				if _, seen := pm.orcidToKey[o]; !seen {
+					pm.orcidToKey[o] = k
+				}
+			}) &&
+		read(`SELECT key, target FROM person_oldies`, func(k, t string) { pm.keyOldies[k] = t })
+	return pm, ok
+}
+
 // removeDuplicates keeps only the last occurrence of a key that appeared more
 // than once in the XML, together with that occurrence's links, as the file
 // store did when it rewrote an entry seen earlier in the same import.
@@ -519,7 +706,9 @@ func (b *TDblpDBBuilder) finish(meta TDblpMeta, progress func(format string, arg
 // import or a restore. The read connection is closed so later reads see the new
 // store.
 func swapInDblpDBNew() error {
+	resetPersonORCIDs()
 	closeDblpReader()
+	closeOrcidStore()
 	// A stale journal of the old file must not attach to the new one. The old
 	// file itself is replaced by the rename, so there is never a moment without one.
 	for _, suffix := range []string{"-journal", "-wal", "-shm"} {
@@ -553,6 +742,10 @@ func (b *TDblpDBBuilder) finishBuild(meta TDblpMeta, progress func(format string
 	}
 	if _, err := b.db.Exec(`DETACH DATABASE staging`); err != nil {
 		return err
+	}
+	progress("Copying the ORCID records...")
+	if err := copyOrcidRecordsInto(b.db); err != nil {
+		return fmt.Errorf("copying orcid_records: %w", err)
 	}
 	progress("Creating indexes...")
 	for _, s := range dblpDBIndexes {

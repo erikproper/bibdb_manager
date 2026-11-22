@@ -4,25 +4,23 @@
  * Component:
  * - connectivity
  *
- * Internet connectivity detection. Online is set once at startup by probing
- * a known host. All network-dependent code should gate on Online.
+ * Internet connectivity detection. Online is set once at startup by an HTTP
+ * probe. All network-dependent code should gate on Online.
  *
  * Creator: Henderik A. Proper (erikproper@gmail.com)
  *
- * Version of: 16.07.2026
+ * Version of: 22.11.2026
  *
  */
 
 package main
 
 import (
-	"net"
 	"net/http"
 	"time"
 )
 
 const (
-	onlineProbeHost = "8.8.8.8:53"                                        // Google public DNS — TCP reachability pre-check
 	onlineProbeHTTP = "http://connectivitycheck.gstatic.com/generate_204" // returns 204 on real internet; captive portals return 200/302
 	dialTimeout     = 3 * time.Second
 )
@@ -34,16 +32,11 @@ func init() {
 	Online = probeConnectivity()
 }
 
-// probeConnectivity performs a two-stage check: TCP dial to confirm basic IP
-// reachability, then HTTP GET to distinguish captive portals from real internet.
+// probeConnectivity reports whether an HTTP GET of the probe URL answers 204: real
+// internet, not a captive portal (which answers 200 or a redirect). There used to be
+// a TCP pre-check to 8.8.8.8:53 first, but networks that block outside DNS refuse
+// it while the internet works, so every run there was "offline" (2026-11-22).
 func probeConnectivity() bool {
-	conn, err := net.DialTimeout("tcp", onlineProbeHost, dialTimeout)
-	if err != nil {
-		return false
-	}
-	conn.Close()
-	// TCP dial can succeed behind captive portals (intercept and complete handshake).
-	// A real HTTP probe distinguishes "WiFi with no internet" from actual connectivity.
 	client := &http.Client{
 		Timeout: dialTimeout,
 		CheckRedirect: func(*http.Request, []*http.Request) error {

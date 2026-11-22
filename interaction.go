@@ -18,6 +18,7 @@ package main
 import (
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -177,7 +178,7 @@ func (t *TProgressTicker) Step() bool {
 	if t.dueToRender() {
 		t.render()
 	}
-	return t.interaction != nil && t.interaction.quitRequested
+	return t.interaction != nil && t.interaction.QuitWasRequested()
 }
 
 // SetCount sets the count to n (without incrementing), polls for a 'q' quit
@@ -192,7 +193,7 @@ func (t *TProgressTicker) SetCount(n int) bool {
 	if t.dueToRender() {
 		t.render()
 	}
-	return t.interaction != nil && t.interaction.quitRequested
+	return t.interaction != nil && t.interaction.QuitWasRequested()
 }
 
 // Tick redraws without incrementing, polls for a 'q' quit request, and returns
@@ -206,7 +207,7 @@ func (t *TProgressTicker) Tick() bool {
 	if t.dueToRender() {
 		t.render()
 	}
-	return t.interaction != nil && t.interaction.quitRequested
+	return t.interaction != nil && t.interaction.QuitWasRequested()
 }
 
 // pollForQuit checks, without blocking, whether the user typed "q", and quits
@@ -227,7 +228,7 @@ func (t *TProgressTicker) WasAborted() bool {
 	if t == nil {
 		return false
 	}
-	return t.interaction != nil && t.interaction.quitRequested
+	return t.interaction != nil && t.interaction.QuitWasRequested()
 }
 
 // Done prints "label: done", advances to a new line, and deactivates the ticker.
@@ -271,9 +272,16 @@ type TInteraction struct {
 	progressPrefix     string // extra indent prepended to all Progress() messages and ticker labels
 }
 
-// QuitWasRequested reports whether the user asked to stop at any prompt or ticker.
+// interrupted is set by Ctrl-C (SIGINT/SIGTERM, see main). It is one flag for every
+// TInteraction: the library keeps a copy of Reporting (Initialise), so setting
+// Reporting.quitRequested was not seen by the loops that ask the library or its
+// tickers, and Ctrl-C did not stop e.g. the watch (2026-11-22).
+var interrupted atomic.Bool
+
+// QuitWasRequested reports whether the user asked to stop at any prompt or ticker,
+// or by Ctrl-C.
 func (r *TInteraction) QuitWasRequested() bool {
-	return r.quitRequested
+	return r.quitRequested || interrupted.Load()
 }
 
 // QuestionsAnswered returns the running total of user answers (WarningQuestion + ConfirmAction).

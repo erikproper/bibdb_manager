@@ -36,9 +36,9 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -158,6 +158,9 @@ type dblpPersonMaps struct {
 	keyToCanonical map[string]string // DBLP key → display canonical (LaTeX, first <author> text)
 	keyToBibtex    map[string]string // DBLP key → bibtex= form (LaTeX), only when it differs from display
 	keyOldies      map[string]string // child DBLP key → parent DBLP key (crossref redirects)
+	// Built by Pass 1 only (not by loadDblpPersonMaps), for the person tables:
+	nameKeys  map[string][]string // LaTeX name form → every DBLP key with that form
+	keyOrcids map[string][]string // DBLP key → every ORCID of that person, the preferred first
 }
 
 // aliasToCanonical derives the alias→canonical map needed by dblpImportFromReader.
@@ -196,6 +199,8 @@ func dblpBuildNameMap(r io.Reader) (dblpPersonMaps, error) {
 		keyToCanonical: make(map[string]string),
 		keyToBibtex:    make(map[string]string),
 		keyOldies:      make(map[string]string),
+		nameKeys:       make(map[string][]string),
+		keyOrcids:      make(map[string][]string),
 	}
 
 	// addName inserts a LaTeX-converted name form → key mapping.
@@ -212,6 +217,16 @@ func dblpBuildNameMap(r io.Reader) (dblpPersonMaps, error) {
 			pm.nameToKey[latex] = ""
 		} else if !seen {
 			pm.nameToKey[latex] = key
+		}
+		if keys := pm.nameKeys[latex]; !slices.Contains(keys, key) {
+			pm.nameKeys[latex] = append(keys, key)
+		}
+		// The numbered form ("Hui Yang 0001") names this one person: kept as well, so a
+		// paper's numbered author leads to its person (step 23.2, rule 2).
+		if reDblpDisambig.MatchString(raw) {
+			if numbered := dblpRawToLaTeX(raw); numbered != "" && !slices.Contains(pm.nameKeys[numbered], key) {
+				pm.nameKeys[numbered] = append(pm.nameKeys[numbered], key)
+			}
 		}
 	}
 
@@ -251,6 +266,7 @@ func dblpBuildNameMap(r io.Reader) (dblpPersonMaps, error) {
 
 		var authors []dblpXMLPerson
 		var urlOrcid, crossrefKey string
+		var urlOrcids []string
 	childLoop:
 		for {
 			child, cerr := d.Token()
@@ -274,8 +290,11 @@ func dblpBuildNameMap(r io.Reader) (dblpPersonMaps, error) {
 					authors = append(authors, dblpXMLPerson{Name: text, Bibtex: bibtex, ORCID: orcid})
 				case "url":
 					text, _ := xmlCollectText(d)
-					if urlOrcid == "" && strings.HasPrefix(text, "https://orcid.org/") {
-						urlOrcid = strings.TrimPrefix(text, "https://orcid.org/")
+					if strings.HasPrefix(text, "https://orcid.org/") {
+						if urlOrcid == "" {
+							urlOrcid = strings.TrimPrefix(text, "https://orcid.org/")
+						}
+						urlOrcids = append(urlOrcids, strings.TrimPrefix(text, "https://orcid.org/"))
 					}
 				case "crossref":
 					text, _ := xmlCollectText(d)
@@ -338,85 +357,32 @@ func dblpBuildNameMap(r io.Reader) (dblpPersonMaps, error) {
 		if orcid != "" {
 			pm.orcidToKey[orcid] = dblpKey
 		}
+		// All ORCIDs of the person, the preferred one first: a profile can list several.
+		all := []string{orcid}
+		for _, a := range authors {
+			all = append(all, a.ORCID)
+		}
+		all = append(all, urlOrcids...)
+		for _, o := range all {
+			if o != "" && !slices.Contains(pm.keyOrcids[dblpKey], o) {
+				pm.keyOrcids[dblpKey] = append(pm.keyOrcids[dblpKey], o)
+				if _, seen := pm.orcidToKey[o]; !seen {
+					pm.orcidToKey[o] = dblpKey
+				}
+			}
+		}
 	}
 	return pm, nil
 }
 
-// saveDblpNameFiles writes the DBLP name maps from Pass 1 to two CSV files in
-// dblpFolder(): dblp_name_bibtex.csv (alias;canonical) and dblp_name_orcid.csv
-// (canonical;orcid). Names are converted to LaTeX format before writing.
-// saveDblpNameFiles writes the three DBLP person-map CSVs to dblpFolder():
-//   dblp_name_key.csv      — LaTeX name form ; DBLP homepages key
-//   dblp_orcid_key.csv     — ORCID ; DBLP homepages key
-//   dblp_key_canonical.csv — DBLP homepages key ; LaTeX canonical name
-//
-// Ambiguous name forms (pm.nameToKey[name] == "") are omitted from dblp_name_key.csv.
-// saveDblpNameFiles writes the five DBLP person-map CSVs to dblpFolder().
-//
-//	dblp_name_key.csv         — LaTeX name ; DBLP key  (many:1, ambiguous names omitted)
-//	dblp_orcid_key.csv        — ORCID ; DBLP key       (many:1)
-//	dblp_key_canonical.csv    — DBLP key ; display canonical (LaTeX)
-//	dblp_key_bibtex.csv       — DBLP key ; bibtex= form (LaTeX, only when ≠ display)
-//	dblp_homepages_oldies.csv — child DBLP key ; parent DBLP key (crossref redirects)
-func saveDblpNameFiles(pm dblpPersonMaps) {
-	base := dblpFolder()
-
-	writeCSV := func(filename string, lines []string) {
-		sort.Strings(lines)
-		path := base + filename
-		if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0644); err != nil {
-			messagef("Warning: could not write %s: %s\n", path, err)
-		} else {
-			messagef("  Saved %d rows to %s\n", len(lines), path)
-		}
-	}
-
-	nameLines := make([]string, 0, len(pm.nameToKey))
-	for name, key := range pm.nameToKey {
-		if key != "" && name != "" {
-			nameLines = append(nameLines, name+";"+key)
-		}
-	}
-	writeCSV("dblp_name_key.csv", nameLines)
-
-	orcidLines := make([]string, 0, len(pm.orcidToKey))
-	for orcid, key := range pm.orcidToKey {
-		if orcid != "" && key != "" {
-			orcidLines = append(orcidLines, orcid+";"+key)
-		}
-	}
-	writeCSV("dblp_orcid_key.csv", orcidLines)
-
-	canonLines := make([]string, 0, len(pm.keyToCanonical))
-	for key, canon := range pm.keyToCanonical {
-		if key != "" && canon != "" {
-			canonLines = append(canonLines, key+";"+canon)
-		}
-	}
-	writeCSV("dblp_key_canonical.csv", canonLines)
-
-	bibtexLines := make([]string, 0, len(pm.keyToBibtex))
-	for key, bibtex := range pm.keyToBibtex {
-		if key != "" && bibtex != "" {
-			bibtexLines = append(bibtexLines, key+";"+bibtex)
-		}
-	}
-	writeCSV("dblp_key_bibtex.csv", bibtexLines)
-
-	oldiesLines := make([]string, 0, len(pm.keyOldies))
-	for child, parent := range pm.keyOldies {
-		if child != "" && parent != "" {
-			oldiesLines = append(oldiesLines, child+";"+parent)
-		}
-	}
-	writeCSV("dblp_homepages_oldies.csv", oldiesLines)
-
-}
 
 // loadDblpPersonMaps reads the DBLP person-map CSVs from dblpFolder().
 // The three core files must exist; dblp_key_bibtex and dblp_homepages_oldies are optional.
 // Returns ok=false when a core file is absent (run -dblp_update to regenerate).
 func loadDblpPersonMaps() (pm dblpPersonMaps, ok bool) {
+	if pm, ok := loadDblpPersonMapsFromDB(); ok {
+		return pm, true
+	}
 	base := dblpFolder()
 	if !FileExists(base+"dblp_name_key.csv") ||
 		!FileExists(base+"dblp_orcid_key.csv") ||
@@ -708,7 +674,6 @@ func doLoadDblpXml(args []string) error {
 		messagef("Warning: name map build error: %s\n", err)
 	}
 	messagef("  %d person entries collected (%.0fs).\n", len(pm.keyToCanonical), time.Since(start).Seconds())
-	saveDblpNameFiles(pm)
 	nameMap := pm.aliasToCanonical()
 
 	// Second pass: import all entries into a new store.
@@ -780,6 +745,12 @@ func doLoadDblpXml(args []string) error {
 		UnicodeMapHash:       csvFileHash(localDBFolder + "unicode_map.csv"),
 	}
 	finishStart := time.Now()
+	messagef("Writing the DBLP person tables...\n")
+	if err := builder.addPersonMaps(pm); err != nil {
+		builder.abort()
+		messagef("Could not write the DBLP person tables: %s\n", err)
+		return errReported
+	}
 	err = builder.finish(meta, func(format string, args ...any) {
 		messagef(format+"\n", args...)
 	})
@@ -788,6 +759,10 @@ func doLoadDblpXml(args []string) error {
 		return errReported
 	}
 	messagef("  %s ready (%.0fs).\n", dblpDBPath(), time.Since(finishStart).Seconds())
+	// The person maps are in the store now (step 23.1); the CSV files of older imports go.
+	for _, name := range dblpNameMapFiles {
+		os.Remove(dblpFolder() + name)
+	}
 
 	messagef("DBLP import complete: %d entries in %.1fs\n",
 		count, time.Since(start).Seconds())
@@ -1147,12 +1122,9 @@ func naturalOrderToSurnameFirst(alias, surname, generation string) string {
 	return ""
 }
 
-// doAbsorbDblpNames streams the stored DBLP XML, extracts the www-based name
-// variant→canonical map, and feeds each person's names into the library's
-// name_mappings table via AddNameMapping. Format variants (surname-first ↔
-// natural-order) are generated so that existing library mappings in either
-// ordering are merged into the DBLP canonical before adding the DBLP aliases.
-// A final RenormaliseNameFields pass applies all new mappings to stored entries.
+// doAbsorbDblpNames gives each contributor with a DBLP key that DBLP person's name
+// forms (both orders, without DBLP's number), by contributor id, where no other
+// contributor has them (step 23.2.3). A final RenormaliseNameFields pass follows.
 // absorbDblpNamesCore does the actual work of -absorb_dblp_names and is called both
 // from doAbsorbDblpNames (standalone command) and from doUpsertDblpEntries (implicit
 // post-update absorption).  The library must already be open for writing.
@@ -1208,896 +1180,137 @@ func absorbDblpNamesCore() {
 		keyToOrcid[key] = orcid
 	}
 
-	mergeIfKnown := func(dblpCanonical, form string) {
-		if form == "" || form == dblpCanonical {
-			return
+	// Step 23.2.3 (ARCHITECTURE.md 7.6): absorb never merges contributors and never
+	// decides who sits where. It links a DBLP key where the decisions tied a contributor
+	// to that DBLP person, and gives each contributor with a DBLP key that person's name
+	// forms (those no other contributor has, and DBLP gives no other person) and, when
+	// it has none, the person's ORCID.
+	keysLinked := linkDecidedDblpKeys()
+	absorbed, orcidsSet := 0, 0
+	var absorbedLog []string // "contributor id | its name | form", for dblp_absorbed_names.log
+	for id, contrib := range Library.ContributorByID {
+		if contrib == nil || contrib.Garbled || contrib.DblpKey == "" {
+			continue
 		}
-		if existingID, ok := Library.NameToContributorID[form]; ok {
-			existingCanonical := Library.ContributorByID[existingID].Name
-			if existingCanonical != dblpCanonical {
-				Library.AddNameMapping(dblpCanonical, existingCanonical)
-			}
-		}
-	}
-
-	isKnown := func(forms ...string) bool {
-		for _, form := range forms {
-			if form != "" {
-				if _, ok := Library.NameToContributorID[form]; ok {
-					return true
-				}
-				if _, ok := Library.AmbiguousNameToContributorIDs[form]; ok {
-					return true
-				}
-			}
-		}
-		return false
-	}
-
-	keysLinked, absorbed, orcidsSet := 0, 0, 0
-	var splitCandidates []dblpSplitCandidate
-
-	for key, names := range keyToNames {
-		// Derive the canonical in Last,First format.
-		// Priority: (1) bibtex= form that already has a comma ("Lowe, David B."),
-		// (2) simpleSurnameSwap of bibtex= form ("Claire {Le Goues}" → "Le Goues, Claire"),
-		// (3) simpleSurnameSwap of display name ("Margot Brereton" → "Brereton, Margot"),
-		// (4) fallback to display name as-is (single-token names, rare).
-		bibtexForm := pm.keyToBibtex[key]
-		displayForm := pm.keyToCanonical[key]
-		var canonical string
-		if strings.Contains(bibtexForm, ",") {
-			canonical = bibtexForm
-		} else if bibtexForm != "" {
-			if ss := simpleSurnameSwap(bibtexForm); ss != "" {
-				canonical = ss
-			} else {
-				canonical = bibtexForm
-			}
-		} else {
-			canonical = simpleSurnameSwap(displayForm)
-			if canonical == "" {
-				canonical = displayForm
-			}
-		}
+		key := contrib.DblpKey
+		canonical := dblpPersonCanonical(pm.keyToBibtex[key], dblpPlainName(pm.keyToCanonical[key]))
 		if canonical == "" {
 			continue
 		}
-		orcid := keyToOrcid[key]
 		surname, generation := parseSurnameGeneration(canonical)
-		naturalCanonical := swapBibTeXNameFormat(canonical)
-
-		// Collect all name forms including the display canonical (may differ from bibtex).
-		// simpleSurnameSwap bridges natural-order DBLP names to Last,First library entries
-		// for the common case where no bibtex= attribute is present.
-		displayCanonical := pm.keyToCanonical[key]
-		allForms := []string{
-			canonical, naturalCanonical,
+		// DBLP's number ("Ryan Peterson 0001") is not part of a name: without it the
+		// display name is the name as printed; numbered names are not name forms (a
+		// swap would make "0001, Ryan Peterson").
+		displayCanonical := dblpPlainName(pm.keyToCanonical[key])
+		forms := []string{
+			canonical, swapBibTeXNameFormat(canonical),
 			displayCanonical, swapBibTeXNameFormat(displayCanonical), simpleSurnameSwap(displayCanonical),
 		}
-		for _, name := range names {
-			allForms = append(allForms, name, swapBibTeXNameFormat(name),
+		for _, name := range keyToNames[key] {
+			if reDblpDisambig.MatchString(name) {
+				continue
+			}
+			forms = append(forms, name, swapBibTeXNameFormat(name),
 				simpleSurnameSwap(name), naturalOrderToSurnameFirst(name, surname, generation))
 		}
-
-		// Skip DBLP persons not represented by any contributor in this library.
-		if !isKnown(allForms...) {
-			continue
-		}
-
-		// Find the primary contributor FIRST so we can use their existing library
-		// canonical as the merge target. This prevents creating ghost contributors
-		// when the DBLP-derived canonical differs only in formatting (e.g. spacing).
-		var contribID string
-		for _, form := range allForms {
-			if form == "" {
+		seen := map[string]bool{}
+		for _, form := range forms {
+			if form == "" || form == contrib.Name || seen[form] {
 				continue
 			}
-			if id, ok := Library.NameToContributorID[form]; ok {
-				contribID = id
-				break
+			seen[form] = true
+			if other, ok := resolveNameToContributorID(&Library, form); ok && other == id {
+				continue // already a form of this contributor
 			}
-			if ids, ok := Library.AmbiguousNameToContributorIDs[form]; ok && len(ids) > 0 {
-				contribID = ids[0]
-				break
-			}
-		}
-		if contribID == "" {
-			continue
-		}
-		contrib := Library.ContributorByID[contribID]
-		if contrib == nil {
-			continue
-		}
-		// Use the existing library canonical as the merge target — never a fresh
-		// DBLP-derived form that may not yet exist as a contributor.
-		mergeCanonical := contrib.Name
-
-		// Merge other library contributors that are format variants into the primary.
-		mergeIfKnown(mergeCanonical, naturalCanonical)
-		mergeIfKnown(mergeCanonical, displayCanonical)
-		mergeIfKnown(mergeCanonical, swapBibTeXNameFormat(displayCanonical))
-		mergeIfKnown(mergeCanonical, simpleSurnameSwap(displayCanonical))
-		for _, name := range names {
-			if name != mergeCanonical {
-				mergeIfKnown(mergeCanonical, name)
-				mergeIfKnown(mergeCanonical, swapBibTeXNameFormat(name))
-				mergeIfKnown(mergeCanonical, simpleSurnameSwap(name))
-				mergeIfKnown(mergeCanonical, naturalOrderToSurnameFirst(name, surname, generation))
-			}
-		}
-
-		// Add DBLP name forms and format variants as aliases of the primary.
-		for _, form := range []string{naturalCanonical, displayCanonical, swapBibTeXNameFormat(displayCanonical)} {
-			if form != "" && form != mergeCanonical {
-				Library.AddNameMapping(mergeCanonical, form)
-			}
-		}
-		for _, name := range names {
-			if name != mergeCanonical {
-				Library.AddNameMapping(mergeCanonical, name)
-				absorbed++
-			}
-		}
-
-		// DBLP-backed ambiguity resolution: one DBLP key = one person, so any library
-		// ambiguity across these name forms is an artifact — merge the duplicates in.
-		for _, form := range allForms {
-			if form == "" {
+			if !nameFormIsFree(form, id) {
 				continue
 			}
-			if ids, ok := Library.AmbiguousNameToContributorIDs[form]; ok {
-				for _, ambigID := range ids {
-					if ambigID == contribID {
-						continue
-					}
-					if c := Library.ContributorByID[ambigID]; c != nil {
-						Library.AddNameMapping(mergeCanonical, c.Name)
-					}
-				}
-			}
+			Library.giveContributorNameForm(id, form)
+			absorbedLog = append(absorbedLog, id+" | "+contrib.Name+" | "+form)
+			absorbed++
 		}
 
-		// Link contributor to DBLP key; if the key is already held by a different
-		// contributor, DBLP proves they are the same person — merge the unanchored
-		// one into the keyed holder so all contributor_roles follow.
-		if contrib.DblpKey == "" {
-			if existingID, conflict := Library.DblpKeyToContributorID[key]; conflict && existingID != contribID {
-				existing := Library.ContributorByID[existingID]
-				Library.Progress("DBLP key %s: merging %q into %q.", key, contrib.Name, existing.Name)
-				if mergeContributorInDB(contribID, existingID) {
-					if existing.ORCID == "" && contrib.ORCID != "" {
-						existing.ORCID = contrib.ORCID
-						upsertContributorORCIDToDB(existingID, contrib.ORCID, true)
-					}
-					for name, nid := range Library.NameToContributorID {
-						if nid == contribID {
-							Library.NameToContributorID[name] = existingID
-						}
-					}
-					// Any ORCID still pointing at the absorbed contributor (not just
-					// contrib.ORCID) must be redirected — otherwise a later lookup for
-					// that ORCID resolves to a contributor ID that no longer exists in
-					// the contributors table, and the next write through it (e.g.
-					// applyDblpAuthorORCIDs) hits a FOREIGN KEY violation.
-					for orcid, nid := range Library.ORCIDToContributorID {
-						if nid == contribID {
-							Library.ORCIDToContributorID[orcid] = existingID
-						}
-					}
-					delete(Library.ContributorByID, contribID)
-					Library.AddNameMapping(existing.Name, contrib.Name)
-					keysLinked++
-				}
-				continue
+		if contrib.ORCID == "" {
+			orcid := keyToOrcid[key]
+			if listed := refPersonORCIDs(key); len(listed) > 0 {
+				orcid = listed[0] // the preferred one
 			}
-			setContributorDblpKey(&Library, contribID, key)
-			keysLinked++
-		} else if contrib.DblpKey != key {
-			// This contributor already has a different DBLP key — the same person in
-			// the library was matched by two distinct DBLP persons. Schedule a split.
-			splitCandidates = append(splitCandidates, dblpSplitCandidate{
-				contribID:    contribID,
-				existingKey:  contrib.DblpKey,
-				newKey:       key,
-				newCanonical: displayCanonical,
-				newName:      canonical,
-				newForms:     allForms,
-			})
-		}
-
-		// Set or check ORCID.
-		if orcid == "" || contrib.ORCID == orcid {
-			continue
-		}
-		if contrib.ORCID != "" {
-			if otherID := Library.ORCIDToContributorID[orcid]; otherID != "" && otherID != contribID {
-				makeNameAmbiguous(&Library, contrib.Name, contribID, otherID)
-				retroactivelyBackfillDisambiguation(&Library, contrib.Name)
-				clearContributorORCIDSeen(contribID, contrib.ORCID)
-			} else {
-				Library.Warning("ORCID mismatch for %q: stored %s, DBLP suggests %s — use -enrich_contributor_data to resolve",
-					contrib.Name, contrib.ORCID, orcid)
-				clearContributorORCIDSeen(contribID, contrib.ORCID)
+			if orcid != "" && Library.ContributorByID[Library.ORCIDToContributorID[orcid]] == nil {
+				Library.giveContributorORCID(id, orcid)
+				orcidsSet++
 			}
-			continue
 		}
-		contrib.ORCID = orcid
-		Library.ORCIDToContributorID[orcid] = contribID
-		upsertContributorORCIDToDB(contribID, orcid, true)
-		orcidsSet++
-	}
-
-	var splitLog *os.File
-	if len(splitCandidates) > 0 {
-		logPath := libraryBase() + tablesFolderSuffix + "/dblp_contributor_splits.log"
-		os.MkdirAll(libraryBase()+tablesFolderSuffix, 0o755) //nolint:errcheck
-		if f, err := os.Create(logPath); err == nil {
-			splitLog = f
-			fmt.Fprintf(splitLog, "DBLP contributor splits on %s\n\n",
-				time.Now().Format("2006-01-02 15:04:05"))
-		}
-	}
-	splitsMoved, splitsSkipped := 0, 0
-	for _, sc := range splitCandidates {
-		if splitContributorByDblpKeys(&Library, sc, splitLog) {
-			keysLinked++
-			splitsMoved++
-		} else {
-			splitsSkipped++
-		}
-	}
-	if splitLog != nil {
-		splitLog.Close()
-	}
-	if len(splitCandidates) > 0 {
-		Library.Progress("    %d DBLP contributor split candidate(s): %d moved, %d skipped (see dblp_contributor_splits.log).",
-			len(splitCandidates), splitsMoved, splitsSkipped)
 	}
 	Library.Progress("  Linked %d DBLP person key(s), absorbed %d name alias(es), set %d ORCID(s).",
 		keysLinked, absorbed, orcidsSet)
+	if len(absorbedLog) > 0 {
+		sort.Strings(absorbedLog)
+		os.MkdirAll(libraryBase()+tablesFolderSuffix, 0o755) //nolint:errcheck
+		os.WriteFile(libraryBase()+tablesFolderSuffix+"/dblp_absorbed_names.log", //nolint:errcheck
+			[]byte(strings.Join(absorbedLog, "\n")+"\n"), 0o644)
+	}
 	Library.RenormaliseNameFields()
 }
 
-type dblpSplitCandidate struct {
-	contribID    string
-	existingKey  string
-	newKey       string
-	newCanonical string // DBLP display canonical for readDblpPersonEntries
-	newName      string // BibTeX surname-first form for the new contributor name
-	newForms     []string
+// dblpPersonCanonical derives a DBLP person's name in "Last, First" form: (1) the
+// bibtex= form when it has a comma ("Lowe, David B."), (2) the surname swap of the
+// bibtex= form ("Claire {Le Goues}" → "Le Goues, Claire"), (3) the surname swap of the
+// display name ("Margot Brereton" → "Brereton, Margot"), (4) the display name as is.
+func dblpPersonCanonical(bibtexForm, displayForm string) string {
+	switch {
+	case strings.Contains(bibtexForm, ","):
+		return bibtexForm
+	case bibtexForm != "":
+		if ss := simpleSurnameSwap(bibtexForm); ss != "" {
+			return ss
+		}
+		return bibtexForm
+	}
+	if ss := simpleSurnameSwap(displayForm); ss != "" {
+		return ss
+	}
+	return displayForm
 }
 
-// splitMsg writes a DBLP split detail line to the log file when provided,
-// or falls back to l.Progress for interactive call sites (log == nil).
-func splitMsg(log *os.File, l *TBibTeXLibrary, format string, args ...any) {
-	if log != nil {
-		fmt.Fprintf(log, "  DBLP split: "+format+"\n", args...)
-	} else {
-		l.Progress("  DBLP split: "+format, args...)
+// nameFormIsFree reports whether form may become a name form of contributor id: no
+// other contributor has it, and it is not shared by several.
+func nameFormIsFree(form, id string) bool {
+	if _, shared := Library.AmbiguousNameToContributorIDs[form]; shared {
+		return false
 	}
+	other, ok := resolveNameToContributorID(&Library, form)
+	return !ok || other == id
 }
 
-// splitContributorByDblpKeys splits a contributor that was matched by two distinct
-// DBLP person keys. Entries whose DBLP key appears in the new person's publication
-// index are moved to a freshly-created (or existing) contributor; the original
-// contributor retains its existing DBLP key and the remaining entries.
-func splitContributorByDblpKeys(l *TBibTeXLibrary, sc dblpSplitCandidate, log *os.File) bool {
-	contrib := l.ContributorByID[sc.contribID]
-	if contrib == nil {
-		return false
-	}
-
-	// Build the set of DBLP publication keys belonging to the new person.
-	newPubSet := make(map[string]bool)
-	for _, k := range readDblpPersonEntries(sc.newCanonical) {
-		newPubSet[k] = true
-	}
-	if len(newPubSet) == 0 {
-		splitMsg(log, l, "no publications indexed for %s (%q) — skipped.", sc.newKey, sc.newCanonical)
-		return false
-	}
-
-	// Find entries attributed to the merged contributor whose DBLP key
-	// belongs to the new person.
-	rows, err := db.Query(`
-		SELECT DISTINCT cr.entry_key, COALESCE(be.value, '')
-		FROM contributor_roles cr
-		LEFT JOIN bib_entries be ON be.entry_key = cr.entry_key AND be.field = ?
-		WHERE cr.contributor_id = ?`, DBLPField, sc.contribID)
-	if err != nil {
-		l.Warning("splitContributorByDblpKeys: query: %s", err)
-		return false
-	}
-	var toNew []string
-	for rows.Next() {
-		var entryKey, dblpVal string
-		if rows.Scan(&entryKey, &dblpVal) != nil {
-			continue
-		}
-		if newPubSet[normalizeDblpKey(dblpVal)] {
-			toNew = append(toNew, entryKey)
-		}
-	}
-	rows.Close()
-
-	if len(toNew) == 0 {
-		splitMsg(log, l, "%q linked to %s; 0 entries match %s — skipped.",
-			contrib.Name, sc.existingKey, sc.newKey)
-		return false
-	}
-
-	// Determine the name for the new contributor.
-	newName := sc.newName
-	if newName == "" {
-		newName = sc.newCanonical
-	}
-
-	// Create or reuse a contributor for the new DBLP person.
-	newID := ""
-	creatingNew := false
-	if existingNewID, ok := l.NameToContributorID[newName]; ok && existingNewID != sc.contribID {
-		newID = existingNewID
-		if c := l.ContributorByID[newID]; c != nil && c.DblpKey == "" {
-			setContributorDblpKey(l, newID, sc.newKey)
-		}
-	} else {
-		newID = l.NewKey()
-		creatingNew = true
-	}
-
-	tx, txErr := db.Begin()
-	if txErr != nil {
-		l.Warning("splitContributorByDblpKeys: begin tx: %s", txErr)
-		return false
-	}
-	if creatingNew {
-		if _, err := tx.Exec(
-			`INSERT INTO contributors (id, name, orcid, dblp_key, garbled) VALUES (?, ?, '', ?, 0)`,
-			newID, newName, sc.newKey); err != nil {
-			tx.Rollback() //nolint:errcheck
-			l.Warning("splitContributorByDblpKeys: insert contributor: %s", err)
-			return false
-		}
-		if _, err := tx.Exec(`INSERT OR IGNORE INTO contributor_names (id, name) VALUES (?, ?)`, newID, newName); err != nil {
-			l.Warning("splitContributorByDblpKeys: insert contributor_names: %s", err)
-			markDbWriteFailed(fmt.Sprintf("splitContributorByDblpKeys: insert contributor_names failed (id=%s, name=%s): %s", newID, newName, err))
-		}
-	}
-	for _, entryKey := range toNew {
-		if _, err := tx.Exec(
-			`UPDATE contributor_roles SET contributor_id = ? WHERE entry_key = ? AND contributor_id = ?`,
-			newID, entryKey, sc.contribID); err != nil {
-			tx.Rollback() //nolint:errcheck
-			l.Warning("splitContributorByDblpKeys: update roles: %s", err)
-			return false
-		}
-		if _, err := tx.Exec(
-			`UPDATE entry_contributor_names SET contributor_id = ? WHERE entry_key = ? AND contributor_id = ?`,
-			newID, entryKey, sc.contribID); err != nil {
-			l.Warning("splitContributorByDblpKeys: update entry_contributor_names for %s: %s", entryKey, err)
-			markDbWriteFailed(fmt.Sprintf("splitContributorByDblpKeys: update entry_contributor_names failed (entry=%s, id=%s): %s", entryKey, newID, err))
-		}
-	}
-	// Remove newName from the old contributor's names. After the split newName is a
-	// canonical contributor in its own right; leaving it as an alias of the old
-	// contributor creates NameAliasToName cycles on subsequent runs.
-	if _, err := tx.Exec(`DELETE FROM contributor_names WHERE id = ? AND name = ?`, sc.contribID, newName); err != nil {
-		l.Warning("splitContributorByDblpKeys: remove old alias: %s", err)
-		markDbWriteFailed(fmt.Sprintf("splitContributorByDblpKeys: remove old alias failed (id=%s, name=%s): %s", sc.contribID, newName, err))
-	}
-	if err := tx.Commit(); err != nil {
-		l.Warning("splitContributorByDblpKeys: commit: %s", err)
-		return false
-	}
-	if creatingNew {
-		l.ContributorByID[newID] = &TContributor{Name: newName, DblpKey: sc.newKey}
-		l.NameToContributorID[newName] = newID
-		l.DblpKeyToContributorID[sc.newKey] = newID
-	}
-	// Mirror the DB cleanup in-memory: drop any alias edge that pointed newName → old.
-	if l.NameAliasToName[newName] == contrib.Name {
-		delete(l.NameAliasToName, newName)
-		l.NameToAliases.DeleteValueFromStringSetMap(contrib.Name, newName)
-	}
-
-	// Register DBLP name forms for the new contributor as aliases.
-	for _, form := range sc.newForms {
-		if form != "" && form != newName {
-			l.AddNameMapping(newName, form)
-		}
-	}
-
-	splitMsg(log, l, "moved %d entry/ies from %q (%s) to new contributor %q (%s).",
-		len(toNew), contrib.Name, sc.existingKey, newName, sc.newKey)
-	return true
-}
-
-// accumulateContributorMatchesFromEntry reads the DBLP JSON for dblpKey and
-// queries contributor_roles for libraryKey. For each contributor that is either
-// unkeyed or has a key not in the entry's expected author set, it tries to
-// match the contributor's name against the entry's authors by comparing against
-// the bibtex= form (stripped of disambiguation number) and the surname-swapped
-// canonical. Matches are accumulated into contribPersonEntries (contribID →
-// personKey → set of entry keys) for later batch application.
-func accumulateContributorMatchesFromEntry(
-	libraryKey, dblpKey string,
-	pm dblpPersonMaps,
-	contribPersonEntries map[string]map[string]map[string]bool,
-	contribExistingKey map[string]string,
-) {
-	je := readDblpJSONEntry(dblpKey)
-	if je == nil {
-		return
-	}
-
-	type expPerson struct{ key string }
-	var expected []expPerson
-	expKeySet := make(map[string]bool)
-	for _, p := range append(je.Authors, je.Editors...) {
-		k := ""
-		if p.ORCID != "" {
-			k = pm.orcidToKey[p.ORCID]
-		}
-		if k == "" {
-			k = pm.nameToKey[p.Name]
-		}
-		if k != "" && !expKeySet[k] {
-			expKeySet[k] = true
-			expected = append(expected, expPerson{k})
-		}
-	}
-	if len(expected) == 0 {
-		return
-	}
-
-	matchName := func(contribName string) string {
-		contribName = strings.TrimSpace(contribName)
-		for _, ep := range expected {
-			bibtex := strings.TrimSpace(pm.keyToBibtex[ep.key])
-			canonical := strings.TrimSpace(pm.keyToCanonical[ep.key])
-			if bibtex != "" {
-				if bibtex == contribName || strings.TrimSpace(simpleSurnameSwap(bibtex)) == contribName {
-					return ep.key
-				}
-			}
-			if canonical != "" {
-				if canonical == contribName || strings.TrimSpace(simpleSurnameSwap(canonical)) == contribName {
-					return ep.key
-				}
-			}
-		}
-		return ""
-	}
-
-	rows, err := db.Query(`
-		SELECT cr.contributor_id, c.name, COALESCE(c.dblp_key, '')
-		FROM contributor_roles cr
-		JOIN contributors c ON c.id = cr.contributor_id
-		WHERE cr.entry_key = ?`, libraryKey)
-	if err != nil {
-		return
-	}
-	for rows.Next() {
-		var contribID, contribName, existingKey string
-		if rows.Scan(&contribID, &contribName, &existingKey) != nil {
-			continue
-		}
-		if strings.HasPrefix(contribName, "{") {
-			continue
-		}
-
-		var matchedKey string
-		if existingKey != "" {
-			if expKeySet[existingKey] {
-				continue // correctly attributed
-			}
-			matchedKey = matchName(contribName)
-			if matchedKey == "" || matchedKey == existingKey {
-				continue
-			}
-		} else {
-			matchedKey = matchName(contribName)
-			if matchedKey == "" {
-				continue
-			}
-		}
-
-		if contribPersonEntries[contribID] == nil {
-			contribPersonEntries[contribID] = make(map[string]map[string]bool)
-			contribExistingKey[contribID] = existingKey
-		}
-		if contribPersonEntries[contribID][matchedKey] == nil {
-			contribPersonEntries[contribID][matchedKey] = make(map[string]bool)
-		}
-		contribPersonEntries[contribID][matchedKey][libraryKey] = true
-	}
-	rows.Close()
-}
-
-// applyContributorMatchesFromEntries processes the contributor-to-person matches
-// accumulated by accumulateContributorMatchesFromEntry and applies them:
-// unkeyed contributors receive the dominant person key directly; contributors
-// with a mismatching key get split via splitContributorByDblpKeys. Returns the
-// number of assignments and splits executed.
-func applyContributorMatchesFromEntries(
-	l *TBibTeXLibrary,
-	pm dblpPersonMaps,
-	keyToNames map[string][]string,
-	contribPersonEntries map[string]map[string]map[string]bool,
-	contribExistingKey map[string]string,
-	splitLog *os.File,
-) int {
-	done := 0
-	for contribID, personEntries := range contribPersonEntries {
-		existingKey := contribExistingKey[contribID]
-
-		primaryKey := ""
-		maxCount := 0
-		for k, entries := range personEntries {
-			if len(entries) > maxCount {
-				maxCount = len(entries)
-				primaryKey = k
-			}
-		}
-		if primaryKey == "" {
-			continue
-		}
-
-		splitBase := existingKey
-		if existingKey == "" {
-			setContributorDblpKey(l, contribID, primaryKey)
-			done++
-			splitBase = primaryKey
-		}
-
-		for k := range personEntries {
-			if existingKey == "" && k == primaryKey {
-				continue
-			}
-			newCanonical := pm.keyToCanonical[k]
-			newName := simpleSurnameSwap(newCanonical)
-			if newName == "" {
-				newName = newCanonical
-			}
-			sc := dblpSplitCandidate{
-				contribID:    contribID,
-				existingKey:  splitBase,
-				newKey:       k,
-				newCanonical: newCanonical,
-				newName:      newName,
-				newForms:     keyToNames[k],
-			}
-			if splitContributorByDblpKeys(l, sc, splitLog) {
-				done++
-			}
-		}
-	}
-	return done
-}
-
-// detectMisattributedDblpEntries scans contributors that have a DBLP key and
-// looks for entries attributed to them whose DBLP publication key does not
-// appear in that person's publication index. For each such entry it reads the
-// DBLP JSON to find the actual author's person key and schedules a split.
-// Returns the number of successful splits.
-func detectMisattributedDblpEntries(l *TBibTeXLibrary, pm dblpPersonMaps, keyToNames map[string][]string) int {
-	type splitTarget struct{ contribID, existingKey, newKey string }
-	var splits []splitTarget
-
-	// Pre-fetch only contributor IDs that have entries with a dblp field, to
-	// avoid reading person-entry files for the large majority of keyed
-	// contributors whose attributed entries carry no dblp value.
-	contribsWithDblpEntries := make(map[string]bool)
-	{
-		rows, err := db.Query(`
-			SELECT DISTINCT cr.contributor_id
-			FROM contributor_roles cr
-			JOIN bib_entries be ON be.entry_key = cr.entry_key AND be.field = ?
-			JOIN contributors c ON c.id = cr.contributor_id
-			WHERE c.dblp_key IS NOT NULL AND c.dblp_key != ''`, DBLPField)
-		if err == nil {
-			for rows.Next() {
-				var id string
-				if rows.Scan(&id) == nil {
-					contribsWithDblpEntries[id] = true
-				}
-			}
-			rows.Close()
-		}
-	}
-
-	// Collect the unique DBLP person keys whose publication sets need loading.
-	type candidateContrib struct {
-		contribID string
-		contrib   *TContributor
-		canonical string
-	}
-	var candidates []candidateContrib
-	seenDblpKey := make(map[string]bool)
-	uniqueKeys := make([]struct{ dblpKey, canonical string }, 0)
-	for contribID, contrib := range l.ContributorByID {
-		if contrib.DblpKey == "" || !contribsWithDblpEntries[contribID] {
-			continue
-		}
-		canonical := pm.keyToCanonical[contrib.DblpKey]
-		if canonical == "" {
-			continue
-		}
-		candidates = append(candidates, candidateContrib{contribID, contrib, canonical})
-		if !seenDblpKey[contrib.DblpKey] {
-			seenDblpKey[contrib.DblpKey] = true
-			uniqueKeys = append(uniqueKeys, struct{ dblpKey, canonical string }{contrib.DblpKey, canonical})
-		}
-	}
-	total := len(candidates)
-	if total == 0 {
-		return 0
-	}
-
-	// Load all publication sets using a fixed worker pool rather than one
-	// goroutine per key.
-	Library.Progress("Loading publication sets for %d unique DBLP person key(s)...", len(uniqueKeys))
-	pubSets := make(map[string]map[string]bool, len(uniqueKeys))
-	var pubSetsMu sync.Mutex
-	var loadedCount atomic.Int64
-	type workItem struct{ dblpKey, canonical string }
-	workCh := make(chan workItem, len(uniqueKeys))
-	for _, ki := range uniqueKeys {
-		workCh <- workItem{ki.dblpKey, ki.canonical}
-	}
-	close(workCh)
-	loadTicker := time.NewTicker(5 * time.Second)
-	loadDone := make(chan struct{})
-	go func() {
-		defer loadTicker.Stop()
-		for {
-			select {
-			case <-loadTicker.C:
-				messagef("\r  %d/%d person key(s) loaded...", loadedCount.Load(), len(uniqueKeys))
-			case <-loadDone:
-				messagef("\r")
-				return
-			}
-		}
-	}()
-	const workerCount = 32
-	var loadWg sync.WaitGroup
-	for range workerCount {
-		loadWg.Add(1)
-		go func() {
-			defer loadWg.Done()
-			for item := range workCh {
-				entries := readDblpPersonEntries(item.canonical)
-				ps := make(map[string]bool, len(entries))
-				for _, e := range entries {
-					ps[e] = true
-				}
-				pubSetsMu.Lock()
-				pubSets[item.dblpKey] = ps
-				pubSetsMu.Unlock()
-				loadedCount.Add(1)
-			}
-		}()
-	}
-	loadWg.Wait()
-	close(loadDone)
-
-	Library.Progress("Scanning %d DBLP-keyed contributor(s) for misattributed entries...", total)
-
-	jsonCache := make(map[string]*TDblpJSONEntry)
-
-	for _, c := range candidates {
-		pubSet := pubSets[c.contrib.DblpKey]
-		if len(pubSet) == 0 {
-			continue
-		}
-		rows, err := db.Query(`
-			SELECT DISTINCT cr.entry_key, be.value
-			FROM contributor_roles cr
-			JOIN bib_entries be ON be.entry_key = cr.entry_key AND be.field = ?
-			WHERE cr.contributor_id = ?`, DBLPField, c.contribID)
-		if err != nil {
-			continue
-		}
-		for rows.Next() {
-			var entryKey, dblpVal string
-			if rows.Scan(&entryKey, &dblpVal) != nil {
-				continue
-			}
-			normKey := normalizeDblpKey(dblpVal)
-			if normKey == "" || pubSet[normKey] {
-				continue
-			}
-			if _, seen := jsonCache[normKey]; !seen {
-				jsonCache[normKey] = readDblpJSONEntry(normKey)
-			}
-			je := jsonCache[normKey]
-			if je == nil {
-				continue
-			}
-			for _, person := range append(je.Authors, je.Editors...) {
-				k2 := pm.nameToKey[person.Name]
-				if k2 == "" || k2 == c.contrib.DblpKey {
-					continue
-				}
-				splits = append(splits, splitTarget{c.contribID, c.contrib.DblpKey, k2})
-			}
-		}
-		rows.Close()
-	}
-
-	done := 0
-	seen := make(map[splitTarget]bool)
-	for _, st := range splits {
-		if seen[st] {
-			continue
-		}
-		seen[st] = true
-		newCanonical := pm.keyToCanonical[st.newKey]
-		newName := simpleSurnameSwap(newCanonical)
-		if newName == "" {
-			newName = newCanonical
-		}
-		sc := dblpSplitCandidate{
-			contribID:    st.contribID,
-			existingKey:  st.existingKey,
-			newKey:       st.newKey,
-			newCanonical: newCanonical,
-			newName:      newName,
-			newForms:     keyToNames[st.newKey],
-		}
-		if splitContributorByDblpKeys(l, sc, nil) {
-			done++
-		}
-	}
-	return done
-}
-
-// detectUnkeyedContributorSplits handles contributors that have no dblp_key but
-// whose attributed entries carry a dblp field. For each such entry it reads the
-// DBLP JSON to identify which DBLP person authored it (via ORCID or unambiguous
-// name lookup combined with a surname match against the contributor). If all
-// entries map to a single person key the key is simply assigned to the
-// contributor. If entries map to multiple distinct person keys the contributor
-// is split: the largest group retains the original record (with its key
-// assigned), and each remaining group is split off via splitContributorByDblpKeys.
-// Returns the total number of successful splits + key assignments > 0.
-func detectUnkeyedContributorSplits(l *TBibTeXLibrary, pm dblpPersonMaps, keyToNames map[string][]string) int {
-	type candidateRow struct{ contribID, contribName, entryKey, dblpVal string }
-
-	// dblp_key is NULL (not '') for contributors that have never been keyed.
-	rows, err := db.Query(`
-		SELECT cr.contributor_id, c.name, cr.entry_key, be.value
-		FROM contributor_roles cr
-		JOIN bib_entries be ON be.entry_key = cr.entry_key AND be.field = ?
-		JOIN contributors c ON c.id = cr.contributor_id
-		WHERE COALESCE(c.dblp_key, '') = ''`, DBLPField)
+// linkDecidedDblpKeys gives a contributor without DBLP key the DBLP person its
+// positions were decided for (entry_contributor_names.dblp_key_used), when they all
+// name the same person and no other contributor has that key. Returns the count.
+func linkDecidedDblpKeys() int {
+	rows, err := bibQuery(`SELECT ecn.contributor_id, ecn.dblp_key_used
+		FROM entry_contributor_names ecn JOIN contributors c ON c.id = ecn.contributor_id
+		WHERE COALESCE(ecn.dblp_key_used, '') != '' AND COALESCE(c.dblp_key, '') = ''
+		GROUP BY ecn.contributor_id, ecn.dblp_key_used`)
 	if err != nil {
 		return 0
 	}
-	var candidates []candidateRow
+	keysOf := map[string][]string{}
 	for rows.Next() {
-		var r candidateRow
-		if rows.Scan(&r.contribID, &r.contribName, &r.entryKey, &r.dblpVal) == nil {
-			candidates = append(candidates, r)
+		var id, key string
+		if rows.Scan(&id, &key) == nil {
+			keysOf[id] = append(keysOf[id], key)
 		}
 	}
 	rows.Close()
-	if len(candidates) == 0 {
-		return 0
+	linked := 0
+	for id, keys := range keysOf {
+		if len(keys) != 1 || Library.ContributorByID[id] == nil ||
+			Library.ContributorByID[Library.DblpKeyToContributorID[keys[0]]] != nil {
+			continue
+		}
+		setContributorDblpKey(&Library, id, keys[0])
+		linked++
 	}
-	Library.Progress("Inferring person keys for %d entry/ies (contributors without DBLP key)...", len(candidates))
-
-	// Read each distinct DBLP entry JSON once and cache it.
-	jsonCache := make(map[string]*TDblpJSONEntry)
-	for i, c := range candidates {
-		if i%500 == 0 {
-			messagef("\r  reading JSON: %d/%d...", i, len(candidates))
-		}
-		normKey := normalizeDblpKey(c.dblpVal)
-		if normKey == "" {
-			continue
-		}
-		if _, seen := jsonCache[normKey]; !seen {
-			jsonCache[normKey] = readDblpJSONEntry(normKey) // nil if not in the DBLP store
-		}
-	}
-	messagef("\r")
-
-	// contribPersonEntries: contribID → personKey → deduplicated set of entryKeys
-	contribPersonEntries := make(map[string]map[string]map[string]bool)
-
-	for _, c := range candidates {
-		// Skip org names (braced) — they are not person contributors.
-		if strings.HasPrefix(c.contribName, "{") {
-			continue
-		}
-		normKey := normalizeDblpKey(c.dblpVal)
-		if normKey == "" {
-			continue
-		}
-		je := jsonCache[normKey]
-		if je == nil {
-			continue
-		}
-		// Find the person key for this contributor's author slot.
-		// A candidate key is accepted only when its DBLP canonical name (swapped
-		// to Last,First form) exactly matches the contributor name — this prevents
-		// assigning the wrong homonym (e.g. "Mark Mulder" ≠ "Mulder, Mark A. T.").
-		personKey := ""
-		for _, person := range append(je.Authors, je.Editors...) {
-			var k string
-			if person.ORCID != "" {
-				k = pm.orcidToKey[person.ORCID]
-			}
-			if k == "" {
-				k = pm.nameToKey[person.Name]
-			}
-			if k == "" {
-				continue
-			}
-			if strings.TrimSpace(simpleSurnameSwap(pm.keyToCanonical[k])) == strings.TrimSpace(c.contribName) {
-				personKey = k
-				break
-			}
-		}
-		if personKey == "" {
-			continue
-		}
-		if contribPersonEntries[c.contribID] == nil {
-			contribPersonEntries[c.contribID] = make(map[string]map[string]bool)
-		}
-		if contribPersonEntries[c.contribID][personKey] == nil {
-			contribPersonEntries[c.contribID][personKey] = make(map[string]bool)
-		}
-		contribPersonEntries[c.contribID][personKey][c.entryKey] = true
-	}
-
-	done := 0
-	for contribID, personEntries := range contribPersonEntries {
-		if len(personEntries) == 0 {
-			continue
-		}
-		// Find the primary key (most entries).
-		primaryKey := ""
-		maxCount := 0
-		for k, entries := range personEntries {
-			if len(entries) > maxCount {
-				maxCount = len(entries)
-				primaryKey = k
-			}
-		}
-		// Assign primary key to the contributor.
-		setContributorDblpKey(l, contribID, primaryKey)
-		done++
-		if len(personEntries) == 1 {
-			continue
-		}
-		// Split off each remaining person key.
-		for k := range personEntries {
-			if k == primaryKey {
-				continue
-			}
-			newCanonical := pm.keyToCanonical[k]
-			newName := simpleSurnameSwap(newCanonical)
-			if newName == "" {
-				newName = newCanonical
-			}
-			sc := dblpSplitCandidate{
-				contribID:    contribID,
-				existingKey:  primaryKey,
-				newKey:       k,
-				newCanonical: newCanonical,
-				newName:      newName,
-				newForms:     keyToNames[k],
-			}
-			if splitContributorByDblpKeys(l, sc, nil) {
-				done++
-			}
-		}
-	}
-	return done
+	return linked
 }
 
 // absorbDblpOrcidsCore sweeps contributors for ORCID assignment using the DBLP
@@ -2123,7 +1336,7 @@ func absorbDblpOrcidsCore() {
 
 	Library.Progress("Scanning for ORCIDs via DBLP person keys (%d contributors).", total)
 	ticker := Library.NewProgressTicker(ProgressScanningOrcids, total)
-	orcidsSet, keysLinked, merged, checked := 0, 0, 0, 0
+	orcidsSet, keysLinked, checked := 0, 0, 0
 
 	for id, contrib := range Library.ContributorByID {
 		if contrib.Name == "" {
@@ -2143,45 +1356,20 @@ func absorbDblpOrcidsCore() {
 			if contrib.ORCID != "" {
 				key = pm.orcidToKey[contrib.ORCID]
 			}
-			if key == "" {
+			_, sharedName := Library.AmbiguousNameToContributorIDs[contrib.Name]
+			if key == "" && !sharedName {
 				key = pm.nameToKey[contrib.Name]
 			}
-			if key == "" {
+			if key == "" && !sharedName {
 				if swapped := swapBibTeXNameFormat(contrib.Name); swapped != "" {
 					key = pm.nameToKey[swapped]
 				}
 			}
 			if key != "" {
-				// If another contributor already holds this DBLP key, DBLP proves
-				// they are the same person — merge the key-less contributor into the
-				// existing holder so all contributor_roles follow.
-				if existingID, conflict := Library.DblpKeyToContributorID[key]; conflict && existingID != id {
-					existing := Library.ContributorByID[existingID]
-					Library.Progress("DBLP key %s: merging %q into %q.", key, contrib.Name, existing.Name)
-					if mergeContributorInDB(id, existingID) {
-						if existing.ORCID == "" && contrib.ORCID != "" {
-							existing.ORCID = contrib.ORCID
-							upsertContributorORCIDToDB(existingID, contrib.ORCID, true)
-						}
-						for name, nid := range Library.NameToContributorID {
-							if nid == id {
-								Library.NameToContributorID[name] = existingID
-							}
-						}
-						// See the matching comment at the first DBLP-key merge site above:
-						// any ORCID still pointing at the absorbed contributor must be
-						// redirected, not just contrib.ORCID, or a later lookup resolves to
-						// a deleted contributor ID and the next write through it hits a
-						// FOREIGN KEY violation.
-						for orcid, nid := range Library.ORCIDToContributorID {
-							if nid == id {
-								Library.ORCIDToContributorID[orcid] = existingID
-							}
-						}
-						delete(Library.ContributorByID, id)
-						Library.AddNameMapping(existing.Name, contrib.Name)
-						merged++
-					}
+				// Another contributor holds this DBLP key: leave both as they are. A
+				// name match is no evidence that they are the same person; the
+				// decisions per position settle who is who (ARCHITECTURE.md 7.6).
+				if Library.ContributorByID[Library.DblpKeyToContributorID[key]] != nil {
 					continue
 				}
 				setContributorDblpKey(&Library, id, key)
@@ -2205,10 +1393,6 @@ func absorbDblpOrcidsCore() {
 	}
 
 	ticker.Done()
-	if merged > 0 {
-		Library.Progress("DBLP key sweep: merged %d duplicate contributor(s) into existing DBLP-keyed records.", merged)
-		Library.RenormaliseNameFields()
-	}
 	if keysLinked > 0 {
 		Library.Progress("Linked %d additional contributor(s) to DBLP keys.", keysLinked)
 	}
@@ -2333,30 +1517,93 @@ func mergeOrcidDuplicatesCore() int {
 				continue
 			}
 			Library.Progress("ORCID %s: absorbing %q into %q", orcid, other.name, bestName)
-			if mergeContributorInDB(other.id, bestID) {
-				// Update in-memory state: redirect all names from other.id to bestID.
-				for name, id := range Library.NameToContributorID {
-					if id == other.id {
-						Library.NameToContributorID[name] = bestID
-					}
-				}
-				// Every member here shares `orcid` by construction, so ORCIDToContributorID[orcid]
-				// may currently point at other.id — redirect it, and any other ORCID that
-				// somehow still points at other.id, or a later lookup resolves to a deleted
-				// contributor ID and the next write through it hits a FOREIGN KEY violation.
-				for o, id := range Library.ORCIDToContributorID {
-					if id == other.id {
-						Library.ORCIDToContributorID[o] = bestID
-					}
-				}
-				delete(Library.ContributorByID, other.id)
-				// Register the old canonical as an alias of the new canonical.
-				Library.AddNameMapping(bestName, other.name)
+			if absorbContributorInto(other.id, other.name, bestID, bestName) {
 				merged++
 			}
 		}
 	}
 	return merged
+}
+
+// absorbContributorInto merges contributor fromID into intoID, in the DB and in
+// memory. Returns false when the DB merge failed.
+func absorbContributorInto(fromID, fromName, intoID, intoName string) bool {
+	if !mergeContributorInDB(fromID, intoID) {
+		return false
+	}
+	// Update in-memory state: redirect all names from fromID to intoID.
+	for name, id := range Library.NameToContributorID {
+		if id == fromID {
+			Library.NameToContributorID[name] = intoID
+		}
+	}
+	// Any ORCID still pointing at fromID must follow, or a later lookup resolves to a
+	// deleted contributor ID and the next write through it hits a FOREIGN KEY violation.
+	for o, id := range Library.ORCIDToContributorID {
+		if id == fromID {
+			Library.ORCIDToContributorID[o] = intoID
+		}
+	}
+	delete(Library.ContributorByID, fromID)
+	// The old canonical becomes a name form of the contributor merged into (by id:
+	// AddNameMapping works by name and would create a new contributor when intoName is
+	// shared).
+	Library.giveContributorNameForm(intoID, fromName)
+	return true
+}
+
+// mergeDeprecatedOrcidsCore applies ORCID's own duplicate records (step 23.3): an
+// iD that ORCID deprecated into a primary one (orcid_records.primary_orcid) belongs
+// to the same person. The contributor holding the deprecated iD is merged into the
+// one holding the primary; when no contributor holds the primary, it gets the
+// primary as its ORCID. Returns merged, given.
+func mergeDeprecatedOrcidsCore() (merged, given int) {
+	db := orcidStoreDB()
+	if db == nil {
+		return 0, 0
+	}
+	rows, err := db.Query(`SELECT orcid, primary_orcid FROM orcid_records WHERE primary_orcid IS NOT NULL ORDER BY orcid`)
+	if err != nil {
+		return 0, 0
+	}
+	type pair struct{ deprecated, primary string }
+	var pairs []pair
+	for rows.Next() {
+		var p pair
+		if rows.Scan(&p.deprecated, &p.primary) == nil {
+			pairs = append(pairs, p)
+		}
+	}
+	rows.Close()
+
+	for _, p := range pairs {
+		fromID := Library.ORCIDToContributorID[p.deprecated]
+		from := Library.ContributorByID[fromID]
+		if from == nil {
+			continue
+		}
+		intoID := Library.ORCIDToContributorID[p.primary]
+		switch into := Library.ContributorByID[intoID]; {
+		case into == nil:
+			Library.Progress("ORCID %s was merged by ORCID into %s: %q gets %s", p.deprecated, p.primary, from.Name, p.primary)
+			upsertContributorORCIDToDB(fromID, p.primary, false)
+			Library.ORCIDToContributorID[p.primary] = fromID
+			if from.ORCID == p.deprecated {
+				from.ORCID = p.primary
+				dbExecSave("mergeDeprecatedOrcids: primary ORCID",
+					`UPDATE contributors SET orcid = ? WHERE id = ?`, p.primary, fromID)
+				dbExecSave("mergeDeprecatedOrcids: canonical flags",
+					`UPDATE contributor_orcids SET is_canonical = (orcid = ?) WHERE contributor_id = ?`, p.primary, fromID)
+			}
+			given++
+		case intoID != fromID:
+			Library.Progress("ORCID %s was merged by ORCID into %s: absorbing %q into %q", p.deprecated, p.primary, from.Name, into.Name)
+			if absorbContributorInto(fromID, from.Name, intoID, into.Name) {
+				merged++
+			}
+		}
+	}
+	return merged, given
 }
 
 // doMergeOrcidDuplicates is the -merge_orcid_duplicates entry point.
@@ -2366,7 +1613,10 @@ func doMergeOrcidDuplicates() {
 	}
 	merged := mergeOrcidDuplicatesCore()
 	Library.Progress("Merged %d ORCID-duplicate contributor pair(s).", merged)
-	if merged > 0 {
+	depMerged, depGiven := mergeDeprecatedOrcidsCore()
+	Library.Progress("Deprecated ORCIDs: %d contributor(s) merged, %d given the primary ORCID.", depMerged, depGiven)
+	merged += depMerged
+	if merged > 0 || depGiven > 0 {
 		Library.RenormaliseNameFields()
 		Library.CheckNameMappingConsistency()
 	}
@@ -2403,7 +1653,10 @@ func doEnrichContributorData() {
 	Library.progressPrefix = "  " // "  " + existing "  " prefix = "    "
 	merged := mergeOrcidDuplicatesCore()
 	Library.Progress("  Merged %d ORCID-duplicate contributor pair(s).", merged)
-	if merged > 0 {
+	depMerged, depGiven := mergeDeprecatedOrcidsCore()
+	Library.Progress("  Deprecated ORCIDs: %d contributor(s) merged, %d given the primary ORCID.", depMerged, depGiven)
+	merged += depMerged
+	if merged > 0 || depGiven > 0 {
 		Library.RenormaliseNameFields()
 		Library.CheckNameMappingConsistency()
 	}

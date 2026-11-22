@@ -217,6 +217,14 @@ func init() {
 			},
 		},
 		{
+			name:     "merge_orcid_duplicates",
+			kind:     commandWrite,
+			selected: func() bool { return cmdMergeOrcidDuplicates },
+			run: func(args []string) {
+				doMergeOrcidDuplicates()
+			},
+		},
+		{
 			name:     "merge_contributors",
 			kind:     commandWrite,
 			selected: func() bool { return cmdMergeContributors },
@@ -412,7 +420,7 @@ func init() {
 			selected: func() bool { return cmdSetPreferredAlias },
 			run: func(args []string) {
 				if len(args) != 2 {
-					messageln("Usage: -set_preferred_alias <key> <alias>")
+					messageln("Usage: -set_preferred_alias <alias> <key>")
 					endRun(1)
 				}
 				doSetPreferredAlias(args)

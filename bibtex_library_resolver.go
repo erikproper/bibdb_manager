@@ -19,6 +19,7 @@ package main
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 )
 
@@ -473,6 +474,83 @@ func (l *TBibTeXLibrary) contributorORCID(name string) string {
 	return resolveNameToORCID(name)
 }
 
+// autoResolveByORCIDSide answers the name question when exactly one of the two names
+// has an ORCID and both have the same surname: the name with the ORCID wins, globally
+// (as Y or N would; ORCID wins, Erik 2026-11-22, from his answers in the triage of
+// 30.31's first run). Different surnames are still asked: an entry-only answer
+// records the names as different people, and a global one may be wrong.
+func (l *TBibTeXLibrary) autoResolveByORCIDSide(key, field, currentName, challengerName string) (string, bool) {
+	currentORCID := l.contributorORCID(currentName)
+	challengerORCID := l.contributorORCID(challengerName)
+	if (currentORCID == "") == (challengerORCID == "") || !sameSurname(currentName, challengerName) {
+		return "", false
+	}
+	winner, loser, orcid := currentName, challengerName, currentORCID
+	if challengerORCID != "" {
+		winner, loser, orcid = challengerName, currentName, challengerORCID
+	}
+	l.AddNameMapping(winner, loser)
+	l.orcidSideAutoResolves = append(l.orcidSideAutoResolves,
+		fmt.Sprintf("%s %s: %s [%s] over %s", key, field, winner, orcid, loser))
+	return winner, true
+}
+
+// sameSurname reports whether two names (either order) have the same surname,
+// ignoring case and braces, also when one surname is a part of the other's
+// ("Navarro-Arribas" / "Navarro").
+func sameSurname(a, b string) bool {
+	sa, sb := nameSurname(a), nameSurname(b)
+	if sa == "" || sb == "" {
+		return false
+	}
+	if sa == sb {
+		return true
+	}
+	parts := func(s string) []string { return strings.FieldsFunc(s, func(r rune) bool { return r == '-' || r == ' ' }) }
+	return slices.Contains(parts(sa), sb) || slices.Contains(parts(sb), sa)
+}
+
+// nameSurname is the surname of a BibTeX name, in lower case without braces: the
+// part before the comma ("Wimmer, Maria A."), else the last word, or the last
+// braced group ("Luis {Quesada Torres}"). A generation at the end ("James L.
+// Parrish Jr.", "James L. Parrish, Jr.") is not the surname.
+func nameSurname(name string) string {
+	name = strings.TrimSpace(name)
+	if i := strings.LastIndex(name, ", "); i >= 0 && isNameGeneration(name[i+2:]) && strings.Count(name, ", ") == 1 {
+		name = name[:i] // natural order with ", Jr."
+	} else if i := strings.Index(name, ", "); i >= 0 {
+		return plainSurname(name[:i])
+	}
+	if strings.HasSuffix(name, "}") {
+		if i := strings.LastIndex(name, " {"); i >= 0 {
+			return plainSurname(name[i+1:])
+		}
+		return plainSurname(name)
+	}
+	fields := strings.Fields(name)
+	for len(fields) > 1 && isNameGeneration(fields[len(fields)-1]) {
+		fields = fields[:len(fields)-1]
+	}
+	if len(fields) == 0 {
+		return ""
+	}
+	return plainSurname(fields[len(fields)-1])
+}
+
+// plainSurname is s in lower case without braces.
+func plainSurname(s string) string {
+	return strings.ToLower(strings.NewReplacer("{", "", "}", "").Replace(s))
+}
+
+// isNameGeneration reports whether word is a generation suffix (Jr., Sr., II, …).
+func isNameGeneration(word string) bool {
+	switch strings.ToLower(strings.TrimSuffix(strings.TrimSpace(word), ".")) {
+	case "jr", "sr", "ii", "iii", "iv":
+		return true
+	}
+	return false
+}
+
 // resolveNamePair interactively resolves a single differing name position in an
 // author/editor field. currentName is the library's current form; challengerName is the
 // incoming challenger form. namePos and nameTotal give position context for display.
@@ -509,6 +587,10 @@ func (l *TBibTeXLibrary) resolveNamePair(key, field string, namePos, nameTotal, 
 			fmt.Sprintf("Auto-accepted DBLP name form %q for %s (mapping from %q)", challengerName, key, currentName))
 		l.AddNameMapping(challengerName, currentName)
 		return challengerName, false, true
+	}
+
+	if result, ok := l.autoResolveByORCIDSide(key, field, currentName, challengerName); ok {
+		return result, false, true
 	}
 
 	currentDisplay := currentName
@@ -564,27 +646,22 @@ func (l *TBibTeXLibrary) resolveNamePair(key, field string, namePos, nameTotal, 
 
 // dblpSamePerson reports whether the DBLP person at position (1-based) of the
 // entry being merged is the contributor already at that position, so the names
-// need no resolving. A name shared by several people cannot answer this: looking
-// up an ORCID by name finds one of them, often not this one, and made the merge
-// flip such names on every run (Erik, 2026-11-19). So the evidence is, in order:
-//  1. DBLP gives an ORCID there and the contributor has one: equal means same.
-//  2. Otherwise, the two names differ only in order ("Jin Li" vs "Li, Jin"):
-//     keep the contributor in place.
+// need no resolving: the contributor identity decision (ARCHITECTURE.md 7.6) for
+// DBLP's name there picks the contributor in place, on evidence (not as the
+// fallback for an ambiguous name), and not as a different person with the same
+// name. Names that differ only in order ("Jin Li" vs "Li, Jin") are the same too.
 // Anything else is left to resolveNamePair.
 func (l *TBibTeXLibrary) dblpSamePerson(key, role string, position, names int, current, challenger string) bool {
-	persons := l.DblpSourcePersons[role]
-	if len(persons) != names || position < 1 || position > len(persons) {
+	if sameNameOtherOrder(current, challenger) {
+		return true
+	}
+	inPlace := contributorInPlace(key, role, position)
+	if inPlace == "" {
 		return false
 	}
-	if orcid := persons[position-1].ORCID; orcid != "" {
-		var id string
-		bibQueryRow(`SELECT contributor_id FROM contributor_roles WHERE entry_key = ? AND role = ? AND position = ?`,
-			key, role, position).Scan(&id) //nolint:errcheck
-		if c := l.ContributorByID[id]; c != nil && c.ORCID != "" {
-			return c.ORCID == orcid
-		}
-	}
-	return sameNameOtherOrder(current, challenger)
+	ev := l.positionEvidence(key, role, position, names, challenger)
+	d := l.decideContributor(ev)
+	return d.ContributorID == inPlace && d.Rule != identityAmbiguous && !d.NewPerson
 }
 
 // sameNameOtherOrder reports whether a and b are the same name, one as "Last, First"
