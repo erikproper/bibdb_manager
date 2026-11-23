@@ -50,6 +50,7 @@ var (
 	cmdServe         bool
 	cmdPush          bool
 	cmdLoadLibrary   bool
+	cmdOpenUI        bool
 
 	// relayingToService is set while the command line relays a job: Ctrl-C is
 	// then passed on to the job instead of handled here.
@@ -101,6 +102,9 @@ func handleServiceCommands() bool {
 		return true
 	case cmdServiceStatus:
 		serviceStatus()
+		return true
+	case cmdOpenUI:
+		openWebUI()
 		return true
 	}
 	if os.Getenv(envServiceJob) != "" {
@@ -288,6 +292,26 @@ func stopService() {
 	}
 }
 
+// openWebUI opens the service's web UI in the default browser.
+func openWebUI() {
+	conn := dialService()
+	if conn == nil {
+		messagef("No service runs for %s; start it with -start.\n", bibTeXBaseName)
+		endRun(1)
+	}
+	defer conn.Close()
+	newFrameSender(conn).send(serviceFrame{T: "ui"}) //nolint:errcheck
+	var f serviceFrame
+	if json.NewDecoder(bufio.NewReader(conn)).Decode(&f) != nil || f.T != "out" {
+		messageln("The service did not give the address of its web UI.")
+		endRun(1)
+	}
+	address := strings.TrimSpace(f.D)
+	if err := exec.Command("open", address).Run(); err != nil {
+		messagef("Open %s in a browser (%s).\n", address, err)
+	}
+}
+
 func serviceStatus() {
 	if !askService("status") {
 		messagef("No service runs for %s.\n", bibTeXBaseName)
@@ -308,6 +332,7 @@ type TService struct {
 	jobFrom time.Time
 
 	lastActive time.Time // the end of the last job (or the start)
+	web        *TWebUI
 	ownJob     bool      // the running job is the service's own (loading, the push)
 	ownWhat    string    // what that job does, for a command that waits for it
 	pushDue    time.Time // when the background push is due (zero: none)
@@ -349,6 +374,8 @@ func runService() {
 	if serviceIdleMinutes > 0 {
 		go s.stopWhenIdle(time.Duration(serviceIdleMinutes) * time.Minute)
 	}
+	s.web = newWebUI(s)
+	s.web.start()
 	go s.loadAtStart()
 	go s.pushWhenDue()
 	if readLibraryUnpushed() != nil {
@@ -432,6 +459,9 @@ func (s *TService) serve(conn net.Conn) {
 	case "status":
 		out.send(serviceFrame{T: "info", D: s.statusText()}) //nolint:errcheck
 		out.send(serviceFrame{T: "exit"})                    //nolint:errcheck
+	case "ui":
+		out.send(serviceFrame{T: "out", D: s.web.URL() + "\n"}) //nolint:errcheck
+		out.send(serviceFrame{T: "exit"})                       //nolint:errcheck
 	case "stop":
 		s.mu.Lock()
 		running := s.busy
@@ -453,6 +483,9 @@ func (s *TService) statusText() string {
 		AppVersion, bibTeXBaseName, os.Getpid(), s.started.Format("2006-01-02 15:04"))
 	if serviceIdleMinutes > 0 {
 		fmt.Fprintf(&b, "Stops after %d min without a job (service_idle_minutes).\n", serviceIdleMinutes)
+	}
+	if s.web != nil {
+		fmt.Fprintf(&b, "Web UI: %s (open it with -ui).\n", s.web.URL())
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()

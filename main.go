@@ -54,7 +54,7 @@ var (
 	Reporting TInteraction
 )
 
-const AppVersion = "30.62"
+const AppVersion = "30.63"
 
 // Run-state flags consumed by the write tail in main.
 var (
@@ -4161,6 +4161,7 @@ func main() {
 
 	flag.BoolVar(&cmdStartService, "start", false, "start the service for this library in the background; commands then run through it")
 	flag.BoolVar(&cmdStopService, "stop", false, "stop the service gracefully (a running job is stopped as with Ctrl-C)")
+	flag.BoolVar(&cmdOpenUI, "ui", false, "open the service's web UI in the browser (the service must run: -start)")
 	flag.BoolVar(&cmdServiceStatus, "status", false, "tell whether the service runs, and which job")
 	flag.BoolVar(&cmdPush, "push", false, "push this machine's changes to the shared DB folder (Nextcloud) when they are not there yet")
 	flag.BoolVar(&cmdLoadLibrary, "load_library", false, "(internal) open the library and change nothing; the service runs it when it starts")

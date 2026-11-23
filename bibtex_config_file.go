@@ -53,6 +53,9 @@ type TBibTeXFolders struct {
 	// ServiceIdleMinutes stops the service (-start) after that many minutes
 	// without a job, pushing what is not pushed yet. Absent or 0: no timeout.
 	ServiceIdleMinutes int `json:"service_idle_minutes,omitempty"`
+	// ServicePort is the localhost port of the service's web UI (-ui). One per
+	// library, so several libraries can run side by side. Absent: 8401.
+	ServicePort int `json:"service_port,omitempty"`
 	// NrOfBackups is how many timestamped backups (copy and dump each) a save
 	// keeps in backup_folder; older ones are removed (pruneLibraryBackups).
 	// Absent: 4 (as ~/BiBTeX/clean.backups did). 0 or less: keep all.
@@ -92,6 +95,7 @@ var (
 	dblpURL            = ""                 // set by loadBibTeXFolders; see doUpdateDblp
 	serviceIdleMinutes = 0                  // set by loadBibTeXFolders; see service.go
 	nrOfBackups        = defaultNrOfBackups // set by loadBibTeXFolders; see pruneLibraryBackups
+	servicePort        = 0                  // set by loadBibTeXFolders; see web_ui.go
 	displayFile        = ""                 // set by loadBibTeXFolders; see displayContent
 	displayCommand     = ""                 // set by loadBibTeXFolders; see displayContent
 	displayReopen      = true               // set by loadBibTeXFolders; see displayContent
@@ -239,6 +243,7 @@ func loadBibTeXFolders(settingsPath string) {
 	backupFolder = fill(&f.BackupFolder, libraryBase()+".backups/")
 	dblpURL = f.DblpURL
 	serviceIdleMinutes = f.ServiceIdleMinutes
+	servicePort = f.ServicePort
 	nrOfBackups = defaultNrOfBackups
 	if f.NrOfBackups != nil {
 		nrOfBackups = *f.NrOfBackups
