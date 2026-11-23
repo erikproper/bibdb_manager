@@ -187,7 +187,8 @@ func (l *TBibTeXLibrary) CheckEntryFieldMappingWinners() {
 			}
 			seen := map[string]bool{}
 			for challenger, winner := range challengerMap {
-				if seen[winner] || winner == actual {
+				sameNames := (field == "author" || field == "editor") && authorEditorNamesEquivalentAnyOrder(l, winner, actual)
+				if seen[winner] || winner == actual || sameNames {
 					seen[winner] = true
 				} else {
 					seen[winner] = true

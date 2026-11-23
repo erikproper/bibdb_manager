@@ -365,6 +365,35 @@ func authorEditorNamesEquivalent(l *TBibTeXLibrary, a, b string) bool {
 	return true
 }
 
+// authorEditorNamesEquivalentAnyOrder is authorEditorNamesEquivalent, but a
+// name may also be the other at the same position in the other order ("Li, Min"
+// / "Min Li"). Used by CheckEntryFieldMappingWinners: the winner and the entry's
+// value can hold one name in two orders, and "fixing" that flipped back at
+// every opening (3 fixes each run, 2026-11-23).
+func authorEditorNamesEquivalentAnyOrder(l *TBibTeXLibrary, a, b string) bool {
+	if authorEditorNamesEquivalent(l, a, b) {
+		return true
+	}
+	canonical := func(n string) string {
+		n = strings.TrimSpace(n)
+		if c, ok := l.NameAliasToName[n]; ok {
+			return c
+		}
+		return n
+	}
+	an, bn := splitBibNameField(a), splitBibNameField(b)
+	if len(an) != len(bn) {
+		return false
+	}
+	for i := range an {
+		x, y := canonical(an[i]), canonical(bn[i])
+		if x != y && !sameNameOtherOrder(x, y) && !sameNameOtherOrder(strings.TrimSpace(an[i]), strings.TrimSpace(bn[i])) {
+			return false
+		}
+	}
+	return true
+}
+
 // Initial registration of a target over a alias for a given entry and its field.
 func (l *TBibTeXLibrary) AddEntryFieldAlias(entry, field, alias, target string, check bool) {
 	if alias == "" {
