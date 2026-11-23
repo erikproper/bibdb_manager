@@ -77,7 +77,11 @@ func (l *TBibTeXLibrary) setNameAlias(alias, canonical string, check bool) bool 
 
 	if oldCanonical, aliasIsAlreadyAliased := l.NameAliasToName[alias]; aliasIsAlreadyAliased && oldCanonical != canonical {
 		if check {
-			l.Warning(WarningAmbiguousAlias, alias, oldCanonical, canonical)
+			// "Wang, Qi" and "Qi Wang" are one name in two orders: the alias maps
+			// to the same name either way, so this is no ambiguity (Erik, 2026-11-23).
+			if !sameNameOtherOrder(oldCanonical, canonical) {
+				l.Warning(WarningAmbiguousAlias, alias, oldCanonical, canonical)
+			}
 			return false
 		}
 		// Retargeting (check=false): alias was pointing at a different canonical —

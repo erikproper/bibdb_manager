@@ -982,6 +982,12 @@ func deleteContributorNameFromDB(id, name string) {
 // Automatic/derived callers leave this false so the heuristic still protects them.
 var forceNameMapping bool
 
+// collectSkippedNameMappings, when set, collects the name mappings the garbled-name
+// heuristic skips instead of warning about each: ORCID's other-names often hold a
+// whole list or titles ("Huang, Michael, Michael Huang"), which -enrich_contributor_data
+// reports in one line and orcid_skipped_names.log (reportSkippedNameMappings).
+var collectSkippedNameMappings *[]string
+
 // upsertNameMapping records alias as a non-derived name form for the contributor
 // whose canonical name is `name`. Suppressed during load. If no contributor
 // exists yet for `name` a new one is created on the fly.
@@ -995,6 +1001,10 @@ func upsertNameMapping(alias, name string) {
 		return
 	}
 	if !forceNameMapping && (isGarbledContributorName(alias) || isGarbledContributorName(name)) {
+		if collectSkippedNameMappings != nil {
+			*collectSkippedNameMappings = append(*collectSkippedNameMappings, fmt.Sprintf("%q -> %q", alias, name))
+			return
+		}
 		dbInteraction.Warning("Skipping name mapping %q -> %q: looks like a garbled/ambiguous name (heuristic check); use -add_name_mapping to force it", alias, name)
 		return
 	}

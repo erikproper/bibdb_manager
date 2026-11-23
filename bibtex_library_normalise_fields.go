@@ -452,21 +452,6 @@ func (l *TBibTeXLibrary) NormaliseFieldValue(field, value string) string {
 	return value
 }
 
-// reFirstEdition matches an edition value that says "first edition" ("1st", "1",
-// "1.", "1e", "first", "First Edition", "1st ed."), in any case and braces aside.
-var reFirstEdition = regexp.MustCompile(`(?i)^\s*(1|1st|1\.|1e|first)\s*(ed\.?|edition)?\s*$`)
-
-// NormaliseEditionValue trims an edition and drops one that says "first edition":
-// every work has one, so the field says nothing (Erik, 2026-11-22). The field then
-// goes, on import, on merges, and when the check normalises the entry.
-func NormaliseEditionValue(l *TBibTeXLibrary, value string) string {
-	value = strings.TrimSpace(value)
-	if reFirstEdition.MatchString(strings.NewReplacer("{", "", "}", "").Replace(value)) {
-		return ""
-	}
-	return value
-}
-
 func init() {
 	// Define the Normaliser functions.
 	fieldNormalisers = TFieldNormalisers{}
@@ -474,7 +459,6 @@ func init() {
 	fieldNormalisers["author"] = NormaliseNamesString
 	fieldNormalisers["booktitle"] = NormaliseBooktitleValue
 	fieldNormalisers["doi"] = NormaliseDOIValue
-	fieldNormalisers["edition"] = NormaliseEditionValue
 	fieldNormalisers["editor"] = NormaliseNamesString
 	fieldNormalisers["howpublished"] = NormaliseLiteralString
 	fieldNormalisers["groups"] = NormaliseGroupsValue

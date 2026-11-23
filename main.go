@@ -54,7 +54,7 @@ var (
 	Reporting TInteraction
 )
 
-const AppVersion = "30.42"
+const AppVersion = "30.47"
 
 // Run-state flags consumed by the write tail in main.
 var (
@@ -1222,6 +1222,21 @@ outer:
 	reportORCIDSideAutoResolves()
 }
 
+// reportSkippedNameMappings appends the name mappings skipped as garbled during the
+// ORCID enrichment to orcid_skipped_names.log, and reports their count.
+func reportSkippedNameMappings(lines []string) {
+	if len(lines) == 0 {
+		return
+	}
+	logPath := libraryBase() + tablesFolderSuffix + "/orcid_skipped_names.log"
+	os.MkdirAll(libraryBase()+tablesFolderSuffix, 0o755) //nolint:errcheck
+	if f, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644); err == nil {
+		fmt.Fprintf(f, "# %s\n%s\n", time.Now().Format("2006-01-02 15:04:05"), strings.Join(lines, "\n"))
+		f.Close()
+	}
+	Library.Progress("ORCID name forms skipped as garbled (lists, titles): %d (see orcid_skipped_names.log; -add_name_mapping forces one).", len(lines))
+}
+
 // reportORCIDSideAutoResolves reports the name questions autoResolveByORCIDSide
 // answered, with the details in orcid_side_auto_resolves.log.
 func reportORCIDSideAutoResolves() {
@@ -1796,6 +1811,13 @@ func doDefaultRun() {
 		Library.CheckDuplicateDBLPKeys()
 		Library.CheckLoneProceedings()
 		Library.FlushDeferredMessages()
+		if Library.QuitWasRequested() {
+			return
+		}
+
+		// The entry_actions script: group rules and the sanity rules of step 24, so
+		// every check both repairs and defends (about 0.1 s for a few rules).
+		runScript()
 		if Library.QuitWasRequested() {
 			return
 		}
@@ -3403,6 +3425,12 @@ func isValidORCID(s string) bool {
 // from both the standalone command and the combined -enrich_contributor_data pass.
 // Fetches ORCID person records, adds aliases, and challenges canonical mismatches.
 func doEnrichOrcidProfilesCore() {
+	var skippedForms []string
+	collectSkippedNameMappings = &skippedForms
+	defer func() {
+		collectSkippedNameMappings = nil
+		reportSkippedNameMappings(skippedForms)
+	}()
 	loadNonDoubleContributorNamesFromDb(&Library)
 
 	if !Online {

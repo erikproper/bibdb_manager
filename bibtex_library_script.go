@@ -19,6 +19,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"unicode"
@@ -180,6 +181,12 @@ type sBlock           struct{ stmts []scriptStmt }
 type sAddToGroup      struct{ group string }
 type sRemoveFromGroup struct{ group string }
 type sIssueWarning    struct{ msg string }
+
+// Field actions (step 24): sanity rules as data. They change the entry's own fields
+// (not values inherited from a crossref parent).
+type sRemoveField struct{ field string }
+type sMoveField struct{ from, to string }
+type sSetField struct{ field, value string }
 type sIf              struct {
 	cond  scriptCond
 	then  scriptStmt
@@ -196,6 +203,9 @@ func (*sAddToGroup) isStmt()      {}
 func (*sRemoveFromGroup) isStmt() {}
 func (*sIssueWarning) isStmt()    {}
 func (*sIf) isStmt()              {}
+func (*sRemoveField) isStmt()     {}
+func (*sMoveField) isStmt()       {}
+func (*sSetField) isStmt()        {}
 
 type scriptCond interface{ isCond() }
 
@@ -208,6 +218,7 @@ type sCondFieldIncludes    struct{ field, value string }
 type sCondFieldEquals      struct{ field, value string }
 type sCondFieldEmpty       struct{ field string; negated bool }
 type sCondFieldNumCmp      struct{ field, op string; value int }
+type sCondFieldMatches     struct{ field string; re *regexp.Regexp }
 
 func (*sCondAnd) isCond()              {}
 func (*sCondEntryType) isCond()        {}
@@ -218,11 +229,13 @@ func (*sCondFieldIncludes) isCond()    {}
 func (*sCondFieldEquals) isCond()      {}
 func (*sCondFieldEmpty) isCond()       {}
 func (*sCondFieldNumCmp) isCond()      {}
+func (*sCondFieldMatches) isCond()     {}
 
 type scriptProgram struct {
 	groupSets map[string][]string
 	rules     []*sIf
 	changes   int // group assignments added or removed during this run
+	fieldChanges int // fields removed, moved or set during this run
 }
 
 // ─── Parser ─────────────────────────────────────────────────────────────────────
@@ -342,6 +355,10 @@ func (p *scriptParser) parseStmt() scriptStmt {
 		return p.parseRemove()
 	case p.is("issue"):
 		return p.parseIssue()
+	case p.is("move"):
+		return p.parseMoveField()
+	case p.is("set"):
+		return p.parseSetField()
 	default:
 		p.errorf(t.line, "expected statement, got %q", t.val)
 		p.lx.next() // consume to prevent infinite loop in block parsing
@@ -375,12 +392,65 @@ func (p *scriptParser) parseAdd() scriptStmt {
 
 func (p *scriptParser) parseRemove() scriptStmt {
 	p.eat("remove")
+	if p.is("the") {
+		// remove the <field> field
+		p.lx.next()
+		field, ok := p.eatFieldName()
+		if !ok {
+			return nil
+		}
+		return &sRemoveField{field}
+	}
 	p.eat("it")
 	p.eat("from")
 	p.eat("the")
 	p.eat("group")
 	group, _ := p.eatString()
 	return &sRemoveFromGroup{group}
+}
+
+// eatFieldName reads "<name> field" and returns the name in lower case.
+func (p *scriptParser) eatFieldName() (string, bool) {
+	t := p.lx.peek()
+	if t.kind != stokIdent {
+		p.errorf(t.line, "expected a field name, got %q", t.val)
+		return "", false
+	}
+	p.lx.next()
+	return strings.ToLower(t.val), p.eat("field")
+}
+
+// parseMoveField reads: move the <field> field to the <field> field
+func (p *scriptParser) parseMoveField() scriptStmt {
+	p.eat("move")
+	p.eat("the")
+	from, ok := p.eatFieldName()
+	if !ok {
+		return nil
+	}
+	p.eat("to")
+	p.eat("the")
+	to, ok := p.eatFieldName()
+	if !ok {
+		return nil
+	}
+	return &sMoveField{from, to}
+}
+
+// parseSetField reads: set the <field> field to "<value>"
+func (p *scriptParser) parseSetField() scriptStmt {
+	p.eat("set")
+	p.eat("the")
+	field, ok := p.eatFieldName()
+	if !ok {
+		return nil
+	}
+	p.eat("to")
+	value, ok := p.eatString()
+	if !ok {
+		return nil
+	}
+	return &sSetField{field, value}
 }
 
 func (p *scriptParser) parseIssue() scriptStmt {
@@ -524,6 +594,18 @@ func (p *scriptParser) parseFieldCond(field string) scriptCond {
 		val, _ := p.eatString()
 		return &sCondFieldEquals{field: field, value: val}
 	}
+	if p.is("matches") {
+		// the <field> field matches "<Go regular expression>"; (?i) for any case
+		line := p.lx.peek().line
+		p.lx.next()
+		val, _ := p.eatString()
+		re, err := regexp.Compile(val)
+		if err != nil {
+			p.errorf(line, "bad pattern %q: %s", val, err)
+			return nil
+		}
+		return &sCondFieldMatches{field: field, re: re}
+	}
 	if p.is("is") {
 		p.lx.next()
 		negated := false
@@ -627,6 +709,9 @@ func scriptEvalCond(l *TBibTeXLibrary, key string, prog *scriptProgram, cond scr
 		return scriptFieldValue(l, key, c.field) == c.value
 	case *sCondFieldEmpty:
 		return (scriptFieldValue(l, key, c.field) == "") != c.negated
+	case *sCondFieldMatches:
+		val := scriptFieldValue(l, key, c.field)
+		return val != "" && c.re.MatchString(val)
 	case *sCondFieldNumCmp:
 		n, err := strconv.Atoi(scriptFieldValue(l, key, c.field))
 		if err != nil {
@@ -679,6 +764,42 @@ func scriptEvalStmt(l *TBibTeXLibrary, key string, prog *scriptProgram, stmt scr
 		}
 	case *sIssueWarning:
 		l.Warning("%s: %s", key, s.msg)
+	case *sRemoveField:
+		entry := loadEntryFromDb(key)
+		if old := entry.Fields[s.field]; old != "" {
+			scriptDeleteField(l, entry, s.field)
+			prog.fieldChanges++
+			SpinnerInterrupt()
+			l.Progress("%s: removed %s {%s}", key, s.field, old)
+		}
+	case *sMoveField:
+		entry := loadEntryFromDb(key)
+		val := entry.Fields[s.from]
+		if val == "" {
+			return
+		}
+		switch target := entry.Fields[s.to]; {
+		case target == "":
+			scriptSetField(l, entry, s.to, val)
+			scriptDeleteField(l, entry, s.from)
+		case sameIgnoringBraces(target, val):
+			scriptDeleteField(l, entry, s.from) // the target has it already ("{NATO} …")
+		default:
+			l.Warning("%s: cannot move %s {%s} to %s: it holds {%s}", key, s.from, val, s.to, target)
+			return
+		}
+		prog.fieldChanges++
+		SpinnerInterrupt()
+		l.Progress("%s: moved %s {%s} to %s", key, s.from, val, s.to)
+	case *sSetField:
+		entry := loadEntryFromDb(key)
+		if entry.Fields[s.field] != s.value {
+			old := entry.Fields[s.field]
+			scriptSetField(l, entry, s.field, s.value)
+			prog.fieldChanges++
+			SpinnerInterrupt()
+			l.Progress("%s: set %s {%s} (was {%s})", key, s.field, s.value, old)
+		}
 	case *sIf:
 		if scriptEvalCond(l, key, prog, s.cond) {
 			scriptEvalStmt(l, key, prog, s.then)
@@ -694,6 +815,25 @@ func scriptEvalStmt(l *TBibTeXLibrary, key string, prog *scriptProgram, stmt scr
 			scriptEvalStmt(l, key, prog, s.else_)
 		}
 	}
+}
+
+// sameIgnoringBraces reports whether a and b are the same value apart from braces
+// and case.
+func sameIgnoringBraces(a, b string) bool {
+	strip := strings.NewReplacer("{", "", "}", "")
+	return strings.EqualFold(strip.Replace(a), strip.Replace(b))
+}
+
+// scriptSetField and scriptDeleteField change a field of an entry; variables, so the
+// tests can run the evaluator without a database.
+var scriptSetField = func(l *TBibTeXLibrary, entry *TBibTeXEntry, field, value string) {
+	l.setEntryField(entry, field, value)
+	bibEntriesModified = true
+}
+
+var scriptDeleteField = func(l *TBibTeXLibrary, entry *TBibTeXEntry, field string) {
+	l.deleteEntryField(entry, field)
+	bibEntriesModified = true
 }
 
 // ApplyScript parses the script at path and evaluates all rules against every
@@ -724,8 +864,8 @@ func (l *TBibTeXLibrary) ApplyScript(path string) {
 		return true
 	})
 	ticker.Done()
-	if prog.changes > 0 {
-		l.Progress("Script %s: %d group change(s)", path, prog.changes)
+	if prog.changes > 0 || prog.fieldChanges > 0 {
+		l.Progress("Script %s: %d group change(s), %d field change(s)", path, prog.changes, prog.fieldChanges)
 	} else {
 		l.Progress("Script %s: no changes", path)
 	}
