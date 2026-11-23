@@ -391,6 +391,7 @@ func (s *TService) pushWhenDue() {
 		due := !s.pushDue.IsZero() && time.Now().After(s.pushDue) && !s.busy && !s.stopping.Load()
 		if due {
 			s.busy, s.ownJob, s.jobStop, s.jobArgs, s.jobFrom = true, true, nil, []string{"(push to the shared DB folder)"}, time.Now()
+			s.ownWhat = "pushing to " + sharedDBFolder
 		}
 		s.mu.Unlock()
 		if !due {
@@ -409,4 +410,24 @@ func (s *TService) pushWhenDue() {
 		}
 		s.mu.Unlock()
 	}
+}
+
+// loadAtStart loads the library right after the service starts (Erik,
+// 2026-11-24), so the first command finds it loaded; commands arriving
+// meanwhile wait. The statistics go to the service log only.
+func (s *TService) loadAtStart() {
+	s.mu.Lock()
+	if s.busy || s.stopping.Load() {
+		s.mu.Unlock()
+		return
+	}
+	s.busy, s.ownJob, s.jobStop, s.jobArgs, s.jobFrom = true, true, nil, []string{"(loading the library)"}, time.Now()
+	s.ownWhat = "loading the library"
+	s.mu.Unlock()
+	fmt.Fprintf(os.Stderr, "%s  loading the library\n", time.Now().Format(time.DateTime))
+	s.runOwnJob([]string{"-load_library"}, logSink{})
+	s.mu.Lock()
+	s.busy, s.ownJob, s.lastActive = false, false, time.Now()
+	s.mu.Unlock()
+	fmt.Fprintf(os.Stderr, "%s  library loaded\n", time.Now().Format(time.DateTime))
 }

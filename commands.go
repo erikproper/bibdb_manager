@@ -433,6 +433,12 @@ func init() {
 			},
 		},
 		{
+			name:     "load_library",
+			kind:     commandWrite,
+			selected: func() bool { return cmdLoadLibrary },
+			run:      func(args []string) { openLibraryToUpdate() },
+		},
+		{
 			name:     "push",
 			kind:     commandWrite,
 			selected: func() bool { return cmdPush },

@@ -49,6 +49,7 @@ var (
 	cmdServiceStatus bool
 	cmdServe         bool
 	cmdPush          bool
+	cmdLoadLibrary   bool
 
 	// relayingToService is set while the command line relays a job: Ctrl-C is
 	// then passed on to the job instead of handled here.
@@ -307,7 +308,8 @@ type TService struct {
 	jobFrom time.Time
 
 	lastActive time.Time // the end of the last job (or the start)
-	ownJob     bool      // the running job is the service's own (the push)
+	ownJob     bool      // the running job is the service's own (loading, the push)
+	ownWhat    string    // what that job does, for a command that waits for it
 	pushDue    time.Time // when the background push is due (zero: none)
 
 	stopping atomic.Bool
@@ -347,6 +349,7 @@ func runService() {
 	if serviceIdleMinutes > 0 {
 		go s.stopWhenIdle(time.Duration(serviceIdleMinutes) * time.Minute)
 	}
+	go s.loadAtStart()
 	go s.pushWhenDue()
 	if readLibraryUnpushed() != nil {
 		s.schedulePush() // left by a run before the service
@@ -488,7 +491,7 @@ func (s *TService) runJob(req serviceFrame, dec *json.Decoder, out *frameSender)
 	for waited := false; s.busy && s.ownJob && !s.stopping.Load(); waited = true {
 		s.mu.Unlock()
 		if !waited {
-			out.send(serviceFrame{T: "info", D: "Waiting for the push to the shared DB folder to finish...\n"}) //nolint:errcheck
+			out.send(serviceFrame{T: "info", D: "Waiting for the service: " + s.ownWhat + "...\n"}) //nolint:errcheck
 		}
 		time.Sleep(300 * time.Millisecond)
 		s.mu.Lock()
