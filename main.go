@@ -54,7 +54,7 @@ var (
 	Reporting TInteraction
 )
 
-const AppVersion = "30.47"
+const AppVersion = "30.48"
 
 // Run-state flags consumed by the write tail in main.
 var (
@@ -1866,7 +1866,7 @@ func doFindEntries(args []string) {
 
 func doAddToGroup(args []string) {
 	if openLibraryToUpdate() {
-		key := Library.MapEntryKey(cleanKey(args[0]))
+		key := resolveUserKey(args[0])
 		group := args[1]
 		if err := addBibGroupEntry(group, key); err != nil {
 			messagef("Could not add %s to group %s: %s\n", key, group, err)
@@ -1884,7 +1884,7 @@ func doCreateGroup(args []string) {
 		Library.GroupEntries.AddValueToStringSetMap(groupName, "")
 		Library.GroupEntries.DeleteValueFromStringSetMap(groupName, "")
 		for _, rawKey := range args[1:] {
-			key := Library.MapEntryKey(cleanKey(rawKey))
+			key := resolveUserKey(rawKey)
 			if key == "" {
 				messagef("Unknown key: %s\n", rawKey)
 				continue
@@ -2010,7 +2010,7 @@ func doRenderAsText(args []string) {
 
 func doSetField(args []string) {
 	if openLibraryToUpdate() {
-		key := Library.MapEntryKey(cleanKey(args[0]))
+		key := resolveUserKey(args[0])
 		if !Library.EntryExists(key) {
 			messagef("set_field: entry not found: %s\n", args[0])
 			return
@@ -2028,7 +2028,7 @@ func doSetField(args []string) {
 
 func doRemoveFromGroup(args []string) {
 	if openLibraryToUpdate() {
-		key := Library.MapEntryKey(cleanKey(args[0]))
+		key := resolveUserKey(args[0])
 		group := args[1]
 		if err := removeBibGroupEntry(group, key); err != nil {
 			messagef("Could not remove %s from group %s: %s\n", key, group, err)
@@ -2046,7 +2046,7 @@ func doSetGroups(args []string) {
 	if !openLibraryToUpdate() {
 		return
 	}
-	key := Library.MapEntryKey(cleanKey(args[0]))
+	key := resolveUserKey(args[0])
 	if !Library.EntryExists(key) {
 		messagef("Unknown entry key: %s\n", args[0])
 		return
@@ -2990,7 +2990,7 @@ func runScript() bool {
 
 func doAddKeyMapping(args []string) {
 	if openLibraryToUpdate() {
-		target := Library.MapEntryKey(cleanKey(args[len(args)-1]))
+		target := resolveUserKey(args[len(args)-1])
 		for _, alias := range args[:len(args)-1] {
 			Library.Progress("  Mapping %s → %s", cleanKey(alias), target)
 			Library.AddKeyAlias(cleanKey(alias), target)
@@ -3069,7 +3069,7 @@ func doMergeEntries(args []string) {
 func doSetPreferredAlias(args []string) {
 	if openLibraryToUpdate() {
 		alias := args[0]
-		key := Library.MapEntryKey(cleanKey(args[1]))
+		key := resolveUserKey(args[1])
 		entry := Library.buildEntry(key)
 		if !entry.Exists() {
 			messagef("Entry %s does not exist\n", key)
@@ -3097,7 +3097,7 @@ func doSplitPosition(args []string) {
 	if !openLibraryToUpdate() {
 		return
 	}
-	key := Library.MapEntryKey(cleanKey(args[0]))
+	key := resolveUserKey(args[0])
 	role := args[1]
 	position, err := strconv.Atoi(args[2])
 	if key == "" || !Library.EntryExists(key) {
