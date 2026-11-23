@@ -307,6 +307,8 @@ type TService struct {
 	jobFrom time.Time
 
 	lastActive time.Time // the end of the last job (or the start)
+	ownJob     bool      // the running job is the service's own (the push)
+	pushDue    time.Time // when the background push is due (zero: none)
 
 	stopping atomic.Bool
 	done     chan struct{}
@@ -344,6 +346,10 @@ func runService() {
 	}()
 	if serviceIdleMinutes > 0 {
 		go s.stopWhenIdle(time.Duration(serviceIdleMinutes) * time.Minute)
+	}
+	go s.pushWhenDue()
+	if readLibraryUnpushed() != nil {
+		s.schedulePush() // left by a run before the service
 	}
 
 	go func() {
@@ -447,6 +453,9 @@ func (s *TService) statusText() string {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if !s.pushDue.IsZero() {
+		fmt.Fprintf(&b, "Push to %s pending (due %s).\n", sharedDBFolder, s.pushDue.Format("15:04:05"))
+	}
 	if s.busy {
 		fmt.Fprintf(&b, "Running since %s: %s\n", s.jobFrom.Format("15:04:05"), strings.Join(s.jobArgs, " "))
 	} else {
@@ -475,6 +484,15 @@ func (s *TService) runJob(req serviceFrame, dec *json.Decoder, out *frameSender)
 	}
 
 	s.mu.Lock()
+	// The service's own push: wait for it, rather than refuse.
+	for waited := false; s.busy && s.ownJob && !s.stopping.Load(); waited = true {
+		s.mu.Unlock()
+		if !waited {
+			out.send(serviceFrame{T: "info", D: "Waiting for the push to the shared DB folder to finish...\n"}) //nolint:errcheck
+		}
+		time.Sleep(300 * time.Millisecond)
+		s.mu.Lock()
+	}
 	if s.stopping.Load() {
 		s.mu.Unlock()
 		refuse(out, "The service is stopping.\n")
@@ -516,8 +534,9 @@ func (s *TService) runJob(req serviceFrame, dec *json.Decoder, out *frameSender)
 	var code int
 	if inService {
 		s.mu.Lock()
-		s.jobStop = func() { interrupted.Store(true) }
+		s.jobStop = sio.interrupt
 		s.mu.Unlock()
+		deferServicePush = !cmdPush // -push pushes now
 		go relayInput(dec, sio)
 		cwd, _ := os.Getwd()
 		if err := os.Chdir(req.Cwd); err != nil {
@@ -526,6 +545,9 @@ func (s *TService) runJob(req serviceFrame, dec *json.Decoder, out *frameSender)
 		}
 		code = s.runJobInService(req, positional, sio)
 		sio.finished.Store(true)
+		if readLibraryUnpushed() != nil {
+			s.schedulePush()
+		}
 		os.Chdir(cwd) //nolint:errcheck
 	} else {
 		code = s.runChildJob(req, dec, out)

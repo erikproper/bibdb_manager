@@ -139,6 +139,12 @@ func saveJobWork() {
 		return
 	}
 	saveKeyNonDoublesToDb(&Library)
+	// A write job of the service saves locally; the post-check gate and the push
+	// follow shortly after, in the background (Erik, 2026-11-23).
+	if inServiceJob && deferServicePush {
+		closeWorkingDatabaseLocally()
+		return
+	}
 
 	if !postCheckGate() {
 		dbInteraction.Warning("Post-check gate failed — home database not updated")

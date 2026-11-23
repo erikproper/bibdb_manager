@@ -682,6 +682,7 @@ func flushWorkingDbToHome() {
 // never silent, irrecoverable data loss.
 func abandonWorkingDatabase() {
 	jobChangedLibrary = true // memory no longer matches the working database
+	jobAbandonedDatabase = true
 	if !dbIsolationActive() {
 		return
 	}
@@ -788,6 +789,32 @@ func finaliseWorkingDatabase() {
 		copyFile(dumpPath, backupDumpPath) //nolint:errcheck
 	}
 	pruneLibraryBackups()
+}
+
+// closeWorkingDatabaseLocally ends a write session of a service job without the
+// push: the session is closed in the working database, and when the job changed
+// something the library is marked unpushed, so the service's push (shortly after,
+// in the background: the post-check gate, the backup, the push) takes it on, as
+// does -push, -stop or the next run on its own.
+func closeWorkingDatabaseLocally() {
+	if !dbWriteSessionActive || !dbIsolationActive() || db == nil {
+		return
+	}
+	if preCloseHook != nil {
+		preCloseHook()
+		preCloseHook = nil
+	}
+	var totalChanges int64
+	db.QueryRow(`SELECT total_changes()`).Scan(&totalChanges) //nolint:errcheck
+	markWriteSessionClosed()
+	if totalChanges > changesAtSessionOpen || libraryPushNeeded {
+		jobChangedLibrary = true
+		markLibraryUnpushed(tableModTime(pushGenerationMarker))
+		dbInteraction.Progress("Saved; pushed to %s shortly, in the background.", sharedDBFolder)
+	}
+	db.Exec(`PRAGMA wal_checkpoint(TRUNCATE)`) //nolint:errcheck
+	db.Close()
+	db = nil
 }
 
 // --- FK pre-check / post-check gate (step 15.1, Phase A) ---

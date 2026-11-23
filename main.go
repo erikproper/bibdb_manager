@@ -54,7 +54,7 @@ var (
 	Reporting TInteraction
 )
 
-const AppVersion = "30.59"
+const AppVersion = "30.61"
 
 // Run-state flags consumed by the write tail in main.
 var (
@@ -437,12 +437,15 @@ func openLibraryToUpdate() bool {
 	if !prepareWorkingDatabase() {
 		return false
 	}
-	preCheckRepair()
-	// The service keeps the library loaded between jobs (service_jobs.go).
+	// The service keeps the library loaded between jobs (service_jobs.go). The
+	// repairs and checks of the whole library then ran when it was loaded; a
+	// job on the kept library does not repeat them (Erik, 2026-11-23).
 	reuse := reuseLoadedLibrary(libraryLoadedUpdate)
 	if reuse {
 		resetLibraryRunState()
 		Library.Progress("  Library kept loaded by the service")
+	} else {
+		preCheckRepair()
 	}
 	Library.BeginDeferringMessages()
 	if !reuse {
@@ -486,7 +489,7 @@ func openLibraryToUpdate() bool {
 		Library.LoadPDFFiles()
 		markLibraryLoaded(libraryLoadedUpdate)
 	}
-	if !skipStartupChecks {
+	if !skipStartupChecks && !reuse {
 		Library.CheckDblpDuplicates()
 		Library.CheckKeyOldiesConsistency()
 		Library.CheckKeyHintsConsistency()
@@ -495,15 +498,24 @@ func openLibraryToUpdate() bool {
 		Library.CheckDblpWaivedConsistency()
 		Library.CheckEntryFieldMappingWinners()
 	}
-	normalizeAuthorEditorEntryFields()
-	retireResolvedAuthorEditorSuperseded()
-	cleanupRedundantSuperseded()
-	printSessionStats()
+	if !reuse {
+		normalizeAuthorEditorEntryFields()
+		retireResolvedAuthorEditorSuperseded()
+		cleanupRedundantSuperseded()
+	}
+	// The statistics and the homework count the whole library: on the kept
+	// library only for the check itself.
+	report := !reuse || serviceJobCommand == "check"
+	if report {
+		printSessionStats()
+	}
 	Library.FlushDeferredMessages()
 	if !Online {
 		Library.Progress("  Offline: actions requiring network connectivity will be skipped.")
 	}
-	preCloseHook = reportHomework
+	if report {
+		preCloseHook = reportHomework
+	}
 	return true
 }
 
