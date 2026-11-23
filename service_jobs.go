@@ -1,0 +1,330 @@
+package main
+
+// Jobs inside the service (plan step 22.2b). A command from the command table
+// runs in the service process itself, on the library the service keeps loaded;
+// the special commands main handles before the command table (DBLP import, push
+// and restore, restoring the database, harvest from stdin, ...) still run as a
+// child process (service.go), after which the library is loaded afresh.
+//
+// The library loaded by one job is reused by the next only when it is certainly
+// current:
+//   - the job did not change the database (a write session: the verdict of
+//     finaliseWorkingDatabase; a read command: never; a write command without a
+//     write session: assumed changed), and ended normally (not through endRun);
+//   - nothing changed the databases between jobs (the working and shared
+//     database files and the stamp are as they were at the end of the last job).
+// Otherwise the next job loads the library afresh, as a run on its own does.
+// So read jobs and jobs that change nothing get the loaded library; a job after
+// a change pays the load once.
+
+import (
+	"flag"
+	"fmt"
+	"io"
+	"os"
+	"strings"
+	"sync"
+	"sync/atomic"
+)
+
+// Load levels of the library kept by the service.
+const (
+	libraryNotLoaded    = 0
+	libraryLoadedReport = 1 // by openLibraryToReport: entries, mappings, aliases
+	libraryLoadedUpdate = 2 // by openLibraryToUpdate: also the title index and repairs
+)
+
+var (
+	// inServiceJob is set while the service runs a job in its own process:
+	// endRun then ends the job, not the process.
+	inServiceJob bool
+
+	// serviceLibraryLevel is how far the kept library is loaded (0: not, or stale).
+	serviceLibraryLevel = libraryNotLoaded
+	// serviceFingerprint is the state of the database files at the end of the last job.
+	serviceFingerprint string
+	// jobChangedLibrary is set by finaliseWorkingDatabase (and the flush and
+	// abandon paths) when the job's write session changed the database.
+	jobChangedLibrary bool
+)
+
+// jobEnded is what endRun panics with inside a service job.
+type jobEnded struct{ code int }
+
+// reuseLoadedLibrary reports whether the open functions may skip loading,
+// needing at least level. Outside the service it is always false.
+func reuseLoadedLibrary(level int) bool {
+	return inServiceJob && serviceLibraryLevel >= level
+}
+
+// markLibraryLoaded records that the open functions loaded the library to level.
+func markLibraryLoaded(level int) {
+	if inServiceJob && level > serviceLibraryLevel {
+		serviceLibraryLevel = level
+	}
+}
+
+// resetLibraryRunState gives a reused library the run state of a fresh one: the
+// question state of this job, and the per-run fields Initialise sets.
+func resetLibraryRunState() {
+	l := &Library
+	l.TInteraction = Reporting
+	l.TBibTeXStream = TBibTeXStream{}
+	l.TBibTeXStream.Initialise(Reporting, l)
+	l.newKeyHints = TStringMap{}
+	l.illegalFields = TStringSetNew()
+	l.foundDoubles = false
+	l.NoDBUpdating = false
+	l.KeyIsTemporary = TStringSetNew()
+	l.tempKeyMergedInto = map[string]string{}
+	l.ambiguousAssignmentCount = map[string]int{}
+	l.ambiguousAssignmentPick = map[string]string{}
+	l.orcidAutoResolveSameCount = 0
+	l.orcidAutoResolveDiffCount = 0
+	l.dblpNameFormAutoAccepts = nil
+	l.orcidSideAutoResolves = nil
+	l.ignoreIllegalFields = false
+	l.harvestNameAliases = false
+	l.harvestCapturePDFFields = false
+	l.harvestSourceDir = ""
+	l.harvestSyncGroups = TStringSetNew()
+	l.subsetLocalGroups = nil
+	l.jabrefGroupingBlock = ""
+	l.jabrefMetaBlocks = nil
+	l.bibdeskMetaBlocks = nil
+	l.capturedDBLPEntry = nil
+	l.capturedHarvestEntries = nil
+	l.DblpSourceData = TSourceFieldData{}
+	l.DblpSourcePersons = nil
+	l.DblpSourceKey = ""
+}
+
+// databaseFingerprint describes the database files: the working copy (and its
+// WAL), the shared copy and its stamp. Equal fingerprints: nothing wrote them.
+func databaseFingerprint() string {
+	var b strings.Builder
+	for _, path := range []string{dbPath(), dbPath() + "-wal", dbHomePath(), libraryStampPath()} {
+		if info, err := os.Stat(path); err == nil {
+			fmt.Fprintf(&b, "%d/%d;", info.Size(), info.ModTime().UnixNano())
+		} else {
+			b.WriteString("-;")
+		}
+	}
+	return b.String()
+}
+
+// closeServiceDatabase closes the database between jobs, the WAL written into
+// the database file, so the next job's fingerprint compares settled files.
+func closeServiceDatabase() {
+	if activeTx != nil {
+		rollbackBibTransaction()
+	}
+	if db != nil {
+		db.Exec(`PRAGMA wal_checkpoint(TRUNCATE)`) //nolint:errcheck
+		db.Close()
+		db = nil
+	}
+}
+
+// runsInService reports whether the parsed command can run inside the service;
+// the others run as a child process.
+func runsInService() bool {
+	if cmdUpdateDblp || cmdLoadDblpXml || cmdPushDblp || cmdRestoreDblp || cmdDeleteGarbage ||
+		cmdRestoreFromDump || cmdRestoreBackupName != "" || cmdNewKey || cmdSetSyncStatus != "" ||
+		cmdHarvest || cmdStartService || cmdStopService || cmdServiceStatus || cmdServe {
+		return false
+	}
+	if f := flag.Lookup("jobs_file"); f != nil && f.Value.String() != "" {
+		return false
+	}
+	if f := flag.Lookup("version"); f != nil && f.Value.String() == "true" {
+		return false
+	}
+	return true
+}
+
+// TSocketIO is the TUserIO of a job run for a command line over the socket.
+type TSocketIO struct {
+	out         frameSink
+	interactive bool
+	lines       chan string
+	closeOnce   sync.Once
+	finished    atomic.Bool // the job is over: its connection ending is no Ctrl-C for the next job
+}
+
+func (s *TSocketIO) IsInteractive() bool   { return s.interactive }
+func (s *TSocketIO) WriteMessage(m string) { s.out.send(serviceFrame{T: "err", D: m}) } //nolint:errcheck
+func (s *TSocketIO) WriteResult(m string)  { s.out.send(serviceFrame{T: "out", D: m}) } //nolint:errcheck
+func (s *TSocketIO) Input() <-chan string  { return s.lines }
+func (s *TSocketIO) endInput()             { s.closeOnce.Do(func() { close(s.lines) }) }
+
+// frameSink takes the frames of a job's output: a command line's socket, or
+// the service log (a job the service runs itself, e.g. the push when it stops).
+type frameSink interface{ send(serviceFrame) error }
+
+// logSink writes a job's output to the service log.
+type logSink struct{}
+
+func (logSink) send(f serviceFrame) error {
+	if f.T == "out" || f.T == "err" || f.T == "info" {
+		os.Stderr.WriteString(f.D) //nolint:errcheck
+	}
+	return nil
+}
+
+// runOwnJob runs a command the service gives itself (no command line, no
+// person), with its output to sink. The caller holds the job slot.
+func (s *TService) runOwnJob(args []string, sink frameSink) int {
+	req := serviceFrame{T: "run", Args: append([]string{"-base", libraryBase()}, args...), Version: AppVersion, Base: libraryBase()}
+	sio := &TSocketIO{out: sink, lines: make(chan string)}
+	sio.endInput()
+	flag.CommandLine.SetOutput(flagOutput{sio})
+	positional, ok := parseJobArguments(req.Args)
+	if !ok {
+		return 2
+	}
+	req.Cwd, _ = os.Getwd()
+	code := s.runJobInService(req, positional, sio)
+	sio.finished.Store(true)
+	return code
+}
+
+// flagOutput sends the flag package's messages (a bad flag, -help) to the job.
+type flagOutput struct{ io *TSocketIO }
+
+func (f flagOutput) Write(p []byte) (int, error) {
+	f.io.WriteMessage(string(p))
+	return len(p), nil
+}
+
+// parseJobArguments parses a job's arguments as main parses the command line.
+// It returns the positional arguments, and false when they do not parse.
+func parseJobArguments(args []string) ([]string, bool) {
+	resetCommandFlags()
+	cmdMap, cmdUseAliases, logFilePath = false, false, ""
+	if err := flag.CommandLine.Parse(args); err != nil {
+		return nil, false
+	}
+	return rescanModifierArgs(flag.Args()), true
+}
+
+// runJobInService runs the parsed command in this process and returns its exit
+// code. The caller holds the service's job slot.
+func (s *TService) runJobInService(req serviceFrame, positional []string, sio *TSocketIO) (code int) {
+	savedIO, savedTTY := userIO, isTTY
+	userIO, isTTY = sio, sio.interactive
+	if logFilePath != "" {
+		logArgs = req.Args
+		if l, err := newLoggingIO(sio, logFilePath); err == nil {
+			userIO = l
+		} else {
+			messagef("Cannot open log file %s: %s\n", logFilePath, err)
+		}
+	}
+	interrupted.Store(false)
+	jobChangedLibrary = false
+	inServiceJob = true
+
+	ended := false
+	var command *TCommand
+	defer func() {
+		if r := recover(); r != nil {
+			if e, ok := r.(jobEnded); ok {
+				code = e.code
+			} else {
+				messagef("\nInternal error in the service: %v\n", r)
+				fmt.Fprintf(os.Stderr, "internal error in job %s: %v\n", strings.Join(req.Args, " "), r)
+				code = 1
+			}
+			ended = true
+		}
+		// A job that ended through endRun (an error, a quit, a usage message) may
+		// have left the loaded library and the database apart: load afresh.
+		if ended || jobChangedLibrary {
+			fmt.Fprintf(os.Stderr, "  job ended through endRun (%v) or changed the library (%v): loading afresh next time\n", ended, jobChangedLibrary)
+			serviceLibraryLevel = libraryNotLoaded
+		}
+		// A command that may write but ran without a write session: its writes are
+		// not covered by finaliseWorkingDatabase's verdict, so load afresh. (A read
+		// command writes only housekeeping, e.g. the version row; not a change.)
+		if command != nil && command.kind != commandRead && !dbWriteSessionActive && serviceLibraryLevel != libraryNotLoaded {
+			fmt.Fprintf(os.Stderr, "  %s ran without a write session: loading afresh next time\n", command.name)
+			serviceLibraryLevel = libraryNotLoaded
+		}
+		closeServiceDatabase()
+		serviceFingerprint = databaseFingerprint()
+		if instanceLockFile != nil {
+			instanceLockFile.Close()
+			instanceLockFile = nil
+		}
+		if l, ok := userIO.(*TLoggingIO); ok {
+			l.close()
+		}
+		inServiceJob = false
+		userIO, isTTY = savedIO, savedTTY
+	}()
+
+	// Nothing may have changed the databases since the last job.
+	if fp := databaseFingerprint(); fp != serviceFingerprint {
+		if serviceLibraryLevel != libraryNotLoaded {
+			fmt.Fprintf(os.Stderr, "  the database changed since the last job (%s → %s)\n", serviceFingerprint, fp)
+		}
+		serviceLibraryLevel = libraryNotLoaded
+	}
+	if serviceLibraryLevel == libraryNotLoaded {
+		fmt.Fprintf(os.Stderr, "  loading the library\n")
+	} else {
+		fmt.Fprintf(os.Stderr, "  library kept loaded\n")
+	}
+	serviceFingerprint = databaseFingerprint()
+	if serviceLibraryLevel == libraryNotLoaded {
+		loadMaps() // the maps live in the database too (-import can change them)
+	}
+
+	acquireInstanceLock()
+	maybeRestoreDblpStore()
+	if db == nil {
+		connectToDatabase()
+	}
+	command = selectCommand()
+	runJob(command, positional)
+	return 0
+}
+
+// relayInput feeds a job's input from the command line: typed lines, end of
+// input, Ctrl-C. When the command line goes away, the job is stopped as with
+// Ctrl-C. It returns when the connection ends.
+func relayInput(dec interface{ Decode(any) error }, sio *TSocketIO) {
+	for {
+		var f serviceFrame
+		if err := dec.Decode(&f); err != nil {
+			if !sio.finished.Load() {
+				interrupted.Store(true)
+			}
+			sio.endInput()
+			return
+		}
+		switch f.T {
+		case "in":
+			if sio.interactive {
+				for _, line := range strings.SplitAfter(f.D, "\n") {
+					if line != "" {
+						sio.lines <- strings.TrimSuffix(line, "\n")
+					}
+				}
+			}
+		case "eof":
+			sio.endInput()
+		case "int":
+			if !sio.finished.Load() && !interrupted.Load() {
+				if sio.interactive {
+					sio.WriteMessage("\nInterrupted — finishing the current step, then committing and saving...\n")
+				}
+				interrupted.Store(true)
+			}
+		}
+	}
+}
+
+// discard is used for the flag package's output outside a job.
+var _ io.Writer = flagOutput{}

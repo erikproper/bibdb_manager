@@ -54,7 +54,7 @@ var (
 	Reporting TInteraction
 )
 
-const AppVersion = "30.52"
+const AppVersion = "30.56"
 
 // Run-state flags consumed by the write tail in main.
 var (
@@ -83,6 +83,9 @@ var errReported = errors.New("reported")
 // programme ends (besides main returning); step 22.1 turns it into the end of a
 // job, so that a service can go on.
 func endRun(code int) {
+	if inServiceJob {
+		panic(jobEnded{code}) // ends the job, not the service (service_jobs.go)
+	}
 	if l, ok := userIO.(*TLoggingIO); ok {
 		l.close()
 	}
@@ -435,14 +438,24 @@ func openLibraryToUpdate() bool {
 		return false
 	}
 	preCheckRepair()
+	// The service keeps the library loaded between jobs (service_jobs.go).
+	reuse := reuseLoadedLibrary(libraryLoadedUpdate)
+	if reuse {
+		resetLibraryRunState()
+		Library.Progress("  Library kept loaded by the service")
+	}
 	Library.BeginDeferringMessages()
-	initialiseLibrary()
-	Library.ReadKeyOldiesFile()
-	loadMappingFiles()
-	seedContributorsFromEntries(&Library)
-	maybeCleanupOrphanedContributors(&Library)
+	if !reuse {
+		initialiseLibrary()
+		Library.ReadKeyOldiesFile()
+		loadMappingFiles()
+		seedContributorsFromEntries(&Library)
+		maybeCleanupOrphanedContributors(&Library)
+	}
 
-	if skipBibValidation || Library.ValidBibDb() {
+	if reuse {
+		// loaded by an earlier job
+	} else if skipBibValidation || Library.ValidBibDb() {
 		buildTitleIndexFromDb(&Library)
 		repairDblpData()
 		loadBibFromDb()
@@ -468,8 +481,11 @@ func openLibraryToUpdate() bool {
 		}
 	}
 
-	cleanupIgnoredTitleNonDoubles(&Library)
-	Library.LoadPDFFiles()
+	if !reuse {
+		cleanupIgnoredTitleNonDoubles(&Library)
+		Library.LoadPDFFiles()
+		markLibraryLoaded(libraryLoadedUpdate)
+	}
 	if !skipStartupChecks {
 		Library.CheckDblpDuplicates()
 		Library.CheckKeyOldiesConsistency()
@@ -495,6 +511,10 @@ func openLibraryToReport() bool {
 	// Read-only session: suppress all routine progress; show only warnings and questions.
 	Reporting.progressSuppressed = true
 	warnIfLibraryStampNewer()
+	if reuseLoadedLibrary(libraryLoadedReport) {
+		resetLibraryRunState() // the service keeps the library loaded (service_jobs.go)
+		return true
+	}
 	initialiseLibrary() // propagates progressSuppressed via Library.Initialise(Reporting, ...)
 	Library.ReadKeyOldiesFile()
 	loadMappingFiles()
@@ -512,6 +532,7 @@ func openLibraryToReport() bool {
 	}
 
 	Library.LoadPDFFiles()
+	markLibraryLoaded(libraryLoadedReport)
 	return true
 }
 
@@ -805,6 +826,40 @@ var (
 // flockPath opens lockPath and obtains an exclusive non-blocking flock on it.
 // Exits immediately if another instance already holds that lock.
 // The OS releases the lock automatically when the process exits.
+// loadMaps loads the hand-maintained maps (kept in the database, map_files).
+func loadMaps() {
+	loadMapContentsFromDB()
+	loadUnicodeMap(localDBFolder + "unicode_map.csv")
+	loadHtmlCommandsMap(localDBFolder + "html_commands_map.csv")
+	loadHtmlCharacterMap(localDBFolder + "html_character_map.csv")
+	loadLatexIndexerMap(localDBFolder + "latex_indexer.csv")
+	loadHarvestIgnoreKeys(localDBFolder + "harvest_ignore_keys.csv")
+}
+
+// rescanModifierArgs takes the modifier flags that follow positional arguments
+// (Go's flag parser stops at the first positional one, e.g. -entry_key_alias
+// key -map) out of args, and sets them.
+func rescanModifierArgs(args []string) []string {
+	var filtered []string
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		switch a {
+		case "-log", "--log", "-l", "--l":
+			if i+1 < len(args) {
+				logFilePath = args[i+1]
+				i++
+			}
+		case "-map", "--map":
+			cmdMap = true
+		case "-use_aliases", "--use_aliases":
+			cmdUseAliases = true
+		default:
+			filtered = append(filtered, a)
+		}
+	}
+	return filtered
+}
+
 func flockPath(lockPath string) *os.File {
 	os.MkdirAll(filepath.Dir(lockPath), 0755) //nolint:errcheck // OpenFile reports a failure
 	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_WRONLY, 0600)
@@ -2502,7 +2557,23 @@ func doUpsertDblpEntries() {
 	}
 }
 
+// doPush implements -push: push the local changes that are not in the shared DB
+// folder yet. Opening the library as a write run does (prepareWorkingDatabase
+// sees the unpushed marker) pushes them at the end of the job.
+func doPush() {
+	if readLibraryUnpushed() == nil {
+		messagef("Nothing to push: %s has this machine's changes.\n", sharedDBFolder)
+		return
+	}
+	openLibraryToUpdate()
+}
+
 func doNewKey() {
+	// -new_key runs before the database is opened, so the key prefix (kept in
+	// the database's config) is not loaded yet; read it as the maps are read.
+	if keyPrefix == "" {
+		keyPrefix = readKeyPrefixFromDB()
+	}
 	resultln(KeyFromTime(time.Now()))
 }
 
@@ -4022,7 +4093,9 @@ var (
 )
 
 func main() {
-	stderrPrintf("%s %s\n", filepath.Base(os.Args[0]), AppVersion)
+	if os.Getenv(envServiceJob) == "" { // a service job: its command line printed this already
+		stderrPrintf("%s %s\n", filepath.Base(os.Args[0]), AppVersion)
+	}
 
 	// Without this, Ctrl-C during a long run (e.g. -update_all_dblp_entries, which
 	// wraps its entire pass in one open transaction, committed only at the very end)
@@ -4045,6 +4118,9 @@ func main() {
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		<-sigCh
+		if relayingToService.Load() {
+			return // the service job reports and handles it (service.go)
+		}
 		stderrPrintf("\nInterrupted — finishing the current step, then committing and saving...\n")
 		interrupted.Store(true)
 	}()
@@ -4058,6 +4134,12 @@ func main() {
 	flag.StringVar(&logFilePath, "log", "", "also write the run's output, questions and answers to this file (appended): -log <file>")
 	flag.StringVar(&logFilePath, "l", "", "short for -log")
 	flag.StringVar(&cmdHarvestGroup, "group", "", "harvest: add all resolved entries to this group")
+
+	flag.BoolVar(&cmdStartService, "start", false, "start the service for this library in the background; commands then run through it")
+	flag.BoolVar(&cmdStopService, "stop", false, "stop the service gracefully (a running job is stopped as with Ctrl-C)")
+	flag.BoolVar(&cmdServiceStatus, "status", false, "tell whether the service runs, and which job")
+	flag.BoolVar(&cmdPush, "push", false, "push this machine's changes to the shared DB folder (Nextcloud) when they are not there yet")
+	flag.BoolVar(&cmdServe, "serve", false, "(internal) run as the service; started by -start")
 
 	var cmdVersion bool
 	flag.BoolVar(&cmdVersion, "version", false, "print version and exit")
@@ -4139,38 +4221,8 @@ flag.BoolVar(&cmdAlignBooktitleCountries, "align_booktitle_countries", false, "d
 	flag.Parse()
 	args := flag.Args()
 
-	// Go's flag parser stops at the first non-flag argument, so modifier flags
-	// that appear after positional args (e.g. -entry_key_alias key -map) are
-	// not parsed. Rescan args for known modifiers and strip them out.
-	{
-		var filtered []string
-		for i := 0; i < len(args); i++ {
-			a := args[i]
-			switch a {
-			case "-log", "--log", "-l", "--l":
-				if i+1 < len(args) {
-					logFilePath = args[i+1]
-					i++
-				}
-			case "-map", "--map":
-				cmdMap = true
-			case "-use_aliases", "--use_aliases":
-				cmdUseAliases = true
-			default:
-				filtered = append(filtered, a)
-			}
-		}
-		args = filtered
-	}
-
-	if logFilePath != "" {
-		l, err := newLoggingIO(userIO, logFilePath)
-		if err != nil {
-			messagef("Cannot open log file %s: %s\n", logFilePath, err)
-			endRun(1)
-		}
-		userIO = l
-	}
+	// Modifier flags after positional arguments (e.g. -entry_key_alias key -map).
+	args = rescanModifierArgs(args)
 
 	if cmdVersion {
 		resultln(AppVersion) // on stdout, for scripts (bib.common compares it)
@@ -4212,13 +4264,24 @@ flag.BoolVar(&cmdAlignBooktitleCountries, "align_booktitle_countries", false, "d
 	if sharedDBFolder == "" {
 		sharedDBFolder = bibTeXFolder
 	}
+	// The service (step 22.2): -start/-stop/-status/-serve, and any other command
+	// is handed to a running service. Before the instance lock: the service's
+	// jobs take it themselves. Before -log: the job writes the log.
+	if handleServiceCommands() {
+		endRun(0)
+	}
+
+	if logFilePath != "" {
+		l, err := newLoggingIO(userIO, logFilePath)
+		if err != nil {
+			messagef("Cannot open log file %s: %s\n", logFilePath, err)
+			endRun(1)
+		}
+		userIO = l
+	}
+
 	maybeMigrateFolderNames()
-	loadMapContentsFromDB()
-	loadUnicodeMap(localDBFolder + "unicode_map.csv")
-	loadHtmlCommandsMap(localDBFolder + "html_commands_map.csv")
-	loadHtmlCharacterMap(localDBFolder + "html_character_map.csv")
-	loadLatexIndexerMap(localDBFolder + "latex_indexer.csv")
-	loadHarvestIgnoreKeys(localDBFolder + "harvest_ignore_keys.csv")
+	loadMaps()
 
 	if cmdNewKey {
 		doNewKey()

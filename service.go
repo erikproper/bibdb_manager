@@ -1,0 +1,590 @@
+package main
+
+// The service (plan step 22.2a). "bibtex_check -start" starts a background
+// process for one library ("-serve"), listening on a Unix socket in the local DB
+// folder. Any other command, given while the service runs, is handed to it: the
+// command line becomes a thin client that relays its arguments, its working
+// folder, its typed input and Ctrl-C, and shows the job's output. "-stop" ends
+// the service. Without a service, a command runs on its own, as before.
+//
+// A command from the command table runs inside the service, on the library it
+// keeps loaded (22.2b, service_jobs.go); the special commands run as a child
+// process (the same binary, the same arguments). One job at a time; a second is
+// reported as busy.
+//
+// The socket is only reachable by the user (mode 0600). The web UI (22.3) gets a
+// localhost port, from the settings (service_port).
+
+import (
+	"bufio"
+	"encoding/json"
+	"errors"
+	"flag"
+	"fmt"
+	"io"
+	"net"
+	"os"
+	"os/exec"
+	"os/signal"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"syscall"
+	"time"
+)
+
+const (
+	// envServiceJob marks a child process run by the service as a job.
+	envServiceJob = "BIBTEX_CHECK_SERVICE_JOB"
+	// envInteractive tells a job whether a person is at the command line (1/0).
+	envInteractive = "BIBTEX_CHECK_INTERACTIVE"
+
+	serviceSocketExtension = ".socket"
+	serviceLogExtension    = ".service.log"
+)
+
+var (
+	cmdStartService  bool
+	cmdStopService   bool
+	cmdServiceStatus bool
+	cmdServe         bool
+	cmdPush          bool
+
+	// relayingToService is set while the command line relays a job: Ctrl-C is
+	// then passed on to the job instead of handled here.
+	relayingToService atomic.Bool
+)
+
+// serviceFrame is one message on the socket, one JSON object per line.
+//
+// Command line → service: "run" (args, cwd, interactive, version, base), "in"
+// (typed input), "eof" (input ended), "int" (Ctrl-C), "stop", "status".
+// Service → command line: "out" (stdout), "err" (stderr), "exit" (code), and
+// "info" (a reply to stop/status, or why a run was refused, then "exit").
+type serviceFrame struct {
+	T           string   `json:"t"`
+	D           string   `json:"d,omitempty"`
+	Args        []string `json:"args,omitempty"`
+	Cwd         string   `json:"cwd,omitempty"`
+	Interactive bool     `json:"interactive,omitempty"`
+	Version     string   `json:"version,omitempty"`
+	Base        string   `json:"base,omitempty"`
+	Code        int      `json:"code,omitempty"`
+}
+
+func serviceSocketPath() string { return localDBFolder + bibTeXBaseName + serviceSocketExtension }
+func serviceLogPath() string    { return localDBFolder + bibTeXBaseName + serviceLogExtension }
+
+// dialService connects to the running service, or returns nil when none runs.
+func dialService() net.Conn {
+	conn, err := net.DialTimeout("unix", serviceSocketPath(), 2*time.Second)
+	if err != nil {
+		return nil
+	}
+	return conn
+}
+
+// handleServiceCommands handles -start, -stop, -status and -serve, and hands any
+// other command to a running service. It returns true when the command was
+// dealt with here (the run then ends); false when it runs on its own.
+func handleServiceCommands() bool {
+	switch {
+	case cmdServe:
+		runService()
+		return true
+	case cmdStartService:
+		startService()
+		return true
+	case cmdStopService:
+		stopService()
+		return true
+	case cmdServiceStatus:
+		serviceStatus()
+		return true
+	}
+	if os.Getenv(envServiceJob) != "" {
+		return false // this is the service's job itself
+	}
+	conn := dialService()
+	if conn == nil {
+		return false
+	}
+	endRun(relayToService(conn))
+	return true
+}
+
+// ---- the command line side ----
+
+// sendFrames serialises writes to the socket (several goroutines send).
+type frameSender struct {
+	mu  sync.Mutex
+	enc *json.Encoder
+}
+
+func newFrameSender(w io.Writer) *frameSender { return &frameSender{enc: json.NewEncoder(w)} }
+
+func (s *frameSender) send(f serviceFrame) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.enc.Encode(f)
+}
+
+// relayToService runs this command through the service and returns its exit code.
+func relayToService(conn net.Conn) int {
+	defer conn.Close()
+	relayingToService.Store(true)
+
+	cwd, _ := os.Getwd()
+	interactive := userIO.IsInteractive()
+	out := newFrameSender(conn)
+	if err := out.send(serviceFrame{T: "run", Args: os.Args[1:], Cwd: cwd, Interactive: interactive,
+		Version: AppVersion, Base: libraryBase()}); err != nil {
+		messagef("Cannot reach the service: %s\n", err)
+		return 1
+	}
+
+	// Ctrl-C goes to the job, which stops gracefully as a run on its own does.
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT)
+	defer signal.Stop(sigCh)
+	go func() {
+		for range sigCh {
+			out.send(serviceFrame{T: "int"}) //nolint:errcheck
+		}
+	}()
+
+	// Typed lines come from the one input pump (user_io.go); without a person,
+	// stdin is passed on as it is (e.g. -harvest reading a bib file from stdin).
+	go func() {
+		if interactive {
+			for line := range userIO.Input() {
+				if out.send(serviceFrame{T: "in", D: line + "\n"}) != nil {
+					return
+				}
+			}
+		} else {
+			buf := make([]byte, 32*1024)
+			for {
+				n, err := os.Stdin.Read(buf)
+				if n > 0 && out.send(serviceFrame{T: "in", D: string(buf[:n])}) != nil {
+					return
+				}
+				if err != nil {
+					break
+				}
+			}
+		}
+		out.send(serviceFrame{T: "eof"}) //nolint:errcheck
+	}()
+
+	dec := json.NewDecoder(bufio.NewReader(conn))
+	for {
+		var f serviceFrame
+		if err := dec.Decode(&f); err != nil {
+			messageln("The service ended the connection.")
+			return 1
+		}
+		switch f.T {
+		case "out":
+			os.Stdout.WriteString(f.D) //nolint:errcheck
+		case "err", "info":
+			os.Stderr.WriteString(f.D) //nolint:errcheck
+		case "exit":
+			return f.Code
+		}
+	}
+}
+
+// startService starts "-serve" in the background and waits until it listens.
+func startService() {
+	if conn := dialService(); conn != nil {
+		conn.Close()
+		messagef("The service for %s runs already.\n", bibTeXBaseName)
+		return
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		messagef("Cannot find this programme: %s\n", err)
+		endRun(1)
+	}
+	logFile, err := os.OpenFile(serviceLogPath(), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		messagef("Cannot open %s: %s\n", serviceLogPath(), err)
+		endRun(1)
+	}
+	cmd := exec.Command(exe, "-base", libraryBase(), "-serve")
+	cmd.Stdout, cmd.Stderr = logFile, logFile
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true} // not stopped by the terminal's Ctrl-C or closing
+	if err := cmd.Start(); err != nil {
+		messagef("Cannot start the service: %s\n", err)
+		endRun(1)
+	}
+	logFile.Close()
+	pid := cmd.Process.Pid
+	cmd.Process.Release() //nolint:errcheck
+
+	for i := 0; i < 100; i++ {
+		if conn := dialService(); conn != nil {
+			conn.Close()
+			messagef("Service for %s started (process %d). Log: %s\n", bibTeXBaseName, pid, serviceLogPath())
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	messagef("The service did not come up; see %s\n", serviceLogPath())
+	endRun(1)
+}
+
+// askService sends one request (stop, status) and shows the reply.
+func askService(request string) bool {
+	conn := dialService()
+	if conn == nil {
+		return false
+	}
+	defer conn.Close()
+	if err := newFrameSender(conn).send(serviceFrame{T: request}); err != nil {
+		return false
+	}
+	dec := json.NewDecoder(bufio.NewReader(conn))
+	for {
+		var f serviceFrame
+		if dec.Decode(&f) != nil || f.T == "exit" {
+			return true
+		}
+		os.Stderr.WriteString(f.D) //nolint:errcheck
+	}
+}
+
+func stopService() {
+	if !askService("stop") {
+		messagef("No service runs for %s.\n", bibTeXBaseName)
+	}
+}
+
+func serviceStatus() {
+	if !askService("status") {
+		messagef("No service runs for %s.\n", bibTeXBaseName)
+	}
+}
+
+// ---- the service side ----
+
+// TService is the running service: one job at a time.
+type TService struct {
+	listener net.Listener
+	started  time.Time
+
+	mu      sync.Mutex
+	busy    bool   // a job runs
+	jobStop func() // stops the running job gracefully (as Ctrl-C)
+	jobArgs []string
+	jobFrom time.Time
+
+	lastActive time.Time // the end of the last job (or the start)
+
+	stopping atomic.Bool
+	done     chan struct{}
+}
+
+func runService() {
+	path := serviceSocketPath()
+	if conn := dialService(); conn != nil {
+		conn.Close()
+		fmt.Fprintf(os.Stderr, "%s  the service runs already\n", time.Now().Format(time.DateTime))
+		return
+	}
+	os.Remove(path) //nolint:errcheck // a socket left by a service that did not stop properly
+	listener, err := net.Listen("unix", path)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%s  cannot listen on %s: %s\n", time.Now().Format(time.DateTime), path, err)
+		endRun(1)
+	}
+	os.Chmod(path, 0o600) //nolint:errcheck
+
+	s := &TService{listener: listener, started: time.Now(), lastActive: time.Now(), done: make(chan struct{})}
+	// A job's bad flag must end the job, not the service (parseJobArguments).
+	flag.CommandLine.Init(os.Args[0], flag.ContinueOnError)
+	// Done once for the service, as main does once for a run (jobs: per job).
+	maybeMigrateFolderNames()
+	maybeMigrateDblpNameFiles()
+	fmt.Fprintf(os.Stderr, "%s  service %s started for %s (process %d)\n",
+		time.Now().Format(time.DateTime), AppVersion, libraryBase(), os.Getpid())
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		<-sigCh
+		s.stop(logSink{})
+	}()
+	if serviceIdleMinutes > 0 {
+		go s.stopWhenIdle(time.Duration(serviceIdleMinutes) * time.Minute)
+	}
+
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return // closed by stop
+			}
+			go s.serve(conn)
+		}
+	}()
+	<-s.done
+	fmt.Fprintf(os.Stderr, "%s  service stopped\n", time.Now().Format(time.DateTime))
+}
+
+// stopWhenIdle stops the service once no job ran for limit.
+func (s *TService) stopWhenIdle(limit time.Duration) {
+	for range time.Tick(time.Minute) {
+		s.mu.Lock()
+		idle := !s.busy && time.Since(s.lastActive) >= limit
+		s.mu.Unlock()
+		if idle {
+			fmt.Fprintf(os.Stderr, "%s  no job for %s: stopping\n", time.Now().Format(time.DateTime), limit)
+			s.stop(logSink{})
+			return
+		}
+	}
+}
+
+// stop ends the service: a running job is stopped as with Ctrl-C, and waited
+// for; then what is not pushed yet is pushed (output to sink).
+func (s *TService) stop(sink frameSink) {
+	if s.stopping.Swap(true) {
+		return
+	}
+	s.listener.Close()
+	os.Remove(serviceSocketPath()) //nolint:errcheck
+	for {
+		s.mu.Lock()
+		busy, jobStop := s.busy, s.jobStop
+		s.mu.Unlock()
+		if !busy {
+			break
+		}
+		if jobStop != nil {
+			jobStop()
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	if readLibraryUnpushed() != nil {
+		s.mu.Lock()
+		s.busy, s.jobArgs, s.jobFrom = true, []string{"-push"}, time.Now()
+		s.mu.Unlock()
+		fmt.Fprintf(os.Stderr, "%s  pushing what is not pushed yet\n", time.Now().Format(time.DateTime))
+		sink.send(serviceFrame{T: "info", D: fmt.Sprintf("Pushing this machine's changes to %s first...\n", sharedDBFolder)}) //nolint:errcheck
+		if s.runOwnJob([]string{"-push"}, sink) == 0 && readLibraryUnpushed() == nil {
+			sink.send(serviceFrame{T: "info", D: "Pushed.\n"}) //nolint:errcheck
+		} else {
+			sink.send(serviceFrame{T: "info", D: "Not pushed; the next run pushes it.\n"}) //nolint:errcheck
+		}
+		s.mu.Lock()
+		s.busy = false
+		s.mu.Unlock()
+	}
+	close(s.done)
+}
+
+func (s *TService) serve(conn net.Conn) {
+	defer conn.Close()
+	out := newFrameSender(conn)
+	dec := json.NewDecoder(bufio.NewReader(conn))
+	var first serviceFrame
+	if dec.Decode(&first) != nil {
+		return
+	}
+	switch first.T {
+	case "status":
+		out.send(serviceFrame{T: "info", D: s.statusText()}) //nolint:errcheck
+		out.send(serviceFrame{T: "exit"})                    //nolint:errcheck
+	case "stop":
+		s.mu.Lock()
+		running := s.busy
+		s.mu.Unlock()
+		if running {
+			out.send(serviceFrame{T: "info", D: "Stopping the running job first...\n"}) //nolint:errcheck
+		}
+		s.stop(out)
+		out.send(serviceFrame{T: "info", D: fmt.Sprintf("Service for %s stopped.\n", bibTeXBaseName)}) //nolint:errcheck
+		out.send(serviceFrame{T: "exit"})                                                              //nolint:errcheck
+	case "run":
+		s.runJob(first, dec, out)
+	}
+}
+
+func (s *TService) statusText() string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Service %s for %s, process %d, since %s.\n",
+		AppVersion, bibTeXBaseName, os.Getpid(), s.started.Format("2006-01-02 15:04"))
+	if serviceIdleMinutes > 0 {
+		fmt.Fprintf(&b, "Stops after %d min without a job (service_idle_minutes).\n", serviceIdleMinutes)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.busy {
+		fmt.Fprintf(&b, "Running since %s: %s\n", s.jobFrom.Format("15:04:05"), strings.Join(s.jobArgs, " "))
+	} else {
+		b.WriteString("No job running.\n")
+	}
+	return b.String()
+}
+
+// refuse tells the command line why its run is not done.
+func refuse(out *frameSender, format string, args ...any) {
+	out.send(serviceFrame{T: "info", D: fmt.Sprintf(format, args...)}) //nolint:errcheck
+	out.send(serviceFrame{T: "exit", Code: 1})                         //nolint:errcheck
+}
+
+// runJob runs one command for a command line: inside the service when the
+// command table has it (service_jobs.go), otherwise as a child process.
+func (s *TService) runJob(req serviceFrame, dec *json.Decoder, out *frameSender) {
+	if req.Version != AppVersion {
+		refuse(out, "The service runs version %s, this command line is %s. Restart the service: -stop, then -start.\n",
+			AppVersion, req.Version)
+		return
+	}
+	if req.Base != libraryBase() {
+		refuse(out, "The service runs for %s, not %s.\n", libraryBase(), req.Base)
+		return
+	}
+
+	s.mu.Lock()
+	if s.stopping.Load() {
+		s.mu.Unlock()
+		refuse(out, "The service is stopping.\n")
+		return
+	}
+	if s.busy {
+		running := strings.Join(s.jobArgs, " ")
+		s.mu.Unlock()
+		refuse(out, "The service is running another job (%s); try again when it is done.\n", running)
+		return
+	}
+	s.busy, s.jobStop, s.jobArgs, s.jobFrom = true, nil, req.Args, time.Now()
+	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		s.busy, s.jobStop, s.lastActive = false, nil, time.Now()
+		s.mu.Unlock()
+	}()
+
+	sio := &TSocketIO{out: out, interactive: req.Interactive, lines: make(chan string, 16)}
+	if !req.Interactive {
+		sio.endInput() // no person there: questions fail fast, as on a run on its own
+	}
+	flag.CommandLine.SetOutput(flagOutput{sio})
+	positional, ok := parseJobArguments(req.Args)
+	if !ok {
+		out.send(serviceFrame{T: "exit", Code: 2}) //nolint:errcheck
+		return
+	}
+
+	inService := runsInService()
+	where := "child process"
+	if inService {
+		where = "in the service"
+	}
+	fmt.Fprintf(os.Stderr, "%s  job (%s): %s (in %s)\n", time.Now().Format(time.DateTime), where,
+		strings.Join(req.Args, " "), req.Cwd)
+
+	var code int
+	if inService {
+		s.mu.Lock()
+		s.jobStop = func() { interrupted.Store(true) }
+		s.mu.Unlock()
+		go relayInput(dec, sio)
+		cwd, _ := os.Getwd()
+		if err := os.Chdir(req.Cwd); err != nil {
+			refuse(out, "The service cannot use the folder %s: %s\n", req.Cwd, err)
+			return
+		}
+		code = s.runJobInService(req, positional, sio)
+		sio.finished.Store(true)
+		os.Chdir(cwd) //nolint:errcheck
+	} else {
+		code = s.runChildJob(req, dec, out)
+		serviceLibraryLevel = libraryNotLoaded // the child may have changed the database
+	}
+	fmt.Fprintf(os.Stderr, "%s  job done (exit %d)\n", time.Now().Format(time.DateTime), code)
+	out.send(serviceFrame{T: "exit", Code: code}) //nolint:errcheck
+}
+
+// runChildJob runs one command as a child process (the same binary, the same
+// arguments), relaying its input and output, and returns its exit code.
+func (s *TService) runChildJob(req serviceFrame, dec *json.Decoder, out *frameSender) int {
+	exe, err := os.Executable()
+	if err != nil {
+		out.send(serviceFrame{T: "err", D: fmt.Sprintf("The service cannot find its programme: %s\n", err)}) //nolint:errcheck
+		return 1
+	}
+	interactive := "0"
+	if req.Interactive {
+		interactive = "1"
+	}
+	cmd := exec.Command(exe, req.Args...)
+	cmd.Dir = req.Cwd
+	cmd.Env = append(os.Environ(), envServiceJob+"=1", envInteractive+"="+interactive)
+	stdin, err1 := cmd.StdinPipe()
+	stdout, err2 := cmd.StdoutPipe()
+	stderr, err3 := cmd.StderrPipe()
+	if err := errors.Join(err1, err2, err3); err != nil {
+		out.send(serviceFrame{T: "err", D: fmt.Sprintf("The service cannot run the job: %s\n", err)}) //nolint:errcheck
+		return 1
+	}
+	if err := cmd.Start(); err != nil {
+		out.send(serviceFrame{T: "err", D: fmt.Sprintf("The service cannot start the job: %s\n", err)}) //nolint:errcheck
+		return 1
+	}
+	s.mu.Lock()
+	s.jobStop = func() { cmd.Process.Signal(syscall.SIGINT) } //nolint:errcheck
+	s.mu.Unlock()
+
+	// From the command line: input, end of input, Ctrl-C. When the command line
+	// goes away (terminal closed), the job is stopped as with Ctrl-C.
+	go func() {
+		for {
+			var f serviceFrame
+			if err := dec.Decode(&f); err != nil {
+				cmd.Process.Signal(syscall.SIGINT) //nolint:errcheck
+				stdin.Close()
+				return
+			}
+			switch f.T {
+			case "in":
+				io.WriteString(stdin, f.D) //nolint:errcheck
+			case "eof":
+				stdin.Close()
+			case "int":
+				cmd.Process.Signal(syscall.SIGINT) //nolint:errcheck
+			}
+		}
+	}()
+
+	var copies sync.WaitGroup
+	relay := func(r io.Reader, kind string) {
+		defer copies.Done()
+		buf := make([]byte, 32*1024)
+		for {
+			n, err := r.Read(buf)
+			if n > 0 {
+				out.send(serviceFrame{T: kind, D: string(buf[:n])}) //nolint:errcheck
+			}
+			if err != nil {
+				return
+			}
+		}
+	}
+	copies.Add(2)
+	go relay(stdout, "out")
+	go relay(stderr, "err")
+	copies.Wait()
+
+	if err := cmd.Wait(); err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && exitErr.ExitCode() > 0 {
+			return exitErr.ExitCode()
+		}
+		return 1
+	}
+	return 0
+}

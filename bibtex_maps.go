@@ -55,6 +55,23 @@ const mapFilesSchema = `
 
 // loadMapContentsFromDB reads the map texts from the local library database
 // (read-only), before anything else opens it. No database or no table: no texts.
+// readKeyPrefixFromDB reads the key prefix from the local database's config,
+// read-only, before the database is opened; "" when there is none.
+func readKeyPrefixFromDB() string {
+	path := dbPath()
+	if !FileExists(path) {
+		return ""
+	}
+	conn, err := sql.Open(sqliteDatabaseDriver, "file:"+path+"?mode=ro")
+	if err != nil {
+		return ""
+	}
+	defer conn.Close()
+	var prefix string
+	conn.QueryRow(`SELECT value FROM config WHERE key = 'key_prefix'`).Scan(&prefix) //nolint:errcheck
+	return prefix
+}
+
 func loadMapContentsFromDB() {
 	path := dbPath()
 	if !FileExists(path) {

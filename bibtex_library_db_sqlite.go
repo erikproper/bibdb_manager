@@ -650,6 +650,7 @@ func flushWorkingDbToHome() {
 	if reopenTx {
 		commitBibTransaction()
 	}
+	jobChangedLibrary = true
 	base := tableModTime(pushGenerationMarker)
 	gen := nextPushGeneration(base)
 	markLibraryUnpushed(base)
@@ -680,6 +681,7 @@ func flushWorkingDbToHome() {
 // automatically, so it costs disk space until manually reviewed and deleted,
 // never silent, irrecoverable data loss.
 func abandonWorkingDatabase() {
+	jobChangedLibrary = true // memory no longer matches the working database
 	if !dbIsolationActive() {
 		return
 	}
@@ -739,6 +741,7 @@ func finaliseWorkingDatabase() {
 			db = nil
 			return // nothing real was written; home DB is already up to date
 		}
+		jobChangedLibrary = true
 		base := tableModTime(pushGenerationMarker)
 		gen = nextPushGeneration(base)
 		markLibraryUnpushed(base)
@@ -747,6 +750,7 @@ func finaliseWorkingDatabase() {
 		db.Close()
 		db = nil
 	} else {
+		jobChangedLibrary = true
 		base, err := dbFilePushGeneration(working)
 		if err == nil {
 			gen = nextPushGeneration(base)

@@ -58,6 +58,14 @@ func newTerminalIO() *TTerminalIO {
 		interactive: isatty.IsTerminal(os.Stderr.Fd()),
 		lines:       make(chan string, 1),
 	}
+	// A job run by the service (service.go) reads and writes pipes; whether a
+	// person is there is what the command line that sent it says.
+	switch os.Getenv(envInteractive) {
+	case "1":
+		t.interactive = true
+	case "0":
+		t.interactive = false
+	}
 	if !t.interactive {
 		close(t.lines) // no person there: no stdin reads, questions fail fast
 		return t

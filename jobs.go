@@ -11,7 +11,7 @@
  *
  * Creator: Henderik A. Proper (e.proper@acm.org), Luxembourg, in collaboration with Claude.ai
  *
- * Version of: 18.11.2026
+ * Version of: 23.11.2026
  *
  */
 
@@ -132,6 +132,12 @@ func endJob() {
 // post-check gate passes, the working database (and the push); otherwise the
 // working database is moved aside. Shared by endJob and gracefulQuit.
 func saveJobWork() {
+	// A read job in the service: nothing to save, and the post-check gate (seconds
+	// on a large library) guards a write session only (finaliseWorkingDatabase
+	// does nothing without one).
+	if inServiceJob && !dbWriteSessionActive {
+		return
+	}
 	saveKeyNonDoublesToDb(&Library)
 
 	if !postCheckGate() {

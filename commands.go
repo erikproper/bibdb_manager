@@ -433,6 +433,12 @@ func init() {
 			},
 		},
 		{
+			name:     "push",
+			kind:     commandWrite,
+			selected: func() bool { return cmdPush },
+			run:      func(args []string) { doPush() },
+		},
+		{
 			name:     "split_position",
 			kind:     commandWrite,
 			selected: func() bool { return cmdSplitPosition },

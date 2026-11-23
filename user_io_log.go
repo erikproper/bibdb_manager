@@ -24,6 +24,9 @@ type TLoggingIO struct {
 
 var reANSIEscape = regexp.MustCompile(`\x1b\[[0-9;?]*[A-Za-z]`)
 
+// logArgs are the arguments the log header shows: the run's own, or a service job's.
+var logArgs = os.Args[1:]
+
 // newLoggingIO wraps inner, appending to path under a dated header naming the
 // command line.
 func newLoggingIO(inner TUserIO, path string) (*TLoggingIO, error) {
@@ -31,7 +34,7 @@ func newLoggingIO(inner TUserIO, path string) (*TLoggingIO, error) {
 	if err != nil {
 		return nil, err
 	}
-	fmt.Fprintf(f, "\n# %s  bibtex_check %s  %s\n", time.Now().Format("2006-01-02 15:04:05"), AppVersion, strings.Join(os.Args[1:], " ")) //nolint:errcheck
+	fmt.Fprintf(f, "\n# %s  bibtex_check %s  %s\n", time.Now().Format("2006-01-02 15:04:05"), AppVersion, strings.Join(logArgs, " ")) //nolint:errcheck
 	l := &TLoggingIO{inner: inner, file: f, input: make(chan string)}
 	go func() {
 		for s := range inner.Input() {
