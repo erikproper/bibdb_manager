@@ -73,21 +73,17 @@ func hasGarbledName(names string) bool {
 		if hasUnbalancedBraces(name) {
 			return true
 		}
-		commas := strings.Count(name, ",")
+		// Only commas outside braces split a name: "{SofTech, Inc.}" has none.
+		parts := splitTopLevelCommas(name)
+		commas := len(parts) - 1
 		if commas >= 3 {
 			return true
 		}
-		if commas == 2 {
-			parts := strings.SplitN(name, ",", 3)
-			if !knownSuffixes[strings.TrimSpace(parts[1])] {
-				return true
-			}
+		if commas == 2 && !knownSuffixes[strings.TrimSpace(parts[1])] {
+			return true
 		}
-		if commas == 1 {
-			idx := strings.Index(name, ", ")
-			if idx >= 0 && incompleteTeXAccentAtEnd.MatchString(name[idx+2:]) {
-				return true
-			}
+		if commas == 1 && strings.HasPrefix(parts[1], " ") && incompleteTeXAccentAtEnd.MatchString(parts[1][1:]) {
+			return true
 		}
 	}
 	return false
@@ -95,30 +91,23 @@ func hasGarbledName(names string) bool {
 
 // hasStrayBrace returns true when s has brace characters that are not valid
 // TeX encoding.  Two patterns are detected:
-//   - s starts with "{" and the first group contains a comma whose text before
-//     the comma is a single word — the {Lastname, Firstname} garbled pattern.
-//     Multi-word text before the comma (e.g. {University of Arizona, Tucson})
-//     is treated as a legitimate org name and accepted.
+//   - s starts with "{}" or "}" (an empty or broken first group)
 //   - a "}" brings the running brace depth below zero (a stray closing brace,
 //     e.g. "Jr. J. A.} {Bubenko" from a malformed name inversion)
 //
 // TeX accent groups such as {\"O}, {\c c}, {\AA} have no comma inside and do
 // not make depth go negative, so names like {\"O}v{\"u}n{\c c} {\c C}etin are
 // correctly accepted.
+//
+// A comma inside braces is not looked at (Erik, 2026-11-23): braces protect
+// what is in them, so "{SofTech, Inc.}" is one organisation name; only the
+// comma of "{Last}, {First}" splits a name. Until 30.52 a comma in the first
+// group after a single word was taken for a misbraced {Lastname, Firstname}.
 func hasStrayBrace(s string) bool {
 	if strings.HasPrefix(s, "{") {
 		closingBrace := strings.Index(s, "}")
 		if closingBrace <= 1 {
 			return true
-		}
-		inside := s[1:closingBrace]
-		if idx := strings.Index(inside, ","); idx >= 0 {
-			beforeComma := strings.TrimSpace(inside[:idx])
-			// Single word before comma = garbled person name {Lastname, Firstname}.
-			// Multiple words = org name {Dept of X, Division Y} — not garbled.
-			if !strings.Contains(beforeComma, " ") {
-				return true
-			}
 		}
 	}
 	depth := 0
@@ -157,7 +146,7 @@ func hasUnbalancedBraces(s string) bool {
 // as {ISO/IEC JTC 1/SC 32 Technical Committee on Data management and interchange}.
 // Such names may legitimately contain " and " or commas as English conjunctions,
 // not as BibTeX name separators; the normal person-name garble checks should be
-// skipped for them (hasStrayBrace still applies to catch {Lastname, Firstname}).
+// skipped for them (commas inside braces do not split a name: {SofTech, Inc.}).
 func isBraceWrappedOrgName(s string) bool {
 	if !strings.HasPrefix(s, "{") {
 		return false
@@ -182,10 +171,9 @@ func isBraceWrappedOrgName(s string) bool {
 //   - any occurrence of " and " at brace depth 0 (person names never contain
 //     " and " at top level; a brace may have absorbed an entire author list).
 //     Org names like {ISO/IEC on Data management and interchange} are exempt
-//     because they are fully brace-wrapped — hasStrayBrace handles comma-inside
-//     cases like {Bubenko, Jr.} that would otherwise slip through.
-//   - names with ≥3 commas or an ambiguous 2-comma form
-//   - names starting with "{" and containing a comma before the first "}" (stray braces)
+//     because they are fully brace-wrapped.
+//   - names with ≥3 commas or an ambiguous 2-comma form (commas outside braces)
+//   - stray braces (an empty first group, or a "}" without its "{")
 //   - "ss, ff" names where ff ends with an incomplete TeX accent group like {\c}
 //     indicating truncation at the space inside a group like {\c c}
 func isGarbledContributorName(name string) bool {
@@ -198,11 +186,30 @@ func isGarbledContributorName(name string) bool {
 	if hasStrayBrace(name) {
 		return true
 	}
-	if idx := strings.Index(name, ", "); idx >= 0 {
-		ff := name[idx+2:]
-		if incompleteTeXAccentAtEnd.MatchString(ff) {
+	if parts := splitTopLevelCommas(name); len(parts) > 1 && strings.HasPrefix(parts[len(parts)-1], " ") {
+		if incompleteTeXAccentAtEnd.MatchString(parts[len(parts)-1][1:]) {
 			return true
 		}
 	}
 	return false
+}
+
+// splitTopLevelCommas splits name at the commas outside braces.
+func splitTopLevelCommas(name string) []string {
+	var parts []string
+	depth, start := 0, 0
+	for i, ch := range name {
+		switch ch {
+		case '{':
+			depth++
+		case '}':
+			depth--
+		case ',':
+			if depth == 0 {
+				parts = append(parts, name[start:i])
+				start = i + 1
+			}
+		}
+	}
+	return append(parts, name[start:])
 }
