@@ -69,6 +69,12 @@ func init() {
 			},
 		},
 		{
+			name:     "audit_mappings",
+			kind:     commandRead,
+			selected: func() bool { return cmdAuditMappings },
+			run:      func(args []string) { doAuditMappings() },
+		},
+		{
 			name:     "find_entries",
 			kind:     commandRead,
 			selected: func() bool { return cmdFindEntries },

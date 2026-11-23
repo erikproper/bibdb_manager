@@ -54,7 +54,7 @@ var (
 	Reporting TInteraction
 )
 
-const AppVersion = "30.48"
+const AppVersion = "30.50"
 
 // Run-state flags consumed by the write tail in main.
 var (
@@ -3953,6 +3953,7 @@ var (
 	cmdSync               bool
 	cmdGetPdfs            bool
 	cmdFindEntries        bool
+	cmdAuditMappings      bool
 	cmdEntryKey           bool
 	cmdEntryKeyAlias      bool
 	cmdShowEntry          bool
@@ -4066,6 +4067,7 @@ func main() {
 	flag.BoolVar(&cmdSync, "sync", false, "sync library to bib file(s) via exchange config; optional arg narrows to one file")
 	flag.BoolVar(&cmdPull, "pull", false, "with -sync: skip up-sync (phase 1) and re-import; only write bib output from DB")
 	flag.BoolVar(&cmdGetPdfs, "get_pdfs", false, "download missing PDFs into the files folder")
+	flag.BoolVar(&cmdAuditMappings, "audit_mappings", false, "report field_mappings rows that never apply, are undone or chained (read-only; details in <base>.tables/mapping_audit.log)")
 	flag.BoolVar(&cmdFindEntries, "find_entries", false, "list entries matching field [value] (key TAB value per line)")
 	flag.BoolVar(&cmdEntryKey, "entry_key", false, "resolve alias to canonical key")
 	flag.BoolVar(&cmdEntryKeyAlias, "entry_key_alias", false, "get preferred alias for a key")

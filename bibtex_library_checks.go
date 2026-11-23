@@ -141,6 +141,7 @@ outer:
 	}
 
 	ticker.Done()
+	l.warnMappingProblems()
 }
 
 // CheckEntryFieldMappingWinners verifies that every winner recorded in the
