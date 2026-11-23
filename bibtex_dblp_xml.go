@@ -1284,8 +1284,22 @@ func nameFormIsFree(form, id string) bool {
 
 // linkDecidedDblpKeys gives a contributor without DBLP key the DBLP person its
 // positions were decided for (entry_contributor_names.dblp_key_used), when they all
-// name the same person and no other contributor has that key. Returns the count.
+// name the same person and no other contributor has that key. A key that positions
+// of several contributors were decided for is DBLP conflating people (the split of
+// -split_position, say), and is linked to none of them. Returns the count.
 func linkDecidedDblpKeys() int {
+	shared := map[string]bool{}
+	if rows, err := bibQuery(`SELECT dblp_key_used FROM entry_contributor_names
+		WHERE COALESCE(dblp_key_used, '') != ''
+		GROUP BY dblp_key_used HAVING COUNT(DISTINCT contributor_id) > 1`); err == nil {
+		for rows.Next() {
+			var key string
+			if rows.Scan(&key) == nil {
+				shared[key] = true
+			}
+		}
+		rows.Close()
+	}
 	rows, err := bibQuery(`SELECT ecn.contributor_id, ecn.dblp_key_used
 		FROM entry_contributor_names ecn JOIN contributors c ON c.id = ecn.contributor_id
 		WHERE COALESCE(ecn.dblp_key_used, '') != '' AND COALESCE(c.dblp_key, '') = ''
@@ -1303,7 +1317,7 @@ func linkDecidedDblpKeys() int {
 	rows.Close()
 	linked := 0
 	for id, keys := range keysOf {
-		if len(keys) != 1 || Library.ContributorByID[id] == nil ||
+		if len(keys) != 1 || shared[keys[0]] || Library.ContributorByID[id] == nil ||
 			Library.ContributorByID[Library.DblpKeyToContributorID[keys[0]]] != nil {
 			continue
 		}

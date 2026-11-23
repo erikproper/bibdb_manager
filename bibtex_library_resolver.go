@@ -475,14 +475,17 @@ func (l *TBibTeXLibrary) contributorORCID(name string) string {
 }
 
 // autoResolveByORCIDSide answers the name question when exactly one of the two names
-// has an ORCID and both have the same surname: the name with the ORCID wins, globally
+// has an ORCID, both have the same surname, and the given names fit (v30.39: "Linda
+// J." / "Linda E." Campbell passed on the surname alone, and the global answer merged
+// the two contributors): the name with the ORCID wins, globally
 // (as Y or N would; ORCID wins, Erik 2026-11-22, from his answers in the triage of
 // 30.31's first run). Different surnames are still asked: an entry-only answer
 // records the names as different people, and a global one may be wrong.
 func (l *TBibTeXLibrary) autoResolveByORCIDSide(key, field, currentName, challengerName string) (string, bool) {
 	currentORCID := l.contributorORCID(currentName)
 	challengerORCID := l.contributorORCID(challengerName)
-	if (currentORCID == "") == (challengerORCID == "") || !sameSurname(currentName, challengerName) {
+	if (currentORCID == "") == (challengerORCID == "") || !sameSurname(currentName, challengerName) ||
+		!givenNamesFit(currentName, challengerName) {
 		return "", false
 	}
 	winner, loser, orcid := currentName, challengerName, currentORCID
@@ -508,6 +511,50 @@ func sameSurname(a, b string) bool {
 	}
 	parts := func(s string) []string { return strings.FieldsFunc(s, func(r rune) bool { return r == '-' || r == ' ' }) }
 	return slices.Contains(parts(sa), sb) || slices.Contains(parts(sb), sa)
+}
+
+// givenNamesFit reports whether the given names of a and b can be one person's: in
+// order, each pair is equal, or one is a prefix of the other ("Ken" / "Kenneth",
+// "Zh." / "Zhuldyz", an initial), ignoring case, dots, hyphens and parentheticals; a
+// name may have more given names than the other ("Jerry Zeyu" / "Jerry").
+func givenNamesFit(a, b string) bool {
+	ga, gb := givenNameTokens(a), givenNameTokens(b)
+	for i := 0; i < len(ga) && i < len(gb); i++ {
+		if !strings.HasPrefix(ga[i], gb[i]) && !strings.HasPrefix(gb[i], ga[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+// givenNameTokens returns the given names of a BibTeX name, in lower case, without
+// braces, dots, hyphens and parentheticals ("(Nancy)").
+func givenNameTokens(name string) []string {
+	name = strings.TrimSpace(name)
+	var given string
+	if parts := strings.Split(name, ", "); len(parts) >= 2 && !(len(parts) == 2 && isNameGeneration(parts[1])) {
+		given = parts[len(parts)-1] // "Last, First" or "Last, Jr., First"
+	} else {
+		if len(parts) == 2 {
+			name = parts[0] // "First Last, Jr."
+		}
+		fields := splitOnUnbracedSpaces(name)
+		for len(fields) > 1 && isNameGeneration(fields[len(fields)-1]) {
+			fields = fields[:len(fields)-1]
+		}
+		if len(fields) > 1 {
+			given = strings.Join(fields[:len(fields)-1], " ")
+		}
+	}
+	given = strings.NewReplacer("{", "", "}", "", ".", " ", "-", "").Replace(strings.ToLower(given))
+	var tokens []string
+	for _, t := range strings.Fields(given) {
+		if strings.HasPrefix(t, "(") || strings.HasSuffix(t, ")") {
+			continue
+		}
+		tokens = append(tokens, t)
+	}
+	return tokens
 }
 
 // nameSurname is the surname of a BibTeX name, in lower case without braces: the

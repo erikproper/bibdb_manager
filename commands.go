@@ -427,6 +427,18 @@ func init() {
 			},
 		},
 		{
+			name:     "split_position",
+			kind:     commandWrite,
+			selected: func() bool { return cmdSplitPosition },
+			run: func(args []string) {
+				if len(args) != 3 {
+					messageln("Usage: -split_position <key> <author|editor> <position>")
+					endRun(1)
+				}
+				doSplitPosition(args)
+			},
+		},
+		{
 			name:     "set_field",
 			kind:     commandWrite,
 			selected: func() bool { return cmdSetField },

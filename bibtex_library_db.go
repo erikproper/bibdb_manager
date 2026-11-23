@@ -585,6 +585,17 @@ func ensureNonDoubleContributorsTableExists() {
 // addNonDoubleContributorPair records that idA and idB are confirmed different
 // people. The IDs are stored in sorted order to satisfy the CHECK constraint.
 // No-op when the pair is already recorded.
+// isNonDoubleContributorPair reports whether contributors idA and idB are recorded
+// as different people (non_double_contributors).
+func isNonDoubleContributorPair(idA, idB string) bool {
+	if idA > idB {
+		idA, idB = idB, idA
+	}
+	var n int
+	bibQueryRow(`SELECT COUNT(*) FROM non_double_contributors WHERE contributor_id_a = ? AND contributor_id_b = ?`, idA, idB).Scan(&n) //nolint:errcheck
+	return n > 0
+}
+
 func addNonDoubleContributorPair(idA, idB string) {
 	if idA > idB {
 		idA, idB = idB, idA
@@ -1004,6 +1015,14 @@ func upsertNameMapping(alias, name string) {
 
 	// If alias already maps to a contributor different from id, decide how to proceed.
 	if aliasID, mapped := Library.NameToContributorID[alias]; mapped && aliasID != id {
+		if isNonDoubleContributorPair(aliasID, id) {
+			// Recorded as different people (by Erik's "d", or a manual split): the name
+			// is shared, no merge (v30.39).
+			upsertContributorNameToDB(id, alias)
+			makeNameAmbiguous(&Library, alias, aliasID, id)
+			retroactivelyBackfillDisambiguation(&Library, alias)
+			return
+		}
 		if aliasContrib, isContrib := Library.ContributorByID[aliasID]; isContrib && aliasContrib.Name == alias {
 			// alias is the canonical name of aliasID → absorb aliasID into id using
 			// the full merge routine so that contributor_roles FK constraints are

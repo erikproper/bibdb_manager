@@ -54,7 +54,7 @@ var (
 	Reporting TInteraction
 )
 
-const AppVersion = "30.38"
+const AppVersion = "30.42"
 
 // Run-state flags consumed by the write tail in main.
 var (
@@ -83,6 +83,9 @@ var errReported = errors.New("reported")
 // programme ends (besides main returning); step 22.1 turns it into the end of a
 // job, so that a service can go on.
 func endRun(code int) {
+	if l, ok := userIO.(*TLoggingIO); ok {
+		l.close()
+	}
 	os.Exit(code) //nolint:forbidigo // the only exit
 }
 
@@ -1228,7 +1231,12 @@ func reportORCIDSideAutoResolves() {
 	}
 	logPath := libraryBase() + tablesFolderSuffix + "/orcid_side_auto_resolves.log"
 	os.MkdirAll(libraryBase()+tablesFolderSuffix, 0o755)                 //nolint:errcheck
-	os.WriteFile(logPath, []byte(strings.Join(lines, "\n")+"\n"), 0o644) //nolint:errcheck
+	// Appended, with the date: each run's answers stay, for an audit (30.39; the
+	// file was overwritten, so the Campbell merge of 2026-11-22 left no trace).
+	if f, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644); err == nil {
+		fmt.Fprintf(f, "# %s\n%s\n", time.Now().Format("2006-01-02 15:04:05"), strings.Join(lines, "\n"))
+		f.Close()
+	}
 	Library.Progress("  Answered by the name with the ORCID: %d name question(s) (see orcid_side_auto_resolves.log).", len(lines))
 	Library.orcidSideAutoResolves = nil
 }
@@ -3058,6 +3066,60 @@ func doSetPreferredAlias(args []string) {
 	}
 }
 
+// doSplitPosition gives one author/editor position of an entry a new contributor of
+// its own, recorded as a different person from the one it had. It is for a name two
+// people share that no rule tells apart (no ORCID, and DBLP lists both as one person).
+// The new contributor gets no DBLP key, so the other papers on that DBLP person stay
+// where they are; the entry record keeps the position with the new contributor.
+func doSplitPosition(args []string) {
+	if !openLibraryToUpdate() {
+		return
+	}
+	key := Library.MapEntryKey(cleanKey(args[0]))
+	role := args[1]
+	position, err := strconv.Atoi(args[2])
+	if key == "" || !Library.EntryExists(key) {
+		messagef("Entry %s does not exist\n", args[0])
+		return
+	}
+	if (role != "author" && role != "editor") || err != nil || position < 1 {
+		messageln("Usage: -split_position <key> <author|editor> <position>")
+		return
+	}
+	var oldID string
+	bibQueryRow(`SELECT contributor_id FROM contributor_roles WHERE entry_key = ? AND role = ? AND position = ?`,
+		key, role, position).Scan(&oldID) //nolint:errcheck
+	if oldID == "" {
+		messagef("%s has no %s at position %d\n", key, role, position)
+		return
+	}
+	var name string
+	bibQueryRow(`SELECT name_used FROM entry_contributor_names WHERE entry_key = ? AND role = ? AND position = ?`,
+		key, role, position).Scan(&name) //nolint:errcheck
+	if name == "" {
+		if names := contributorFieldNames(Library.EntryFieldValueity(key, role)); position <= len(names) {
+			name = names[position-1].name
+		}
+	}
+	if name == "" {
+		if c := Library.ContributorByID[oldID]; c != nil {
+			name = c.Name
+		}
+	}
+	newID := Library.addContributor(name)
+	makeNameAmbiguous(&Library, name, oldID, newID)
+	retroactivelyBackfillDisambiguation(&Library, name)
+	dbExecSave("doSplitPosition: entry_contributor_names",
+		`INSERT INTO entry_contributor_names (entry_key, role, position, contributor_id, name_used) VALUES (?, ?, ?, ?, ?)
+		 ON CONFLICT(entry_key, role, position) DO UPDATE SET contributor_id = excluded.contributor_id`,
+		key, role, position, newID, name)
+	dbExecSave("doSplitPosition: contributor_roles",
+		`UPDATE contributor_roles SET contributor_id = ? WHERE entry_key = ? AND role = ? AND position = ?`,
+		newID, key, role, position)
+	addNonDoubleContributorPair(oldID, newID)
+	Library.Progress("%s %s %d (%s): %s → %s, a different person.", key, role, position, name, oldID, newID)
+}
+
 func doApplyScript() {
 	scriptPath := libraryBase() + ScriptFilePath
 	if _, err := os.Stat(scriptPath); os.IsNotExist(err) {
@@ -3435,6 +3497,15 @@ func doEnrichOrcidProfilesCore() {
 			upsertORCIDSeen(p.id, p.orcid, orcidSeenRecord{canonical: contrib.Name})
 			continue
 		}
+		// Titles ("Dr.", "PhD") are no part of a name: compare and offer without them.
+		stripped := *person
+		stripped.CreditName = stripNameTitles(person.CreditName)
+		stripped.DeclaredName = stripNameTitles(person.DeclaredName)
+		stripped.OtherNames = nil
+		for _, n := range person.OtherNames {
+			stripped.OtherNames = append(stripped.OtherNames, stripNameTitles(n))
+		}
+		person = &stripped
 
 		// Build the full set of name forms from the ORCID record:
 		// credit-name, declared (Last,First), natural order (First Last), other-names.
@@ -3564,7 +3635,7 @@ func doEnrichOrcidProfilesCore() {
 
 		// Present the options for the new canonical.
 		options := TStringSetNew()
-		options.Add("k", "c")
+		options.Add("k", "o")
 		offerDeclared := person.DeclaredName != ""
 		if offerDeclared {
 			options.Add("d")
@@ -3578,7 +3649,7 @@ func doEnrichOrcidProfilesCore() {
 			options.Add("i")
 		}
 		options.Add("e")
-		messagef("ORCID %s  %s\n  Current canonical : %q\n  Credit-name       : %q\n",
+		messagef("ORCID %s  %s\n  Current name      : %q\n  ORCID credit-name : %q\n",
 			p.orcid, p.id, contrib.Name, person.CreditName)
 		if person.DeclaredName != "" {
 			messagef("  Declared name     : %q\n", person.DeclaredName)
@@ -3589,7 +3660,7 @@ func doEnrichOrcidProfilesCore() {
 		if offerInferred {
 			messagef("  Inferred name     : %q  (credit-name parsed using declared surname)\n", inferredName)
 		}
-		messagef("  k=keep current  c=use credit-name")
+		messagef("  k=keep %q  o=use ORCID credit-name (%q)", contrib.Name, person.CreditName)
 		if offerDeclared {
 			if person.DeclaredName == contrib.Name {
 				messagef("  d=use declared (%q = current)", person.DeclaredName)
@@ -3611,7 +3682,7 @@ func doEnrichOrcidProfilesCore() {
 
 		var newCanon string
 		switch answer {
-		case "c":
+		case "o":
 			newCanon = person.CreditName
 		case "d":
 			newCanon = person.DeclaredName
@@ -3879,6 +3950,8 @@ var (
 	cmdCorrectName        bool
 	cmdAddDoiAlias        bool
 	cmdSetPreferredAlias  bool
+	cmdSplitPosition      bool
+	logFilePath           string
 	cmdNewKey             bool
 	cmdDeleteEntry        bool
 	cmdMap                bool
@@ -3953,6 +4026,8 @@ func main() {
 
 	flag.BoolVar(&cmdTrustHints, "trust_hints", false, "harvest: auto-accept key-hint matches without confirmation")
 	flag.BoolVar(&cmdCollectKeys, "collect_keys", false, "harvest: add source entry keys to the hints DB when unambiguous")
+	flag.StringVar(&logFilePath, "log", "", "also write the run's output, questions and answers to this file (appended): -log <file>")
+	flag.StringVar(&logFilePath, "l", "", "short for -log")
 	flag.StringVar(&cmdHarvestGroup, "group", "", "harvest: add all resolved entries to this group")
 
 	var cmdVersion bool
@@ -3994,6 +4069,7 @@ func main() {
 	flag.BoolVar(&cmdCorrectName, "correct_name", false, "correct a name spelling everywhere: -correct_name <bad_name> <correct_name>")
 	flag.BoolVar(&cmdAddDoiAlias, "add_doi_alias", false, "record a DOI as an alias for an entry: -add_doi_alias <doi> <entry_key>")
 	flag.BoolVar(&cmdSetPreferredAlias, "set_preferred_alias", false, "set preferred alias for a key: -set_preferred_alias <alias> <key>")
+	flag.BoolVar(&cmdSplitPosition, "split_position", false, "give an author/editor position a new contributor of its own: -split_position <key> <author|editor> <position>")
 	flag.BoolVar(&cmdNewKey, "new_key", false, "print a fresh canonical key and exit")
 	flag.BoolVar(&cmdDeleteEntry, "delete_entry", false, "delete one or more library entries: -delete_entry <key>...")
 	flag.BoolVar(&cmdMap, "map", false, "also record alias→key in the project map file (with -entry_key_alias)")
@@ -4038,8 +4114,14 @@ flag.BoolVar(&cmdAlignBooktitleCountries, "align_booktitle_countries", false, "d
 	// not parsed. Rescan args for known modifiers and strip them out.
 	{
 		var filtered []string
-		for _, a := range args {
+		for i := 0; i < len(args); i++ {
+			a := args[i]
 			switch a {
+			case "-log", "--log", "-l", "--l":
+				if i+1 < len(args) {
+					logFilePath = args[i+1]
+					i++
+				}
 			case "-map", "--map":
 				cmdMap = true
 			case "-use_aliases", "--use_aliases":
@@ -4049,6 +4131,15 @@ flag.BoolVar(&cmdAlignBooktitleCountries, "align_booktitle_countries", false, "d
 			}
 		}
 		args = filtered
+	}
+
+	if logFilePath != "" {
+		l, err := newLoggingIO(userIO, logFilePath)
+		if err != nil {
+			messagef("Cannot open log file %s: %s\n", logFilePath, err)
+			endRun(1)
+		}
+		userIO = l
 	}
 
 	if cmdVersion {

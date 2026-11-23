@@ -30,6 +30,30 @@ func TestSameSurname(t *testing.T) {
 	}
 }
 
+// TestGivenNamesFit: the given-name test of autoResolveByORCIDSide.
+func TestGivenNamesFit(t *testing.T) {
+	cases := []struct {
+		a, b string
+		want bool
+	}{
+		{"Gao, Jerry Zeyu", "Gao, Jerry", true},
+		{"Anderson, Kenneth Mark", "Anderson, Ken", true},
+		{"Zh. B. Kalpeyeva", "Zhuldyz B. Kalpeyeva", true},
+		{"Zhang, Yan-Qing", "Yanqing Zhang", true},
+		{"Deng, Xuefei (Nancy)", "Xuefei Deng", true},
+		{"Wimmer, Maria A.", "Maria Wimmer", true},
+		{"James L. Parrish Jr.", "Parrish, James", true},
+		{"Campbell, Linda E.", "Campbell, Linda J.", false},
+		{"Liu, Ivy L. B.", "Libo Liu", false},
+		{"Michael Barnett", "Mike Barnett", false},
+	}
+	for _, c := range cases {
+		if got := givenNamesFit(c.a, c.b); got != c.want {
+			t.Errorf("givenNamesFit(%q, %q) = %v, want %v", c.a, c.b, got, c.want)
+		}
+	}
+}
+
 // TestAutoResolveByORCIDSide: exactly one name with an ORCID and the same surname →
 // that name wins; otherwise the question stays.
 func TestAutoResolveByORCIDSide(t *testing.T) {
@@ -38,6 +62,8 @@ func TestAutoResolveByORCIDSide(t *testing.T) {
 	Library.ContributorByID["gaoJ"] = &TContributor{Name: "Gao, Jerry"}
 	Library.ContributorByID["sab"] = &TContributor{Name: "Sabegh, Mohammad A. J."}
 	Library.ContributorByID["jab"] = &TContributor{Name: "Mohammad Jabbari", ORCID: "0000-0002-2172-0600"}
+	Library.ContributorByID["lindaE"] = &TContributor{Name: "Campbell, Linda E.", ORCID: "0000-0002-8872-9626"}
+	Library.ContributorByID["lindaJ"] = &TContributor{Name: "Campbell, Linda J."}
 	Library.ContributorByID["kr"] = &TContributor{Name: "Christian Krause"}
 	Library.ContributorByID["ko"] = &TContributor{Name: "Christian Koehler"}
 	names := func() {
@@ -53,6 +79,7 @@ func TestAutoResolveByORCIDSide(t *testing.T) {
 		{"Gao, Jerry", "Gao, Jerry Zeyu", "Gao, Jerry Zeyu", true},
 		{"Sabegh, Mohammad A. J.", "Mohammad Jabbari", "", false},
 		{"Christian Krause", "Christian Koehler", "", false},
+		{"Campbell, Linda E.", "Campbell, Linda J.", "", false},
 	}
 	for _, c := range cases {
 		names() // a global answer maps the names; each case starts afresh
