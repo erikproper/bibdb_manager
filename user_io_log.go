@@ -48,6 +48,7 @@ func newLoggingIO(inner TUserIO, path string) (*TLoggingIO, error) {
 
 func (l *TLoggingIO) IsInteractive() bool   { return l.inner.IsInteractive() }
 func (l *TLoggingIO) Input() <-chan string  { return l.input }
+func (l *TLoggingIO) RequestInput()         { l.inner.RequestInput() }
 func (l *TLoggingIO) WriteMessage(s string) { l.inner.WriteMessage(s); l.log(s) }
 func (l *TLoggingIO) WriteResult(s string)  { l.inner.WriteResult(s); l.log(s) }
 

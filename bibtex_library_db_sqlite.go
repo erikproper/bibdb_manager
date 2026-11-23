@@ -787,6 +787,7 @@ func finaliseWorkingDatabase() {
 	if _, err := os.Stat(dumpPath); err == nil {
 		copyFile(dumpPath, backupDumpPath) //nolint:errcheck
 	}
+	pruneLibraryBackups()
 }
 
 // --- FK pre-check / post-check gate (step 15.1, Phase A) ---

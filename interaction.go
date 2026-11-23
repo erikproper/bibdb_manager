@@ -31,6 +31,7 @@ var isTTY = userIO.IsInteractive()
 // whitespace (including any stray \r). Closed stdin (end of input, Ctrl-D) quits
 // as "q" would: returning "" made the question loops ask again forever.
 func readStdinLine() string {
+	userIO.RequestInput()
 	line, ok := <-userIO.Input()
 	if !ok {
 		messageln()
@@ -210,16 +211,11 @@ func (t *TProgressTicker) Tick() bool {
 	return t.interaction != nil && t.interaction.QuitWasRequested()
 }
 
-// pollForQuit checks, without blocking, whether the user typed "q", and quits
-// gracefully (committing the work done so far) when so.
-func (t *TProgressTicker) pollForQuit() {
-	line, ok := pollLine()
-	if ok && strings.TrimSpace(line) == "q" && t.interaction != nil {
-		t.interaction.quitRequested = true
-		stderrPrintf("\nInterrupted — committing work done so far before exiting...\n")
-		quitNow()
-	}
-}
+// pollForQuit did check, without blocking, whether "q" was typed: that read the
+// keyboard during every ticker, eating what was typed ahead for the shell. Since
+// 30.59 input is read only when asked (TUserIO.RequestInput); Ctrl-C stops a run
+// gracefully, and a command that offers "q+Enter" reads for it itself.
+func (t *TProgressTicker) pollForQuit() {}
 
 // WasAborted reports whether a graceful quit has been requested on the ticker's
 // associated interaction. Use when Step()/SetCount() is called inside a

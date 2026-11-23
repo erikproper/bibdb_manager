@@ -37,6 +37,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"regexp"
+	"sort"
 	"strings"
 	"time"
 )
@@ -449,4 +451,42 @@ func installRestoredDatabase() error {
 	}
 	clearLibraryUnpushed()
 	return pushLibraryDatabase(gen, true)
+}
+
+// defaultNrOfBackups is how many timestamped backups are kept when the settings
+// do not say (nr_of_backups).
+const defaultNrOfBackups = 4
+
+// timestampedBackupName matches the backups a save makes: <base>_YYYYMMDD_HHMMSS
+// with .sqlite3 or .dump. Backups made by hand (<base>_YYYYMMDD_pre_...) do not
+// match, and are never removed.
+var timestampedBackupName = regexp.MustCompile(`^(.+)_(\d{8}_\d{6})\.(sqlite3|dump)$`)
+
+// pruneLibraryBackups keeps the nrOfBackups newest timestamped backups of this
+// library in backupFolder, per kind (copy, dump), and removes the older ones.
+// Built in from ~/BiBTeX/clean.backups (Erik, 2026-11-23).
+func pruneLibraryBackups() {
+	if nrOfBackups <= 0 {
+		return
+	}
+	entries, err := os.ReadDir(backupFolder)
+	if err != nil {
+		return
+	}
+	byKind := map[string][]string{}
+	for _, e := range entries {
+		m := timestampedBackupName.FindStringSubmatch(e.Name())
+		if e.IsDir() || m == nil || m[1] != bibTeXBaseName {
+			continue
+		}
+		byKind[m[3]] = append(byKind[m[3]], e.Name())
+	}
+	for _, names := range byKind {
+		sort.Sort(sort.Reverse(sort.StringSlice(names))) // the timestamp sorts as text: newest first
+		for _, name := range names[min(nrOfBackups, len(names)):] {
+			if err := os.Remove(backupFolder + name); err != nil {
+				dbInteraction.Warning("Could not remove old backup %s: %s", name, err)
+			}
+		}
+	}
 }

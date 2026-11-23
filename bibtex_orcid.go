@@ -373,6 +373,7 @@ func doUpdateOrcidCache() {
 	defer close(stopCh)
 	go func() {
 		for {
+			userIO.RequestInput() // "q+Enter to stop": read while the refresh runs
 			select {
 			case line, ok := <-userIO.Input():
 				if !ok || strings.TrimSpace(line) == "q" {

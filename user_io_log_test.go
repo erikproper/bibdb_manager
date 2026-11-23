@@ -13,6 +13,7 @@ func (t *tSilentIO) IsInteractive() bool  { return true }
 func (t *tSilentIO) WriteMessage(string)  {}
 func (t *tSilentIO) WriteResult(string)   {}
 func (t *tSilentIO) Input() <-chan string { return t.in }
+func (t *tSilentIO) RequestInput()        {}
 
 // TestLoggingIO: progress lines redrawn in place stay out of the log; messages,
 // a question and its answer go in.

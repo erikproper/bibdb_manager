@@ -26,6 +26,7 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"sync"
 
 	"github.com/mattn/go-isatty"
 )
@@ -44,6 +45,11 @@ type TUserIO interface {
 	// has ended (or at once when there is no person). Everything that reads
 	// input receives from this one channel, so no two readers compete.
 	Input() <-chan string
+	// RequestInput asks for the next line on Input. Input is read only when
+	// asked (Erik, 2026-11-23): what is typed ahead while a command runs stays
+	// for the shell, and cannot answer a question not yet shown. Asking again
+	// before the line came is the same request.
+	RequestInput()
 }
 
 // TTerminalIO is the TUserIO of a command run in a terminal: stderr, stdout, and
@@ -51,6 +57,9 @@ type TUserIO interface {
 type TTerminalIO struct {
 	interactive bool
 	lines       chan string
+	demand      chan struct{} // a line is asked for (RequestInput)
+	mu          sync.Mutex
+	pending     bool // a request not yet answered
 }
 
 func newTerminalIO() *TTerminalIO {
@@ -70,14 +79,34 @@ func newTerminalIO() *TTerminalIO {
 		close(t.lines) // no person there: no stdin reads, questions fail fast
 		return t
 	}
+	t.demand = make(chan struct{}, 1)
 	go func() {
 		scanner := bufio.NewScanner(os.Stdin)
-		for scanner.Scan() {
+		for range t.demand {
+			if !scanner.Scan() {
+				close(t.lines)
+				return
+			}
+			t.mu.Lock()
+			t.pending = false
+			t.mu.Unlock()
 			t.lines <- scanner.Text()
 		}
-		close(t.lines)
 	}()
 	return t
+}
+
+// RequestInput lets the pump read one line from stdin.
+func (t *TTerminalIO) RequestInput() {
+	if !t.interactive {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if !t.pending {
+		t.pending = true
+		t.demand <- struct{}{}
+	}
 }
 
 func (t *TTerminalIO) IsInteractive() bool   { return t.interactive }
@@ -86,15 +115,6 @@ func (t *TTerminalIO) WriteResult(s string)  { os.Stdout.WriteString(s) } //noli
 
 func (t *TTerminalIO) Input() <-chan string { return t.lines }
 
-// pollLine returns a line only when one has been typed already; it never blocks.
-func pollLine() (string, bool) {
-	select {
-	case line, ok := <-userIO.Input():
-		return line, ok
-	default:
-		return "", false
-	}
-}
 
 // userIO is the current session's TUserIO.
 var userIO TUserIO = newTerminalIO()

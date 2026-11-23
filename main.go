@@ -54,7 +54,7 @@ var (
 	Reporting TInteraction
 )
 
-const AppVersion = "30.56"
+const AppVersion = "30.59"
 
 // Run-state flags consumed by the write tail in main.
 var (
@@ -2074,6 +2074,18 @@ func doSetField(args []string) {
 		entry := loadEntryFromDb(key)
 		if len(args) >= 3 && args[2] != "" {
 			Library.setEntryField(entry, field, args[2])
+			// A value set by hand wins (Erik, 2026-11-23): a superseded value
+			// recorded for this field (e.g. by a merge) whose winner differs would
+			// otherwise map the new value back on output.
+			winners := map[string]bool{}
+			for _, winner := range Library.EntryFieldSourceToTarget[key][field] {
+				winners[winner] = true
+			}
+			for winner := range winners {
+				if winner != args[2] {
+					Library.UpdateEntryFieldAlias(key, field, winner, args[2])
+				}
+			}
 		} else {
 			Library.deleteEntryField(entry, field)
 		}

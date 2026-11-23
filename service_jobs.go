@@ -150,6 +150,14 @@ type TSocketIO struct {
 	lines       chan string
 	closeOnce   sync.Once
 	finished    atomic.Bool // the job is over: its connection ending is no Ctrl-C for the next job
+	asked       atomic.Bool // the command line was asked for a line, not yet answered
+}
+
+// RequestInput asks the command line to read one line from its terminal.
+func (s *TSocketIO) RequestInput() {
+	if s.interactive && s.asked.CompareAndSwap(false, true) {
+		s.out.send(serviceFrame{T: "ask"}) //nolint:errcheck
+	}
 }
 
 func (s *TSocketIO) IsInteractive() bool   { return s.interactive }
@@ -306,6 +314,7 @@ func relayInput(dec interface{ Decode(any) error }, sio *TSocketIO) {
 		}
 		switch f.T {
 		case "in":
+			sio.asked.Store(false)
 			if sio.interactive {
 				for _, line := range strings.SplitAfter(f.D, "\n") {
 					if line != "" {

@@ -105,6 +105,12 @@ func handleServiceCommands() bool {
 	if os.Getenv(envServiceJob) != "" {
 		return false // this is the service's job itself
 	}
+	// -harvest reading its bib data from stdin opens /dev/tty for its questions,
+	// which a job of the service has not: it runs on its own (the service holds
+	// the instance lock only while it runs a job).
+	if cmdHarvest && len(flag.Args()) == 0 {
+		return false
+	}
 	conn := dialService()
 	if conn == nil {
 		return false
@@ -153,11 +159,26 @@ func relayToService(conn net.Conn) int {
 		}
 	}()
 
-	// Typed lines come from the one input pump (user_io.go); without a person,
-	// stdin is passed on as it is (e.g. -harvest reading a bib file from stdin).
+	// Typed lines come from the one input pump (user_io.go), and only when the
+	// job asks ("ask"; a child-process job, which cannot say, gets "askall":
+	// read all along). Without a person, stdin is passed on as it is.
+	asks := make(chan bool, 16) // true: from now on read all along
 	go func() {
 		if interactive {
-			for line := range userIO.Input() {
+			continuous := false
+			for {
+				if !continuous {
+					all, ok := <-asks
+					if !ok {
+						return
+					}
+					continuous = all
+				}
+				userIO.RequestInput()
+				line, ok := <-userIO.Input()
+				if !ok {
+					break
+				}
 				if out.send(serviceFrame{T: "in", D: line + "\n"}) != nil {
 					return
 				}
@@ -185,6 +206,11 @@ func relayToService(conn net.Conn) int {
 			return 1
 		}
 		switch f.T {
+		case "ask", "askall":
+			select {
+			case asks <- f.T == "askall":
+			default:
+			}
 		case "out":
 			os.Stdout.WriteString(f.D) //nolint:errcheck
 		case "err", "info":
@@ -538,6 +564,9 @@ func (s *TService) runChildJob(req serviceFrame, dec *json.Decoder, out *frameSe
 	s.mu.Lock()
 	s.jobStop = func() { cmd.Process.Signal(syscall.SIGINT) } //nolint:errcheck
 	s.mu.Unlock()
+	if req.Interactive {
+		out.send(serviceFrame{T: "askall"}) //nolint:errcheck // the child reads its stdin itself
+	}
 
 	// From the command line: input, end of input, Ctrl-C. When the command line
 	// goes away (terminal closed), the job is stopped as with Ctrl-C.
