@@ -407,3 +407,206 @@ func (w *TWebUI) handleEditAuthorSave(rw http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(rw, map[string]any{"ok": ok, "message": msg, "output": strings.TrimSpace(out.text())})
 }
+
+// ---- merging entries or authors (marked in the web UI, compared in the Merge tab) ----
+
+// handleCompare answers the marked items side by side (GET /api/compare?kind=entries|authors&keys=a,b,…):
+// for entries their type, fields (authors and editors from the contributors) and
+// groups; for authors their name, ORCIDs, DBLP key, name forms and entry count.
+func (w *TWebUI) handleCompare(rw http.ResponseWriter, r *http.Request) {
+	kind := r.URL.Query().Get("kind")
+	keys := strings.Split(r.URL.Query().Get("keys"), ",")
+	ro, err := openReadOnly()
+	if err != nil {
+		http.Error(rw, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer ro.Close()
+	type item struct {
+		Key    string            `json:"key"`
+		Fields map[string]string `json:"fields"`
+		Found  bool              `json:"found"`
+	}
+	out := []item{}
+	for _, k := range keys {
+		k = strings.TrimSpace(k)
+		if k == "" {
+			continue
+		}
+		it := item{Key: k, Fields: map[string]string{}}
+		if kind == "authors" {
+			var name string
+			var orcid, dblpKey sql.NullString
+			if ro.QueryRow(`SELECT name, orcid, dblp_key FROM contributors WHERE id = ?`, k).Scan(&name, &orcid, &dblpKey) == nil {
+				it.Found = true
+				it.Fields["name"] = name
+				var orcids, forms []string
+				if rows, err := ro.Query(`SELECT orcid FROM contributor_orcids WHERE contributor_id = ? ORDER BY is_canonical DESC, orcid`, k); err == nil {
+					for rows.Next() {
+						var v string
+						if rows.Scan(&v) == nil {
+							orcids = append(orcids, v)
+						}
+					}
+					rows.Close()
+				}
+				if len(orcids) == 0 && orcid.String != "" {
+					orcids = []string{orcid.String}
+				}
+				if rows, err := ro.Query(`SELECT name FROM contributor_names WHERE id = ? AND name != ? ORDER BY name`, k, name); err == nil {
+					for rows.Next() {
+						var v string
+						if rows.Scan(&v) == nil {
+							forms = append(forms, v)
+						}
+					}
+					rows.Close()
+				}
+				var n int
+				ro.QueryRow(`SELECT COUNT(DISTINCT entry_key) FROM contributor_roles WHERE contributor_id = ?`, k).Scan(&n) //nolint:errcheck
+				it.Fields["orcid"] = strings.Join(orcids, ", ")
+				it.Fields["dblp"] = strings.TrimPrefix(dblpKey.String, "homepages/")
+				it.Fields["name forms"] = strings.Join(forms, "; ")
+				it.Fields["entries"] = fmt.Sprint(n)
+			}
+		} else if st, ok := readEditState(ro, k); ok {
+			it.Found = true
+			it.Fields = st.Fields
+			it.Fields["entrytype"] = st.Type
+			if len(st.Groups) > 0 {
+				it.Fields["groups"] = strings.Join(st.Groups, ", ")
+			}
+		}
+		out = append(out, it)
+	}
+	writeJSON(rw, out)
+}
+
+// handleMerge starts the merge of the marked items into the one kept (POST
+// /api/merge {kind, keys, target}), as a job of the Actions tab: -merge_entries
+// or -merge_contributors, whose questions (field challenges) come up there.
+func (w *TWebUI) handleMerge(rw http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(rw, "not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		Kind    string            `json:"kind"`
+		Keys    []string          `json:"keys"`
+		Target  string            `json:"target"`
+		Choices map[string]string `json:"choices"` // entries: field → the value chosen where they differ
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(rw, r.Body, 1<<16)).Decode(&req); err != nil {
+		http.Error(rw, "not a valid request", http.StatusBadRequest)
+		return
+	}
+	var from []string
+	for _, k := range req.Keys {
+		if k != "" && k != req.Target {
+			from = append(from, k)
+		}
+	}
+	if len(from) == 0 || req.Target == "" {
+		http.Error(rw, "choose the one to keep and at least one other", http.StatusBadRequest)
+		return
+	}
+	cmd, title := "-merge_entries", "Merge entries"
+	if req.Kind == "authors" {
+		cmd, title = "-merge_contributors", "Merge authors"
+	}
+	args := append(append([]string{cmd}, from...), req.Target)
+	// The values chosen where the entries differ are set first, on the one kept and on
+	// the others (but the preferred alias: two entries cannot share one), so the merge
+	// finds nothing left to ask about.
+	var cmds, aliasCmds [][]string // the DOI aliases after the edits (the DOI gone from the other entry)
+	if req.Kind != "authors" && len(req.Choices) > 0 {
+		ro, err := openReadOnly()
+		if err == nil {
+			for _, k := range append([]string{req.Target}, from...) {
+				st, ok := readEditState(ro, k)
+				if !ok {
+					continue
+				}
+				edit := TEntryEdit{Set: map[string]string{}}
+				for f, v := range req.Choices {
+					v = strings.TrimSpace(v)
+					cur := st.Fields[f]
+					if f == EntryTypeField {
+						cur = st.Type
+					}
+					if v == "" || cur == v {
+						continue
+					}
+					if k != req.Target {
+						// The fields that identify an entry go to the one kept only: two
+						// entries with one DBLP key or DOI are taken as one by the checks
+						// (merged on their own, the older kept). The others lose a
+						// differing DBLP key; a differing DOI becomes a DOI alias of the one
+						// kept; their preferred alias is left to the merge (its question).
+						switch f {
+						case PreferredAliasField:
+							continue
+						case DBLPField:
+							edit.Set[f] = ""
+							continue
+						case "doi":
+							aliasCmds = append(aliasCmds, []string{"-add_doi_alias", cur, req.Target})
+							edit.Set[f] = ""
+							continue
+						}
+						if cur == "" {
+							continue
+						}
+					}
+					edit.Set[f] = v
+				}
+				if len(edit.Set) > 0 {
+					data, _ := json.Marshal(edit)
+					cmds = append(cmds, []string{"-edit_entry", k, string(data)})
+				}
+			}
+			ro.Close()
+		}
+	}
+	cmds = append(append(cmds, aliasCmds...), args)
+	if err := w.service.runDialogueJob(title, cmds, false, nil); err != nil {
+		http.Error(rw, err.Error(), http.StatusConflict)
+		return
+	}
+	rw.WriteHeader(http.StatusAccepted)
+}
+
+// resolveKeyForUI finds the entry a key typed on a command line stands for: an
+// entry key, an old key, a preferred alias, a key alias, or a local key of the
+// folder's .keys files (dir). "" when none.
+func resolveKeyForUI(raw, dir string) string {
+	ro, err := openReadOnly()
+	if err != nil {
+		return ""
+	}
+	defer ro.Close()
+	try := func(k string) string {
+		var n int
+		if ro.QueryRow(`SELECT COUNT(*) FROM bib_entries WHERE entry_key = ? AND field = 'entrytype'`, k).Scan(&n) == nil && n > 0 {
+			return k
+		}
+		var key string
+		for _, q := range []string{
+			`SELECT key FROM key_oldies WHERE alias = ?`,
+			`SELECT entry_key FROM bib_entries WHERE field = 'preferredalias' AND value = ?`,
+			`SELECT key FROM key_hints WHERE hint = ?`,
+		} {
+			if ro.QueryRow(q, k).Scan(&key) == nil && key != "" {
+				return key
+			}
+		}
+		return ""
+	}
+	if k := try(strings.TrimSpace(raw)); k != "" {
+		return k
+	}
+	if canonical := lookupLocalKey(dir, strings.TrimSpace(raw)); canonical != "" {
+		return try(canonical)
+	}
+	return ""
+}

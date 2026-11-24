@@ -23,7 +23,16 @@ type TWebTable struct {
 	Columns []string `json:"columns"`
 	Keys    []string `json:"keys"` // the columns that identify a row
 	Help    string   `json:"help"`
-	from    string   // the SQL table (or view expression)
+	from    string   // the SQL table, or a subquery, the rows are read from
+	table   string   // the SQL table written, when not from
+}
+
+// written is the SQL table a change writes.
+func (t TWebTable) written() string {
+	if t.table != "" {
+		return t.table
+	}
+	return t.from
 }
 
 // webTables are the tables with a tab.
@@ -36,6 +45,15 @@ var webTables = map[string]TWebTable{
 			"sides: a correction (stored values are corrected too); different fields: a value moved or added " +
 			"elsewhere (source_field may carry an entry type, e.g. author:techreport).",
 		from: "field_mappings",
+	},
+	"name_forms": {
+		Name: "name_forms", Title: "Name mappings",
+		Columns: []string{"form", "canonical", "id"},
+		Keys:    []string{"form", "id"},
+		Help: "The other forms of an author's name, mapped to the author (their stored name and id): a form found " +
+			"in an entry is taken as that author. When adding, canonical may be the stored name or the id (EP-…).",
+		from:  "(SELECT n.name AS form, c.name AS canonical, n.id AS id FROM contributor_names n JOIN contributors c ON c.id = n.id WHERE n.name != c.name)",
+		table: "contributor_names",
 	},
 	"key_oldies": {
 		Name: "key_oldies", Title: "Old keys",
@@ -182,6 +200,9 @@ func doTableEdit(args []string) {
 		return
 	}
 	for _, c := range t.Columns {
+		if t.Name == "name_forms" && (c == "id" || c == "canonical") {
+			continue // one of the two names the author
+		}
 		if e.Op != "delete" && strings.TrimSpace(e.Row[c]) == "" {
 			messagef("%s is empty.\n", c)
 			return
@@ -207,9 +228,27 @@ func doTableEdit(args []string) {
 			Library.KeyOldies.Delete(row["alias"])
 		case "key_hints":
 			Library.HintToKey.Delete(row["hint"])
+		case "name_forms":
+			if Library.NameToContributorID[row["form"]] == row["id"] {
+				delete(Library.NameToContributorID, row["form"])
+			}
 		}
 	}
 	del := func(row map[string]string) bool {
+		if t.Name == "name_forms" {
+			var canonical string
+			bibQueryRow(`SELECT name FROM contributors WHERE id = ?`, row["id"]).Scan(&canonical) //nolint:errcheck
+			if canonical == row["form"] {
+				messagef("%q is the author's stored name: rename the author instead.\n", row["form"])
+				return false
+			}
+			forget(row)
+			if err := bibExec(`DELETE FROM contributor_names WHERE id = ? AND name = ?`, row["id"], row["form"]); err != nil {
+				messagef("Could not delete: %s\n", err)
+				return false
+			}
+			return true
+		}
 		forget(row)
 		var conds []string
 		var vals []any
@@ -217,13 +256,13 @@ func doTableEdit(args []string) {
 			conds = append(conds, k+" = ?")
 			vals = append(vals, row[k])
 		}
-		if err := bibExec(`DELETE FROM `+t.from+` WHERE `+strings.Join(conds, " AND "), vals...); err != nil {
+		if err := bibExec(`DELETE FROM `+t.written()+` WHERE `+strings.Join(conds, " AND "), vals...); err != nil {
 			messagef("Could not delete: %s\n", err)
 			return false
 		}
 		return true
 	}
-	add := func(row map[string]string) {
+	add := func(row map[string]string) bool {
 		get := func(c string) string { return strings.TrimSpace(row[c]) }
 		switch t.Name {
 		case "field_mappings":
@@ -238,7 +277,30 @@ func doTableEdit(args []string) {
 			Library.AddKeyAlias(get("alias"), get("key"))
 		case "key_hints":
 			Library.AddKeyHint(get("hint"), get("key"))
+		case "name_forms":
+			id := get("id")
+			if id == "" {
+				id = get("canonical")
+			}
+			cid, _, ok := resolveContributorArg(id)
+			if !ok {
+				messagef("No such author: %q\n", id)
+				return false
+			}
+			form := get("form")
+			var other string
+			bibQueryRow(`SELECT id FROM contributor_names WHERE name = ? AND id != ?`, form, cid).Scan(&other) //nolint:errcheck
+			if other == "" {
+				bibQueryRow(`SELECT id FROM contributors WHERE name = ? AND id != ?`, form, cid).Scan(&other) //nolint:errcheck
+			}
+			if other != "" {
+				messagef("%q is a name of another author (%s); to make them one: -merge_contributors %s %s\n", form, other, other, cid)
+				return false
+			}
+			upsertContributorNameToDB(cid, form)
+			Library.NameToContributorID[form] = cid
 		}
+		return true
 	}
 	switch e.Op {
 	case "delete":
@@ -246,14 +308,14 @@ func doTableEdit(args []string) {
 			messagef("Deleted from %s.\n", t.Title)
 		}
 	case "add":
-		add(e.Row)
-		messagef("Added to %s.\n", t.Title)
+		if add(e.Row) {
+			messagef("Added to %s.\n", t.Title)
+		}
 	case "update":
-		if del(e.Old) {
-			add(e.Row)
+		if del(e.Old) && add(e.Row) {
 			messagef("Changed in %s.\n", t.Title)
 		}
 	}
-	writesKeptInMemory([]string{t.from}, nil)
+	writesKeptInMemory([]string{t.written()}, nil)
 	bibEntriesModified = true
 }

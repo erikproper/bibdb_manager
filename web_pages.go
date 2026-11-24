@@ -51,6 +51,7 @@ header .led.busy { background: var(--danger); animation: ledpulse 1s ease-in-out
                padding: 8px 18px; font-size: 14px; cursor: pointer; opacity: .85; white-space: nowrap; flex: none; }
 .tabs button:hover { opacity: 1; background: rgba(255,255,255,.15); }
 .tabs button.active { background: var(--bg); color: var(--text); opacity: 1; }
+.tabs button.tabdrop { box-shadow: inset 3px 0 0 var(--primary-text); }
 main { flex: 1; min-height: 0; }
 .panel { height: 100%; overflow: auto; padding: 16px; }
 .panel.fill { display: flex; flex-direction: column; overflow: hidden; }
@@ -196,6 +197,15 @@ pre.log { flex: 1; min-height: 0; overflow: auto; margin: 0; white-space: pre-wr
 .modal-body { overflow: auto; padding: 16px; }
 .columns { column-width: 160px; column-gap: 16px; }
 .columns label { display: block; margin: 2px 0; font-size: 14px; break-inside: avoid; white-space: nowrap; }
+#tray { position: fixed; left: 16px; bottom: 16px; z-index: 15; display: none; gap: 10px; align-items: center; flex-wrap: wrap;
+        background: var(--card); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow); padding: 8px 12px; font-size: 13px; }
+#tray.show { display: flex; }
+#tray .part { display: flex; gap: 6px; align-items: center; }
+table.compare { border-collapse: collapse; width: 100%; font-size: 13px; }
+table.compare td, table.compare th { padding: 5px 8px; border-bottom: 1px solid var(--border); vertical-align: top; text-align: left; }
+table.compare td.f { color: var(--muted); font-family: ui-monospace, Menlo, monospace; white-space: nowrap; width: 120px; }
+table.compare tr.diff td:not(.f) { background: rgba(255,166,0,.12); }
+table.compare td.kept { box-shadow: inset 2px 0 0 var(--ok); }
 #toast { position: fixed; left: 50%; bottom: 24px; transform: translate(-50%, 40px); opacity: 0; transition: all .2s;
          background: #323232; color: #fff; padding: 10px 16px; border-radius: 10px; box-shadow: 0 4px 16px rgba(0,0,0,.3);
          display: flex; gap: 12px; align-items: center; z-index: 20; font-size: 14px; pointer-events: none; }
@@ -211,6 +221,7 @@ pre.log { flex: 1; min-height: 0; overflow: auto; margin: 0; white-space: pre-wr
     <button data-tab="status">Status</button>
     <button data-tab="search">Search</button>
     <button data-tab="tbl-field_mappings">Field mappings</button>
+    <button data-tab="tbl-name_forms">Name mappings</button>
     <button data-tab="tbl-key_oldies">Old keys</button>
     <button data-tab="tbl-key_hints">Key aliases</button>
     <button data-tab="dialogue">Actions<span class="waiting idle" title="No question waiting"></span></button>
@@ -225,6 +236,7 @@ pre.log { flex: 1; min-height: 0; overflow: auto; margin: 0; white-space: pre-wr
   <section class="panel" id="panel-status" hidden><div class="narrow" id="status"><p class="muted">Loading…</p></div></section>
   <section class="panel fill" id="panel-search" hidden></section>
   <section class="panel fill" id="panel-tbl-field_mappings" hidden></section>
+  <section class="panel fill" id="panel-tbl-name_forms" hidden></section>
   <section class="panel fill" id="panel-tbl-key_oldies" hidden></section>
   <section class="panel fill" id="panel-tbl-key_hints" hidden></section>
   <section class="panel" id="panel-dialogue" hidden><div class="narrow">
@@ -326,6 +338,55 @@ $("tabs").addEventListener("click", (e) => {
   if (e.target.closest(".tabx")) { e.stopPropagation(); views[b.dataset.tab] && views[b.dataset.tab].closeSelect(); return; }
   showTab(b.dataset.tab);
 });
+// ---- the order of the tabs: the fixed ones can be dragged (the order is kept in the
+// preferences); the Select, edit and author tabs always follow Search, in their order.
+const linkedTab = (name) => /^(sel|edit|author|merge)-/.test(name);
+function arrangeTabs() {
+  const bar = $("tabs");
+  const all = [...bar.querySelectorAll("button[data-tab]")];
+  const fixed = all.filter((b) => !linkedTab(b.dataset.tab));
+  const linked = all.filter((b) => linkedTab(b.dataset.tab));
+  const rank = (b) => /^sel-/.test(b.dataset.tab) ? 0 : 1; // the Select tabs first, then the edit tabs
+  linked.sort((a, b) => rank(a) - rank(b));
+  const order = load("taborder", []);
+  fixed.sort((a, b) => {
+    const ia = order.indexOf(a.dataset.tab), ib = order.indexOf(b.dataset.tab);
+    return (ia < 0 ? 999 + fixed.indexOf(a) : ia) - (ib < 0 ? 999 + fixed.indexOf(b) : ib);
+  });
+  for (const b of fixed) {
+    bar.appendChild(b);
+    if (b.dataset.tab === "search") for (const l of linked) bar.appendChild(l);
+  }
+}
+let draggedTab = "";
+$("tabs").addEventListener("dragstart", (e) => {
+  const b = e.target.closest("button[data-tab]");
+  if (!b || linkedTab(b.dataset.tab)) { e.preventDefault(); return; }
+  draggedTab = b.dataset.tab; e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", draggedTab);
+});
+$("tabs").addEventListener("dragover", (e) => {
+  const b = e.target.closest("button[data-tab]");
+  if (!draggedTab || !b || linkedTab(b.dataset.tab)) return;
+  e.preventDefault();
+  for (const x of $("tabs").querySelectorAll(".tabdrop")) x.classList.remove("tabdrop");
+  b.classList.add("tabdrop");
+});
+$("tabs").addEventListener("dragleave", (e) => { const b = e.target.closest("button[data-tab]"); if (b) b.classList.remove("tabdrop"); });
+$("tabs").addEventListener("drop", (e) => {
+  const b = e.target.closest("button[data-tab]");
+  for (const x of $("tabs").querySelectorAll(".tabdrop")) x.classList.remove("tabdrop");
+  if (!draggedTab || !b || linkedTab(b.dataset.tab) || b.dataset.tab === draggedTab) { draggedTab = ""; return; }
+  e.preventDefault();
+  const names = [...$("tabs").querySelectorAll("button[data-tab]")].map((x) => x.dataset.tab).filter((n) => !linkedTab(n));
+  names.splice(names.indexOf(draggedTab), 1);
+  const r = b.getBoundingClientRect(), after = e.clientX > r.left + r.width / 2;
+  names.splice(names.indexOf(b.dataset.tab) + (after ? 1 : 0), 0, draggedTab);
+  save("taborder", names);
+  draggedTab = "";
+  arrangeTabs();
+});
+$("tabs").addEventListener("dragend", () => { draggedTab = ""; for (const x of $("tabs").querySelectorAll(".tabdrop")) x.classList.remove("tabdrop"); });
+
 function every(name, ms, fn) { // fn runs every ms while the tab is shown
   clearInterval(timers[name]);
   timers[name] = setInterval(() => { if (current === name && !stopped) fn(); }, ms);
@@ -1145,7 +1206,7 @@ async function refreshSelects() {
     b.className = "seltab";
     b.title = info.dir + "/" + info.name + ".keys";
     b.innerHTML = tabHTML;
-    $("tabs").insertBefore(b, document.querySelector('.tabs button[data-tab="tbl-field_mappings"]')); // after Search and the earlier Select tabs
+    $("tabs").appendChild(b); arrangeTabs(); // after Search (arrangeTabs)
     const panel = document.createElement("section");
     panel.className = "panel fill";
     panel.id = "panel-" + name;
@@ -1244,10 +1305,153 @@ class TableView {
     } catch (e) { lost(e); }
   }
 }
-for (const name of ["field_mappings", "key_oldies", "key_hints"]) {
+for (const name of ["field_mappings", "name_forms", "key_oldies", "key_hints"]) {
   const v = new TableView($("panel-tbl-" + name), name);
   views["tbl-" + name] = v;
   onShow["tbl-" + name] = () => v.show();
+}
+
+// ---- merging: marked entries or authors gather in a tray; the Merge tab compares them ----
+let mergeTray = { entries: [], authors: [] };
+function trayHTML() {
+  const part = (kind, one, more) => mergeTray[kind].length ? '<span class="part"><b>' + mergeTray[kind].length + "</b> " +
+    (mergeTray[kind].length === 1 ? one : more) + ' <button class="plain" data-tray="compare" data-kind="' + kind + '">Compare</button>' +
+    '<button class="plain" data-tray="clear" data-kind="' + kind + '">Clear</button></span>' : "";
+  return '<span class="muted">To merge:</span>' + part("entries", "entry", "entries") + part("authors", "author", "authors");
+}
+function showTray() {
+  let t = $("tray");
+  if (!t) { t = document.createElement("div"); t.id = "tray"; document.body.appendChild(t);
+    t.addEventListener("click", (e) => { const b = e.target.closest("button[data-tray]"); if (!b) return;
+      if (b.dataset.tray === "clear") { mergeTray[b.dataset.kind] = []; save("mergetray", mergeTray); showTray(); }
+      else openMerge(b.dataset.kind); }); }
+  t.innerHTML = trayHTML();
+  t.className = mergeTray.entries.length || mergeTray.authors.length ? "show" : "";
+}
+function markForMerge(kind, key) {
+  const list = mergeTray[kind];
+  if (list.includes(key)) { mergeTray[kind] = list.filter((k) => k !== key); toast("Taken out of the merge tray: " + key); }
+  else { list.push(key); toast((kind === "entries" ? "Entry " : "Author ") + key + " marked for merge (" + list.length + ")"); }
+  save("mergetray", mergeTray); showTray();
+  for (const v of Object.values(views)) if (v instanceof MergeView && v.kind === kind) v.load();
+}
+class MergeView {
+  constructor(panel, kind) { this.panel = panel; this.kind = kind; this.target = pendingMergeTarget; pendingMergeTarget = ""; this.load(); }
+  async load() {
+    const keys = mergeTray[this.kind];
+    if (!keys.length) { this.panel.innerHTML = '<p class="muted">Nothing marked. Mark ' + this.kind + ' with "Mark for merge" in their pop-ups.</p>'; return; }
+    let items = [];
+    try { items = await get("/api/compare?kind=" + this.kind + "&keys=" + encodeURIComponent(keys.join(",")), "json"); } catch (e) { lost(e); return; }
+    if (!this.target || !keys.includes(this.target)) { // the default one to keep
+      const score = (it) => this.kind === "authors" ? (+it.fields.entries || 0) + (it.fields.orcid ? 1e6 : 0) : Object.keys(it.fields).length + (it.fields.dblp ? 1000 : 0);
+      this.target = items.slice().sort((a, b) => score(b) - score(a))[0].key;
+    }
+    const order = this.kind === "authors" ? ["name", "orcid", "dblp", "name forms", "entries"]
+      : ["entrytype", "author", "editor", "title", "booktitle", "journal", "crossref", "year", "volume", "number", "pages", "doi", "dblp", "preferredalias", "groups"];
+    const fields = order.filter((f) => items.some((it) => it.fields[f]));
+    for (const it of items) for (const f of Object.keys(it.fields).sort()) if (!fields.includes(f)) fields.push(f);
+    // Where the entries have different values (more than one filled in), a choice per
+    // field: one radio button per entry's value, and one for an edited value.
+    const isEntries = this.kind === "entries";
+    this.choices = this.choices || {};
+    const differing = isEntries ? fields.filter((f) => new Set(items.map((it) => it.fields[f] || "").filter(Boolean)).size > 1) : [];
+    for (const f of differing) {
+      const kept = items.find((it) => it.key === this.target);
+      if (!(f in this.choices)) this.choices[f] = { pick: kept && kept.fields[f] ? this.target : items.find((it) => it.fields[f]).key, edited: kept ? kept.fields[f] || "" : "" };
+    }
+    const head = '<tr><th></th>' + (differing.length ? '<th class="muted">edited</th>' : "") + items.map((it) => '<th><label style="cursor:pointer"><input type="radio" name="mkeep" value="' + esc(it.key) + '"' +
+      (it.key === this.target ? " checked" : "") + "> keep</label> <span class=\"key\">" + esc(it.key) + '</span> <button class="plain" data-unmark="' + esc(it.key) +
+      '" title="Take it out of the tray">×</button>' + (it.found ? "" : ' <span class="muted">(gone)</span>') + "</th>").join("") + "</tr>";
+    const rows = fields.map((f) => {
+      const vals = items.map((it) => it.fields[f] || "");
+      const choose = differing.includes(f), ch = this.choices[f];
+      const diff = new Set(vals).size > 1;
+      const cell = (it, i) => '<td class="' + (it.key === this.target ? "kept" : "") + '">' +
+        (choose && vals[i] ? '<label style="cursor:pointer;display:flex;gap:6px"><input type="radio" name="c:' + esc(f) + '" value="' + esc(it.key) + '"' +
+          (ch.pick === it.key ? " checked" : "") + "><span>" + esc(vals[i]) + "</span></label>" : esc(vals[i])) + "</td>";
+      const editCell = differing.length ? "<td>" + (choose ? '<label style="display:flex;gap:6px;align-items:flex-start"><input type="radio" name="c:' + esc(f) +
+        '" value="__edited"' + (ch.pick === "__edited" ? " checked" : "") + '><textarea class="medit" data-field="' + esc(f) + '" rows="1" style="flex:1;font:12.5px ui-monospace, Menlo, monospace;padding:3px 6px;border:1px solid var(--border);border-radius:6px;background:var(--card);color:var(--text)">' +
+        esc(ch.edited) + "</textarea></label>" : "") + "</td>" : "";
+      return '<tr class="' + (diff ? "diff" : "") + '"><td class="f">' + esc(f) + "</td>" + editCell + items.map(cell).join("") + "</tr>";
+    }).join("");
+    this.panel.innerHTML = '<div class="editbar"><b>Merge ' + this.kind + '</b><span class="muted">' + items.length + " marked" +
+      (differing.length ? "; choose a value where they differ (" + differing.length + ")" : "") + "</span>" +
+      '<button class="action" id="mgo">Merge into the kept one</button><button class="plain" id="mclose2">Close</button></div>' +
+      '<div class="card" style="overflow:auto"><table class="compare">' + head + rows + "</table></div>" +
+      '<p class="muted" style="font-size:13px">The others are merged into the one kept: the values chosen above, their other fields where it has none, their groups and PDFs; their keys stay as old keys' +
+      (this.kind === "authors" ? " (their ids and name forms go to the one kept)" : "") + ". Anything still differing comes up as a question in the Actions tab.</p>";
+    for (const r of this.panel.querySelectorAll('input[type=radio][name^="c:"]')) r.onchange = () => { this.choices[r.name.slice(2)].pick = r.value; };
+    for (const t of this.panel.querySelectorAll("textarea.medit")) t.oninput = () => {
+      const c = this.choices[t.dataset.field]; c.edited = t.value; c.pick = "__edited";
+      const r = this.panel.querySelector('input[name="c:' + CSS.escape(t.dataset.field) + '"][value="__edited"]'); if (r) r.checked = true;
+    };
+    this.items = items;
+    for (const r of this.panel.querySelectorAll('input[name="mkeep"]')) r.onchange = () => { this.target = r.value; this.choices = {}; this.load(); };
+    for (const b of this.panel.querySelectorAll("button[data-unmark]")) b.onclick = () => markForMerge(this.kind, b.dataset.unmark);
+    this.panel.querySelector("#mclose2").onclick = () => this.close();
+    this.panel.querySelector("#mgo").onclick = () => this.merge(items);
+  }
+  // chosenValues: field → the value chosen (an entry's, or the edited one).
+  chosenValues(items) {
+    const out = {};
+    for (const [f, c] of Object.entries(this.choices || {})) {
+      if (c.pick === "__edited") out[f] = c.edited;
+      else { const it = items.find((x) => x.key === c.pick); if (it && it.fields[f]) out[f] = it.fields[f]; }
+    }
+    return out;
+  }
+  async merge(items) {
+    if (items.length < 2) { alert("Mark at least two to merge."); return; }
+    if (!confirm("Merge " + (items.length - 1) + " into " + this.target + "?")) return;
+    try {
+      const r = await fetch(BASE + "/api/merge", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ kind: this.kind, keys: items.map((it) => it.key), target: this.target, choices: this.chosenValues(items) }) });
+      if (!r.ok) { alert(await r.text()); return; }
+    } catch (e) { lost(e); return; }
+    mergeTray[this.kind] = []; save("mergetray", mergeTray); showTray();
+    this.close();
+    showTab("dialogue");
+  }
+  close() {
+    const name = "merge-" + this.kind;
+    const b = document.querySelector('.tabs button[data-tab="' + name + '"]');
+    if (b) b.remove();
+    this.panel.remove(); delete views[name];
+    if (current === name) showTab("search");
+  }
+  closeSelect() { this.close(); }
+}
+// #merge-entries=k1,k2 (from a command line: bib.merge): those entries in the tray, the
+// last one kept, the Merge tab open.
+function openMergeFromHash(hash) {
+  const m = hash.match(/^#merge-(entries|authors)(?:=(.*))?$/);
+  if (!m) return;
+  const kind = m[1];
+  if (m[2]) {
+    const keys = decodeURIComponent(m[2]).split(",").filter(Boolean);
+    mergeTray[kind] = keys; save("mergetray", mergeTray); showTray();
+    if (views["merge-" + kind]) views["merge-" + kind].target = keys[keys.length - 1];
+    pendingMergeTarget = keys[keys.length - 1];
+  }
+  if (!current) showTab("search");
+  openMerge(kind);
+}
+let pendingMergeTarget = "";
+window.addEventListener("hashchange", () => { if (/^#merge-(entries|authors)=/.test(location.hash)) openMergeFromHash(location.hash); });
+function openMerge(kind) {
+  const name = "merge-" + kind;
+  if (!views[name]) {
+    const b = document.createElement("button");
+    b.dataset.tab = name; b.className = "edittab";
+    b.innerHTML = "Merge " + kind + '<span class="tabx" title="Close this tab">×</span>';
+    $("tabs").appendChild(b); arrangeTabs();
+    const panel = document.createElement("section");
+    panel.className = "panel"; panel.id = "panel-" + name; panel.hidden = true;
+    document.querySelector("main").appendChild(panel);
+    views[name] = new MergeView(panel, kind);
+  } else views[name].load();
+  closePopup();
+  showTab(name);
 }
 
 // ---- edit tabs (22.3c): an entry's form; Save runs bib.field (-set_field) per change ----
@@ -1361,6 +1565,23 @@ class AuthorEditView {
     const tab = document.querySelector('.tabs button[data-tab="' + CSS.escape("author-" + this.id) + '"]');
     if (tab) tab.innerHTML = "Author: " + esc(this.origName) + '<span class="tabx" title="Close this tab">×</span>';
     q("edsave").onclick = () => this.save();
+    // The name forms are saved at once, each change as a job (the Name mappings table).
+    const formChange = async (edit) => {
+      try {
+        const r = await fetch(BASE + "/api/table/name_forms", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(edit) });
+        const d = r.ok ? await r.json() : { ok: false, message: await r.text() };
+        if (!d.ok || /another author|stored name|No such/.test(d.message)) alert(d.message); else toast(d.message);
+      } catch (e) { lost(e); }
+      this.load();
+    };
+    q("edforms").addEventListener("click", (e) => {
+      const b = e.target.closest("button"); if (!b) return;
+      const form = b.closest(".groupchip").dataset.form;
+      if (confirm("Remove the name form " + form + "?")) formChange({ op: "delete", row: { form, id: this.id } });
+    });
+    const addForm = () => { const v = q("edformnew").value.trim(); if (v) formChange({ op: "add", row: { form: v, id: this.id } }); };
+    q("edformadd").onclick = addForm;
+    q("edformnew").onkeydown = (e) => { if (e.key === "Enter") addForm(); };
     q("edrevert").onclick = () => { if (!this.dirty() || confirm("Undo your changes?")) this.load(); };
     q("edclose").onclick = () => this.close();
     this.panel.addEventListener("input", () => this.mark());
@@ -1403,7 +1624,7 @@ function openEditAuthor(id) {
     b.dataset.tab = name;
     b.className = "edittab";
     b.innerHTML = "Author: " + esc(id) + '<span class="tabx" title="Close this tab">×</span>';
-    $("tabs").insertBefore(b, document.querySelector('.tabs button[data-tab="tbl-field_mappings"]'));
+    $("tabs").appendChild(b); arrangeTabs();
     const panel = document.createElement("section");
     panel.className = "panel";
     panel.id = "panel-" + name;
@@ -1422,7 +1643,7 @@ function openEdit(key) {
     b.className = "edittab";
     b.title = "Edit " + key;
     b.innerHTML = "Edit: " + esc(key) + '<span class="tabx" title="Close this tab">×</span>';
-    $("tabs").insertBefore(b, document.querySelector('.tabs button[data-tab="tbl-field_mappings"]'));
+    $("tabs").appendChild(b); arrangeTabs();
     const panel = document.createElement("section");
     panel.className = "panel";
     panel.id = "panel-" + name;
@@ -1555,9 +1776,10 @@ document.addEventListener("keydown", (e) => { if (e.key === "Escape" && $("overl
 
 // ---- clicks inside fragments ----
 document.addEventListener("click", async (e) => {
-  const el = e.target.closest("[data-entry],[data-author],[data-pdf],[data-pdfremove],[data-edit],[data-editauthor],[data-copy],#stop");
+  const el = e.target.closest("[data-entry],[data-author],[data-pdf],[data-pdfremove],[data-edit],[data-editauthor],[data-copy],[data-mark],#stop");
   if (!el) return;
   e.preventDefault();
+  if (el.dataset.mark) { markForMerge(el.dataset.mark, el.dataset.key); return; }
   if (el.dataset.copy) {
     try { await navigator.clipboard.writeText(el.dataset.copy); toast("Copied: " + el.dataset.copy); }
     catch (err) { prompt("Copy the key:", el.dataset.copy); }
@@ -1597,6 +1819,10 @@ document.addEventListener("click", async (e) => {
 
 (async () => {
 await loadPrefs();
+mergeTray = Object.assign({ entries: [], authors: [] }, load("mergetray", {}));
+showTray();
+for (const b of $("tabs").querySelectorAll("button[data-tab]")) if (!linkedTab(b.dataset.tab)) b.draggable = true;
+arrangeTabs();
 layout = Object.assign(JSON.parse(JSON.stringify(defaultLayout)), load("layout", {}));
 layout.widths = Object.assign({}, layout.widths);
 views.search = new SearchView($("panel-search"), null);
@@ -1606,6 +1832,7 @@ await refreshSelects();
 // #<tab>/entry:<key> and #<tab>/author:<id>: that tab with the pop-up over it.
 const deep = location.hash.match(/^#(?:([^/]*)\/)?(entry|author):(.+)$/);
 if (deep) { showTab(deep[1] || "search"); const id = decodeURIComponent(deep[3]); open1(deep[2], id, id); }
+else if (/^#merge-(entries|authors)(=|$)/.test(location.hash)) { openMergeFromHash(location.hash); }
 else if (location.hash.startsWith("#author-")) { const id = decodeURIComponent(location.hash.slice(8)); showTab("search"); openEditAuthor(id); }
 else if (location.hash.startsWith("#edit-")) { const key = decodeURIComponent(location.hash.slice(6)); showTab("search"); openEdit(key); }
 else showTab(location.hash.slice(1) || "search");
@@ -1649,7 +1876,8 @@ else showTab(location.hash.slice(1) || "search");
 {{define "peopletext"}}{{range $i, $p := .}}{{if $i}}, {{end}}<a href="#" data-author="{{$p.ID}}" data-name="{{tex $p.Name}}">{{tex $p.Name}}</a>{{end}}{{end}}
 
 {{define "entry"}}
-<div class="line"><button class="plain" data-edit="{{.Key}}" title="Edit this entry in an edit tab">Edit</button></div>
+<div class="line"><button class="plain" data-edit="{{.Key}}" title="Edit this entry in an edit tab">Edit</button>
+  <button class="plain" data-mark="entries" data-key="{{.Key}}" title="Collect it for a merge (the tray at the bottom)">Mark for merge</button></div>
 {{if .Reference}}<div class="card ref">{{.Reference}}</div>{{else}}<p class="muted">The reference (HTML) shows once the library is loaded or the running job is done (the busy light is then green); open the entry again then.</p>{{end}}
 <div class="line"><span class="label">Groups</span>{{range .Groups}}<span class="chip">{{.}}</span>{{else}}<span class="muted">none</span>{{end}}</div>
 {{if .HasPDF}}<div class="line"><span class="label">PDF</span><button class="plain" data-pdfremove="{{.Key}}" title="Move this PDF to the Trash (Undo for a few minutes)" style="order:2">Remove</button><button class="pdf" data-pdf="{{.Key}}" title="Open the PDF"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M8 13h8M8 17h5"/></svg>Open the PDF</button><span class="muted"></span></div>{{end}}
@@ -1701,13 +1929,16 @@ else showTab(location.hash.slice(1) || "search");
     <tr><td class="field">ORCID</td><td>{{range $i, $o := .ORCIDs}}{{if $i}}, {{end}}<a href="https://orcid.org/{{$o}}" target="_blank" rel="noopener">{{$o}}</a>{{else}}<span class="muted">none</span>{{end}}
       <textarea class="edorcid" rows="1" placeholder="add an ORCID: 0000-0000-0000-0000" style="margin-top:6px"></textarea></td></tr>
     <tr><td class="field">DBLP</td><td>{{if .DBLP}}<a href="https://dblp.org/pid/{{.DBLP}}.html" target="_blank" rel="noopener">{{.DBLP}}</a>{{else}}<span class="muted">none</span>{{end}}</td></tr>
-    <tr><td class="field">name forms</td><td>{{range $i, $f := .Forms}}{{if $i}}; {{end}}{{tex $f}}{{else}}<span class="muted">none</span>{{end}}</td></tr>
+    <tr><td class="field">name forms</td><td><div class="edforms" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px">{{range .Forms}}<span class="groupchip" data-form="{{.}}">{{tex .}}<button title="Remove this name form">×</button></span>{{else}}<span class="muted">none</span>{{end}}</div>
+      <div class="line" style="margin:0"><input class="edformnew" placeholder="add a name form, e.g. Dietz, J. L. G." style="flex:1;font:13px ui-monospace, Menlo, monospace;padding:5px 8px;border:1px solid var(--border);border-radius:6px;background:var(--card);color:var(--text)"><button class="plain edformadd">Add</button></div>
+      <div class="out">A form found in an entry is taken as this author. Saved at once (not with Save).</div></td></tr>
   </table>
 </div>
 {{end}}
 
 {{define "author"}}
-<div class="line"><button class="plain" data-editauthor="{{.ID}}" title="Edit this author in an edit tab">Edit</button></div>
+<div class="line"><button class="plain" data-editauthor="{{.ID}}" title="Edit this author in an edit tab">Edit</button>
+  <button class="plain" data-mark="authors" data-key="{{.ID}}" title="Collect them for a merge (the tray at the bottom)">Mark for merge</button></div>
 <div class="card">
   <h2>{{tex .Name}} <span class="muted key">{{.ID}}</span></h2>
   <table class="list">

@@ -692,6 +692,24 @@ func (s *TService) runJob(req serviceFrame, dec *json.Decoder, out *frameSender)
 	// tab (Erik, 2026-11-24): its questions as pop-ups there, its summaries in the log.
 	// The command line says so and is free again. A run without a person (a script)
 	// stays on its terminal: it waits for the result.
+	// -merge_entries at a terminal (Erik, 2026-11-24: two keys from a LaTeX source on the
+	// clipboard) opens the Merge tab with those entries side by side, the last one kept:
+	// checked there before the merge.
+	if req.Interactive && selectCommand().name == "merge_entries" && len(positional) >= 2 {
+		var keys []string
+		for _, raw := range positional {
+			if k := resolveKeyForUI(raw, req.Cwd); k != "" {
+				keys = append(keys, k)
+			} else {
+				refuse(out, "Not an entry: %s\n", raw)
+				return
+			}
+		}
+		out.send(serviceFrame{T: "info", D: "Opened in the web UI's Merge tab: " + strings.Join(keys, ", ") + " (the last one kept); merge there.\n"}) //nolint:errcheck
+		out.send(serviceFrame{T: "open", D: s.web.URL() + "#merge-entries=" + strings.Join(keys, ",")})                                                //nolint:errcheck
+		out.send(serviceFrame{T: "exit"})                                                                                                              //nolint:errcheck
+		return
+	}
 	if req.Interactive && runsInService() && actionFromCommandLine[selectCommand().name] != "" {
 		name := selectCommand().name
 		s.mu.Lock()
