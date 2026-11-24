@@ -194,6 +194,7 @@ func (w *TWebUI) handleState(rw http.ResponseWriter, r *http.Request) {
 		"index":    webIndexVersion.Load(),
 		"unloaded": serviceLibraryLevel == libraryNotLoaded,
 		"unpushed": readLibraryUnpushed() != nil,
+		"answer":   libraryNeedsAnswer.Load(),
 	})
 }
 

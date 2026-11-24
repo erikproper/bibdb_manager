@@ -474,6 +474,10 @@ func (s *TService) reloadWhenIdle() {
 	}
 }
 
+// libraryNeedsAnswer: the service's own load stopped at a question (the busy
+// light shows it amber, with what to do).
+var libraryNeedsAnswer atomic.Bool
+
 // reloadNotBefore holds back reloadWhenIdle after a load that failed.
 var reloadNotBefore time.Time
 
@@ -494,5 +498,13 @@ func (s *TService) loadAtStart() {
 	s.mu.Lock()
 	s.busy, s.ownJob, s.lastActive = false, false, time.Now()
 	s.mu.Unlock()
+	if serviceLibraryLevel == libraryNotLoaded {
+		// It stopped at a question nobody here can answer (e.g. whether to keep the
+		// changes of a run that did not finish): a run from the command line has to.
+		libraryNeedsAnswer.Store(true)
+		fmt.Fprintf(os.Stderr, "%s  library not loaded: it needs an answer; run bib.check in a terminal\n", time.Now().Format(time.DateTime))
+		return
+	}
+	libraryNeedsAnswer.Store(false)
 	fmt.Fprintf(os.Stderr, "%s  library loaded\n", time.Now().Format(time.DateTime))
 }

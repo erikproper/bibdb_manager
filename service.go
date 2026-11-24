@@ -655,6 +655,8 @@ func (s *TService) runJob(req serviceFrame, dec *json.Decoder, out *frameSender)
 	}
 	s.busy, s.jobStop, s.jobArgs, s.jobFrom = true, nil, req.Args, time.Now()
 	s.mu.Unlock()
+	libraryNeedsAnswer.Store(false) // a person runs a job: the question reaches them
+	reloadNotBefore = time.Time{}
 	defer func() {
 		s.mu.Lock()
 		s.busy, s.jobStop, s.lastActive = false, nil, time.Now()

@@ -38,8 +38,9 @@ body { margin: 0; background: var(--bg); color: var(--text); display: flex; flex
 header { background: var(--primary); color: var(--primary-text); padding: 0 16px; flex: none;
          display: flex; align-items: last baseline; gap: 24px; height: 56px; } /* tabs at the bottom, the title on their baseline */
 header .title { font-size: 20px; font-weight: 400; white-space: nowrap; }
-header .conn { align-self: center; margin-left: auto; font-size: 13px; }
-header .led { align-self: center; width: 12px; height: 12px; border-radius: 50%; flex: none; background: var(--ok);
+header .ver { font-size: 12px; opacity: .75; white-space: nowrap; }
+header .conn { margin-left: auto; font-size: 13px; } /* pushes the version to the far right */
+header .led { align-self: flex-end; margin: 0 -8px 13px; width: 12px; height: 12px; border-radius: 50%; flex: none; background: var(--ok);
               box-shadow: 0 0 0 2px rgba(255,255,255,.6); }
 header .led.busy { background: var(--danger); animation: ledpulse 1s ease-in-out infinite alternate; }
 @keyframes ledpulse { from { opacity: 1; } to { opacity: .45; } }
@@ -126,7 +127,8 @@ pre.edout { white-space: pre-wrap; font: 12px/1.4 ui-monospace, Menlo, monospace
 .tick.kept { background: var(--warn); border-color: var(--warn); color: #000; }   /* unselected, old local key kept until Save: pending */
 .groupchip button { background: transparent; border: 0; color: #fff; cursor: pointer; font-size: 14px; padding: 0 4px; line-height: 1; }
 .searchinfo > *:not(.hint) { white-space: nowrap; flex: none; }
-.searchinfo { flex: none; display: flex; gap: 12px; align-items: center; margin-bottom: 8px; font-size: 13px; }
+.searchinfo { flex: none; display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; margin-bottom: 8px; font-size: 13px; }
+.searchinfo .hint { flex: 1 1 260px; }
 .gridbox { flex: 1; min-height: 0; overflow: auto; background: var(--card); border-radius: 12px; box-shadow: var(--shadow); }
 table.grid { border-collapse: separate; border-spacing: 0; table-layout: fixed; font-size: 13px; }
 table.grid th, table.grid td { white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
@@ -169,6 +171,7 @@ pre.log { flex: 1; min-height: 0; overflow: auto; margin: 0; white-space: pre-wr
 <body>
 <header>
   <span class="title">{{.Library}}</span>
+  <span class="led" id="led" title=""></span>
   <nav class="tabs" id="tabs">
     <button data-tab="status">Status</button>
     <button data-tab="search">Search</button>
@@ -176,7 +179,7 @@ pre.log { flex: 1; min-height: 0; overflow: auto; margin: 0; white-space: pre-wr
     <button data-tab="log">Log</button>
   </nav>
   <span class="conn" id="conn"></span>
-  <span class="led" id="led" title=""></span>
+  <span class="ver" title="bibtex_check version">{{.Version}}</span>
 </header>
 <div id="banner"></div>
 <main>
@@ -258,6 +261,12 @@ async function pollState() {
   let st;
   try { st = await get("/api/state", "json"); } catch (e) { lost(e); $("led").className = "led"; $("led").style.background = "var(--muted)"; $("led").title = "no connection"; return; }
   $("led").style.background = "";
+  if (st.answer && !st.busy) { // pending: the library waits for an answer
+    $("led").className = "led";
+    $("led").style.background = "var(--warn)";
+    $("led").title = "The library is not loaded: it needs an answer (e.g. after a run that did not finish). Run bib.check in a terminal.";
+    return;
+  }
   const what = st.busy ? "Running: " + (st.job || "a job") : st.unloaded ? "Loading the library" : st.indexing ? "Bringing the lists up to date" : "";
   $("led").className = what ? "led busy" : "led";
   $("led").title = what || ("Idle, up to date" + (st.unpushed ? " (changes not pushed yet)" : ""));
@@ -322,7 +331,7 @@ class SearchView {
                 selinfo: q("selinfo"), selmsg: q("selmsg"), selname: q("selname") };
     this.rows = []; this.total = 0; this.gen = 0; this.busy = false; this.query = ""; this.groups = new Set();
     this.only = false; this.started = false; this.seenLayout = -1;
-    this.opW = sel ? 88 : 40; // the first column: (tick and) PDF button
+    this.opW = sel ? 56 : 34; // the first column: (tick and) PDF button
     const el = this.el;
     el.gridbox.addEventListener("scroll", () => {
       if (this.rows.length < this.total && el.gridbox.scrollTop + el.gridbox.clientHeight > el.gridbox.scrollHeight - 600) this.fetchRows(false);
