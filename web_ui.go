@@ -56,6 +56,7 @@ func newWebUI(s *TService) *TWebUI {
 	return &TWebUI{service: s, token: hex.EncodeToString(b), port: port,
 		pages: template.Must(template.New("").Funcs(template.FuncMap{
 			"esc": url.PathEscape,
+			"tex": texToText, // TeX markup to plain text ({\"o} → ö), for text outside the BibTeX layout
 		}).Parse(webPages))}
 }
 
@@ -635,7 +636,7 @@ func linkReferenceNames(ro *sql.DB, key string, ref template.HTML) template.HTML
 				}
 				j += at
 				a := fmt.Sprintf(`<a href="#" data-author="%s" data-name="%s">%s</a>`,
-					template.HTMLEscapeString(person.ID), template.HTMLEscapeString(person.Name), form)
+					template.HTMLEscapeString(person.ID), template.HTMLEscapeString(texToText(person.Name)), form)
 				html = html[:j] + a + html[j+len(form):]
 				at = j + len(a)
 				break

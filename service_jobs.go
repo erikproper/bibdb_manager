@@ -306,6 +306,10 @@ func (s *TService) runJobInService(req serviceFrame, positional []string, sio *T
 		case jobAbandonedDatabase:
 			fmt.Fprintf(os.Stderr, "  working database moved aside: loading afresh next time\n")
 			serviceLibraryLevel = libraryNotLoaded
+		case cmdLoadLibrary:
+			// The load itself (at service start): what it wrote while loading (e.g. maps
+			// stored in map_files) is in what it loaded. Reloading for it left the web
+			// UI without the library (its references) until the next job.
 		default:
 			if ok, why := refreshAfterWrites(writes); !ok {
 				fmt.Fprintf(os.Stderr, "  %s: loading afresh next time\n", why)

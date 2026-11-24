@@ -731,7 +731,8 @@ else showTab(location.hash.slice(1) || "search");
 <table class="list">{{range .Stats}}<tr><td>{{.Label}}</td><td class="num">{{.Value}}</td></tr>{{end}}</table>
 {{end}}
 
-{{define "people"}}{{range $i, $p := .}}{{if $i}} and {{end}}<a href="#" data-author="{{$p.ID}}" data-name="{{$p.Name}}">{{$p.Name}}</a>{{end}}{{end}}
+{{define "people"}}{{range $i, $p := .}}{{if $i}} and {{end}}<a href="#" data-author="{{$p.ID}}" data-name="{{tex $p.Name}}">{{$p.Name}}</a>{{end}}{{end}}
+{{define "peopletext"}}{{range $i, $p := .}}{{if $i}}, {{end}}<a href="#" data-author="{{$p.ID}}" data-name="{{tex $p.Name}}">{{tex $p.Name}}</a>{{end}}{{end}}
 
 {{define "entry"}}
 {{if .Reference}}<div class="card ref">{{.Reference}}</div>{{end}}
@@ -751,17 +752,17 @@ else showTab(location.hash.slice(1) || "search");
 
 {{define "author"}}
 <div class="card">
-  <h2>{{.Name}} <span class="muted key">{{.ID}}</span></h2>
+  <h2>{{tex .Name}} <span class="muted key">{{.ID}}</span></h2>
   <table class="list">
     <tr><td class="field">ORCID</td><td>{{range $i, $o := .ORCIDs}}{{if $i}}, {{end}}<a href="https://orcid.org/{{$o}}" target="_blank" rel="noopener">{{$o}}</a>{{else}}<span class="muted">none</span>{{end}}</td></tr>
     <tr><td class="field">DBLP</td><td>{{if .DBLP}}<a href="https://dblp.org/pid/{{.DBLP}}.html" target="_blank" rel="noopener">{{.DBLP}}</a>{{else}}<span class="muted">none</span>{{end}}</td></tr>
-    <tr><td class="field">Other name forms</td><td>{{range $i, $f := .Forms}}{{if $i}}; {{end}}{{$f}}{{else}}<span class="muted">none</span>{{end}}</td></tr>
+    <tr><td class="field">Other name forms</td><td>{{range $i, $f := .Forms}}{{if $i}}; {{end}}{{tex $f}}{{else}}<span class="muted">none</span>{{end}}</td></tr>
   </table>
 </div>
 <div class="card">
   <h2>Entries ({{len .Results}})</h2>
   <table class="list">
-    {{range .Results}}<tr data-key="{{.Key}}" title="{{.Key}}"><td class="year">{{.Year}}</td><td class="ref">{{if .HTML}}{{.HTML}}{{else}}{{if .Title}}{{.Title}}{{else}}<span class="key">{{.Key}}</span>{{end}}{{if .Authors}} — {{template "people" .Authors}}{{end}}{{end}}</td></tr>{{end}}
+    {{range .Results}}<tr data-key="{{.Key}}" title="{{.Key}}"><td class="year">{{.Year}}</td><td class="ref">{{if .HTML}}{{.HTML}}{{else}}{{if .Title}}{{tex .Title}}{{else}}<span class="key">{{.Key}}</span>{{end}}{{if .Authors}} — {{template "peopletext" .Authors}}{{end}}{{end}}</td></tr>{{end}}
   </table>
 </div>
 {{end}}
