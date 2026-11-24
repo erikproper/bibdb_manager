@@ -485,21 +485,22 @@ func (w *TWebUI) handleSelect(rw http.ResponseWriter, r *http.Request) {
 			http.Error(rw, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		bibPath := filepath.Join(s.File.Dir, s.File.Name+BibFileExtension)
+		before, _ := os.Stat(bibPath)
+		selected := s.info().Selected
+		s.mu.Lock()
+		s.message = "Saved; syncing " + s.File.Name + " (see the Log tab)…" // before the job: it may end at once
+		s.mu.Unlock()
 		if err := w.service.runWebJob([]string{"-sync", s.File.Name}, s.File.Dir, func(code int) {
+			msg := syncOutcome(code, s.File.Name, bibPath, before, selected)
+			fmt.Fprintf(os.Stderr, "%s  select: %s\n", time.Now().Format(time.DateTime), msg)
 			s.mu.Lock()
-			if code == 0 {
-				s.message = fmt.Sprintf("Synced %s at %s.", s.File.Name, time.Now().Format("15:04:05"))
-			} else {
-				s.message = fmt.Sprintf("The sync of %s ended with code %d at %s; see the Log tab.", s.File.Name, code, time.Now().Format("15:04:05"))
-			}
+			s.message = msg
 			s.mu.Unlock()
 		}); err != nil {
 			http.Error(rw, err.Error(), http.StatusConflict)
 			return
 		}
-		s.mu.Lock()
-		s.message = "Saved; syncing " + s.File.Name + " (see the Log tab)…"
-		s.mu.Unlock()
 		reply(nil)
 	case "close":
 		if s.info().Changes > 0 && r.FormValue("discard") != "1" {
@@ -569,4 +570,39 @@ func (s *TSelectSession) version() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.edits
+}
+
+// syncOutcome says what a sync from a Select tab did: the .bib written (its
+// entries: the selected ones and the crossref parents they bring along), left
+// as it was, or the exit code. before is the .bib's state before the sync.
+func syncOutcome(code int, name, bibPath string, before os.FileInfo, selected int) string {
+	at := time.Now().Format("15:04:05")
+	if code != 0 {
+		return fmt.Sprintf("The sync of %s ended with code %d at %s; see the Log tab.", name, code, at)
+	}
+	after, err := os.Stat(bibPath)
+	if err != nil {
+		return fmt.Sprintf("Synced %s at %s.", name, at)
+	}
+	data, _ := os.ReadFile(bibPath)
+	n := 0
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.HasPrefix(line, "@") && !strings.HasPrefix(strings.ToLower(line), "@comment") &&
+			!strings.HasPrefix(strings.ToLower(line), "@string") && !strings.HasPrefix(strings.ToLower(line), "@preamble") {
+			n++
+		}
+	}
+	what := "written"
+	if before != nil && after.ModTime().Equal(before.ModTime()) && after.Size() == before.Size() {
+		what = "unchanged"
+	}
+	detail := fmt.Sprintf("%d entries", n)
+	if parents := n - selected; parents > 0 {
+		plural := "s"
+		if parents == 1 {
+			plural = ""
+		}
+		detail = fmt.Sprintf("%d entries: %d selected, %d crossref parent%s", n, selected, parents, plural)
+	}
+	return fmt.Sprintf("%s %s at %s (%s).", filepath.Base(bibPath), what, at, detail)
 }

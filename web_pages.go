@@ -31,8 +31,8 @@ html, body { height: 100%; }
 body { margin: 0; background: var(--bg); color: var(--text); display: flex; flex-direction: column;
        font: 15px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
 header { background: var(--primary); color: var(--primary-text); padding: 0 16px; flex: none;
-         display: flex; align-items: flex-end; gap: 24px; height: 56px; }
-header .title { font-size: 20px; font-weight: 400; align-self: center; white-space: nowrap; }
+         display: flex; align-items: last baseline; gap: 24px; height: 56px; } /* tabs at the bottom, the title on their baseline */
+header .title { font-size: 20px; font-weight: 400; white-space: nowrap; }
 header .conn { align-self: center; margin-left: auto; font-size: 13px; }
 .tabs { display: flex; gap: 4px; }
 .tabs button { background: transparent; color: var(--primary-text); border: 0; border-radius: 8px 8px 0 0;
