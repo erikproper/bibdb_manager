@@ -366,7 +366,7 @@ func alignWithLibraryStamp(stamp *TLibraryStamp, hInfo os.FileInfo) bool {
 
 	case pending:
 		if inServiceJob && deferServicePush {
-			dbInteraction.Progress("  Local changes are not in Nextcloud yet; the service pushes them shortly.")
+			dbInteraction.Progress("  Local changes are not in the shared DB folder yet; the service pushes them shortly.")
 		} else {
 			dbInteraction.Progress("  Local changes are not in Nextcloud yet; they are pushed at the end of this run.")
 		}

@@ -1713,6 +1713,12 @@ func (l *TBibTeXLibrary) AssignField(key, field, value string) bool {
 func (l *TBibTeXLibrary) applyMappingsForKey(entry *TBibTeXEntry, key, sourceValue string, fieldIsChanged map[string]bool, writeToDb bool) bool {
 	changed := false
 	for targetField, targetValue := range l.FieldMappings[key][sourceValue] {
+		// A target that a same-field mapping corrects further is stored corrected
+		// (30.64): otherwise the cross-field mapping undoes what NormaliseEntryFields
+		// stored ({IEEE} → address "Washington {DC}, USA" → "Washington DC, USA").
+		if targetField != "crossref" {
+			targetValue = l.MapFieldValue(targetField, targetValue)
+		}
 		// An ISSN next to an ISBN is too much information (see CheckISSNRedundance);
 		// a series → issn mapping would otherwise re-add what that check removes.
 		if targetField == "issn" && IsValidISBN(entry.Fields["isbn"]) {

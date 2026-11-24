@@ -1890,12 +1890,21 @@ func (l *TBibTeXLibrary) askAndDisplayDblpEntry(displayKey string) {
 	}
 }
 
+// NormaliseEntryFields stores each field normalised and, since 30.64, with its
+// same-field mapping applied (Erik, 2026-11-24: a mapping is a correction, so the
+// database holds the corrected value, "Washington DC, USA", not only the output;
+// before, the stored value stayed "Washington {DC}, USA" and only the bib file was
+// mapped). The first check after 30.64 maps the values already there.
 func (l *TBibTeXLibrary) NormaliseEntryFields(entry *TBibTeXEntry) {
 	for field, current := range entry.Fields {
 		if field == EntryTypeField || field == LocalURLField || field == PreferredAliasField || current == "" {
 			continue
 		}
-		if normalised := l.NormaliseFieldValue(field, current); normalised != current {
+		normalised := l.NormaliseFieldValue(field, current)
+		if field != "crossref" {
+			normalised = l.MapFieldValue(field, normalised)
+		}
+		if normalised != current {
 			l.setEntryField(entry, field, normalised)
 		}
 	}

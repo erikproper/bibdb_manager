@@ -50,6 +50,10 @@ button { background: var(--primary); color: var(--primary-text); border: 0; bord
 .chip { display: inline-block; padding: 2px 10px; border-radius: 12px; border: 1px solid var(--border);
         margin: 0 6px 6px 0; font-size: 13px; }
 .key { font-family: ui-monospace, Menlo, monospace; font-size: 13px; }
+.bib { font-family: ui-monospace, Menlo, monospace; font-size: 13px; }
+.bib table { margin-left: 2ch; width: calc(100% - 2ch); }
+.bib td { border-bottom: 0; padding: 1px 4px; }
+.bib td.eq { width: 1ch; color: var(--muted); }
 </style>
 </head>
 <body>
@@ -57,7 +61,7 @@ button { background: var(--primary); color: var(--primary-text); border: 0; bord
   <span class="title">{{.Library}}</span>
   <nav>
     <a href="{{.Base}}/" {{if eq .Page "status"}}class="current"{{end}}>Status</a>
-    <a href="{{.Base}}/search" {{if or (eq .Page "search") (eq .Page "entry")}}class="current"{{end}}>Search</a>
+    <a href="{{.Base}}/search" {{if or (eq .Page "search") (eq .Page "entry") (eq .Page "author")}}class="current"{{end}}>Search</a>
     <a href="{{.Base}}/stats" {{if eq .Page "stats"}}class="current"{{end}}>Statistics</a>
   </nav>
 </header>
@@ -66,6 +70,7 @@ button { background: var(--primary); color: var(--primary-text); border: 0; bord
 {{if eq .Page "stats"}}{{template "stats" .}}{{end}}
 {{if eq .Page "search"}}{{template "search" .}}{{end}}
 {{if eq .Page "entry"}}{{template "entry" .}}{{end}}
+{{if eq .Page "author"}}{{template "author" .}}{{end}}
 </main>
 </body>
 </html>{{end}}
@@ -81,7 +86,7 @@ button { background: var(--primary); color: var(--primary-text); border: 0; bord
     <p class="muted">Version {{.Version}}, running since {{.Since}}.</p>
   </div>
   <div class="card">
-    <h2>Nextcloud copy</h2>
+    <h2>Shared DB copy</h2>
     <div class="state">
       {{if .Unpushed}}<span class="dot warn"></span><div><b>Changes not pushed yet</b><br>
         <span class="muted">{{if .PushDue}}push due at {{.PushDue}}{{else}}pushed by the next write job or -push{{end}}</span></div>
@@ -111,7 +116,7 @@ button { background: var(--primary); color: var(--primary-text); border: 0; bord
   {{if .Results}}
   <table>
     <tr><th>Year</th><th>Title</th><th>Authors</th><th>Type</th></tr>
-    {{range .Results}}<tr><td>{{.Year}}</td><td><a href="{{$.Base}}/entry/{{esc .Key}}">{{if .Title}}{{.Title}}{{else}}<span class="key">{{.Key}}</span>{{end}}</a></td><td>{{.Authors}}</td><td class="muted">{{.Type}}</td></tr>{{end}}
+    {{range .Results}}<tr><td>{{.Year}}</td><td><a href="{{$.Base}}/entry/{{esc .Key}}">{{if .Title}}{{.Title}}{{else}}<span class="key">{{.Key}}</span>{{end}}</a></td><td>{{range $i, $p := .Authors}}{{if $i}} and {{end}}<a href="{{$.Base}}/author/{{esc $p.ID}}">{{$p.Name}}</a>{{end}}</td><td class="muted">{{.Type}}</td></tr>{{end}}
   </table>
   {{if .More}}<p class="muted">The first 200 shown; refine the search.</p>{{end}}
   {{else}}<p class="muted">Nothing found.</p>{{end}}
@@ -120,13 +125,14 @@ button { background: var(--primary); color: var(--primary-text); border: 0; bord
 {{end}}
 
 {{define "entry"}}
-<div class="card">
-  <h2><span class="muted">@{{.Type}}</span> <span class="key">{{.Key}}</span></h2>
+<div class="card bib">
+  <div>@{{.Type}}{<span class="key">{{.Key}}</span>,</div>
   <table>
-    {{if .Authors}}<tr><td class="field">author</td><td>{{range $i, $a := .Authors}}{{if $i}}; {{end}}{{$a}}{{end}}</td></tr>{{end}}
-    {{if .Editors}}<tr><td class="field">editor</td><td>{{range $i, $a := .Editors}}{{if $i}}; {{end}}{{$a}}{{end}}</td></tr>{{end}}
-    {{range .Fields}}<tr><td class="field">{{.Name}}</td><td>{{if .Link}}<a href="{{.Link}}" target="_blank" rel="noopener">{{.Value}}</a>{{else}}{{.Value}}{{end}}</td></tr>{{end}}
+    {{if .Authors}}<tr><td class="field">author</td><td class="eq">=</td><td>{{"{"}}{{range $i, $p := .Authors}}{{if $i}} and {{end}}<a href="{{$.Base}}/author/{{esc $p.ID}}">{{$p.Name}}</a>{{end}}{{"},"}}</td></tr>{{end}}
+    {{if .Editors}}<tr><td class="field">editor</td><td class="eq">=</td><td>{{"{"}}{{range $i, $p := .Editors}}{{if $i}} and {{end}}<a href="{{$.Base}}/author/{{esc $p.ID}}">{{$p.Name}}</a>{{end}}{{"},"}}</td></tr>{{end}}
+    {{range .Fields}}<tr><td class="field">{{.Name}}</td><td class="eq">=</td><td>{{"{"}}{{if .Link}}<a href="{{.Link}}" target="_blank" rel="noopener">{{.Value}}</a>{{else}}{{.Value}}{{end}}{{"},"}}</td></tr>{{end}}
   </table>
+  <div>}</div>
 </div>
 <div class="cards">
   <div class="card">
@@ -139,6 +145,24 @@ button { background: var(--primary); color: var(--primary-text); border: 0; bord
       {{if .Opened}}<p class="muted">Opened.</p>{{end}}
     {{else}}<span class="muted">none</span>{{end}}
   </div>
+</div>
+{{end}}
+
+{{define "author"}}
+<div class="card">
+  <h2>{{.Name}} <span class="muted key">{{.ID}}</span></h2>
+  <table>
+    <tr><td class="field">ORCID</td><td>{{range $i, $o := .ORCIDs}}{{if $i}}, {{end}}<a href="https://orcid.org/{{$o}}" target="_blank" rel="noopener">{{$o}}</a>{{else}}<span class="muted">none</span>{{end}}</td></tr>
+    <tr><td class="field">DBLP</td><td>{{if .DBLP}}<a href="https://dblp.org/pid/{{.DBLP}}.html" target="_blank" rel="noopener">{{.DBLP}}</a>{{else}}<span class="muted">none</span>{{end}}</td></tr>
+    <tr><td class="field">Other name forms</td><td>{{range $i, $f := .Forms}}{{if $i}}; {{end}}{{$f}}{{else}}<span class="muted">none</span>{{end}}</td></tr>
+  </table>
+</div>
+<div class="card">
+  <h2>Entries ({{len .Results}})</h2>
+  <table>
+    <tr><th>Year</th><th>Title</th><th>Authors</th><th>Type</th></tr>
+    {{range .Results}}<tr><td>{{.Year}}</td><td><a href="{{$.Base}}/entry/{{esc .Key}}">{{if .Title}}{{.Title}}{{else}}<span class="key">{{.Key}}</span>{{end}}</a></td><td>{{range $i, $p := .Authors}}{{if $i}} and {{end}}<a href="{{$.Base}}/author/{{esc $p.ID}}">{{$p.Name}}</a>{{end}}</td><td class="muted">{{.Type}}</td></tr>{{end}}
+  </table>
 </div>
 {{end}}
 `

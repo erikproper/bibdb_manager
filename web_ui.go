@@ -65,6 +65,19 @@ func (w *TWebUI) start() {
 	mux.HandleFunc(prefix+"/search", w.handleSearch)
 	mux.HandleFunc(prefix+"/entry/", w.handleEntry)
 	mux.HandleFunc(prefix+"/pdf/", w.handlePDF)
+	mux.HandleFunc(prefix+"/author/", w.handleAuthor)
+	// Any other address (e.g. the bare http://localhost:<port>/): say how to get
+	// in, without giving the token away.
+	mux.HandleFunc("/", func(rw http.ResponseWriter, r *http.Request) {
+		rw.Header().Set("Content-Type", "text/html; charset=utf-8")
+		rw.WriteHeader(http.StatusNotFound)
+		fmt.Fprintf(rw, `<!doctype html><meta charset="utf-8"><title>%s</title>
+<body style="font:16px -apple-system,sans-serif;margin:40px;max-width:640px">
+<h1 style="font-weight:400">%s</h1>
+<p>This address needs the key the service made when it started. Open the web UI from the
+command line with <code>bib.check -ui</code>; <code>bib.check -status</code> shows the full address.</p>`,
+			template.HTMLEscapeString(bibTeXBaseName), template.HTMLEscapeString(bibTeXBaseName))
+	})
 	server := &http.Server{
 		Addr:              fmt.Sprintf("127.0.0.1:%d", w.port),
 		Handler:           w.guard(mux),
@@ -177,7 +190,8 @@ func (w *TWebUI) handleStats(rw http.ResponseWriter, r *http.Request) {
 
 // TWebEntryRow is one entry in a list.
 type TWebEntryRow struct {
-	Key, Type, Year, Title, Authors string
+	Key, Type, Year, Title string
+	Authors                []TWebPerson
 }
 
 func (w *TWebUI) handleSearch(rw http.ResponseWriter, r *http.Request) {
@@ -266,29 +280,32 @@ func webEntryRow(ro *sql.DB, key string) TWebEntryRow {
 		}
 		rows.Close()
 	}
-	row.Authors = strings.Join(webContributors(ro, key, "author"), "; ")
-	if row.Authors == "" {
-		row.Authors = strings.Join(webContributors(ro, key, "editor"), "; ")
+	row.Authors = webContributors(ro, key, "author")
+	if len(row.Authors) == 0 {
+		row.Authors = webContributors(ro, key, "editor")
 	}
 	return row
 }
 
-// webContributors returns the names in a role of an entry, in order.
-func webContributors(ro *sql.DB, key, role string) []string {
-	rows, err := ro.Query(`SELECT c.name FROM contributor_roles r JOIN contributors c ON c.id = r.contributor_id
+// TWebPerson is a contributor as a list shows it: name and id (for the link).
+type TWebPerson struct{ ID, Name string }
+
+// webContributors returns the contributors in a role of an entry, in order.
+func webContributors(ro *sql.DB, key, role string) []TWebPerson {
+	rows, err := ro.Query(`SELECT c.id, c.name FROM contributor_roles r JOIN contributors c ON c.id = r.contributor_id
 		WHERE r.entry_key = ? AND r.role = ? ORDER BY r.position`, key, role)
 	if err != nil {
 		return nil
 	}
 	defer rows.Close()
-	var names []string
+	var people []TWebPerson
 	for rows.Next() {
-		var n string
-		if rows.Scan(&n) == nil {
-			names = append(names, n)
+		var p TWebPerson
+		if rows.Scan(&p.ID, &p.Name) == nil {
+			people = append(people, p)
 		}
 	}
-	return names
+	return people
 }
 
 // ---- an entry ----
@@ -388,4 +405,63 @@ func (w *TWebUI) handlePDF(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.Redirect(rw, r, "/"+w.token+"/entry/"+url.PathEscape(key)+"?opened=1", http.StatusSeeOther)
+}
+
+// ---- an author ----
+
+// handleAuthor shows what the library knows about a contributor: name, ORCIDs,
+// DBLP person key, the name forms, and the entries (newest first).
+func (w *TWebUI) handleAuthor(rw http.ResponseWriter, r *http.Request) {
+	id := strings.TrimPrefix(r.URL.Path, "/"+w.token+"/author/")
+	ro, err := openReadOnly()
+	if err != nil {
+		http.Error(rw, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer ro.Close()
+	var canonical string
+	if ro.QueryRow(`SELECT canonical_id FROM contributor_id_oldies WHERE absorbed_id = ?`, id).Scan(&canonical) == nil {
+		http.Redirect(rw, r, "/"+w.token+"/author/"+url.PathEscape(canonical), http.StatusSeeOther)
+		return
+	}
+	var name string
+	var orcid, dblpKey sql.NullString
+	if ro.QueryRow(`SELECT name, orcid, dblp_key FROM contributors WHERE id = ?`, id).Scan(&name, &orcid, &dblpKey) != nil {
+		http.NotFound(rw, r)
+		return
+	}
+	strings1 := func(query string, args ...any) []string {
+		var out []string
+		if rows, err := ro.Query(query, args...); err == nil {
+			for rows.Next() {
+				var v string
+				if rows.Scan(&v) == nil {
+					out = append(out, v)
+				}
+			}
+			rows.Close()
+		}
+		return out
+	}
+	orcids := strings1(`SELECT orcid FROM contributor_orcids WHERE contributor_id = ? ORDER BY is_canonical DESC, orcid`, id)
+	if len(orcids) == 0 && orcid.Valid && orcid.String != "" {
+		orcids = []string{orcid.String}
+	}
+	forms := strings1(`SELECT name FROM contributor_names WHERE id = ? AND name != ? ORDER BY name`, id, name)
+	keys := strings1(`SELECT DISTINCT entry_key FROM contributor_roles WHERE contributor_id = ?`, id)
+	list := make([]TWebEntryRow, 0, len(keys))
+	for _, k := range keys {
+		list = append(list, webEntryRow(ro, k))
+	}
+	sort.Slice(list, func(i, j int) bool {
+		if list[i].Year != list[j].Year {
+			return list[i].Year > list[j].Year
+		}
+		return list[i].Title < list[j].Title
+	})
+	data := map[string]any{"ID": id, "Name": name, "ORCIDs": orcids, "Forms": forms, "Results": list}
+	if dblpKey.Valid && dblpKey.String != "" {
+		data["DBLP"] = strings.TrimPrefix(dblpKey.String, "homepages/")
+	}
+	w.render(rw, "author", data)
 }
