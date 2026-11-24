@@ -2,7 +2,7 @@ package main
 
 // Select tabs in the web UI (Erik, 2026-11-24): `-select [<file>]`, run in a
 // project folder, opens for each of its bib files (file_names in ./bib.config,
-// with a .keys file: modes pull and subset), or for <file> only, a tab
+// with a .keys file: all modes but full and harvest), or for <file> only, a tab
 // "Select: <file>" in the web UI. The tab is the Search table with a tick box
 // before each entry: ticking an entry adds it to the file's .keys, unticking
 // removes it.
@@ -83,7 +83,7 @@ func (f TSelectFile) keysPath() string { return filepath.Join(f.Dir, f.Name+Keys
 // ---- the command line side ----
 
 // selectFiles reads ./bib.config and returns the files a Select tab is for:
-// those with a .keys file in use (modes pull and subset), or only only.
+// those with a .keys file in use (all modes but full and harvest), or only only.
 func selectFiles(only string) ([]TSelectFile, error) {
 	if !FileExists("bib.config") {
 		return nil, fmt.Errorf("there is no bib.config in this folder")
@@ -112,7 +112,7 @@ func selectFiles(only string) ([]TSelectFile, error) {
 		if !ok {
 			continue
 		}
-		if cfg.Mode != "pull" && cfg.Mode != "subset" && cfg.Mode != "" {
+		if cfg.Mode == "full" || cfg.Mode == "harvest" { // the modes without a .keys file
 			if only != "" {
 				return nil, fmt.Errorf("%s is synced in mode %q, which has no .keys file", name, cfg.Mode)
 			}
@@ -124,7 +124,7 @@ func selectFiles(only string) ([]TSelectFile, error) {
 		return nil, fmt.Errorf("%s is not among the file_names in bib.config (%s)", only, names)
 	}
 	if len(files) == 0 {
-		return nil, fmt.Errorf("bib.config names no file with a .keys file (modes pull and subset)")
+		return nil, fmt.Errorf("bib.config names no file with a .keys file (modes pull, follow and subset)")
 	}
 	return files, nil
 }
