@@ -469,6 +469,18 @@ func init() {
 			},
 		},
 		{
+			name:     "rename_contributor",
+			kind:     commandWrite,
+			selected: func() bool { return cmdRenameContributor },
+			run: func(args []string) {
+				if len(args) != 2 {
+					messageln("Usage: -rename_contributor <EP-id> <name>")
+					endRun(1)
+				}
+				doRenameContributor(args)
+			},
+		},
+		{
 			name:     "edit_entry",
 			kind:     commandWrite,
 			selected: func() bool { return cmdEditEntry },

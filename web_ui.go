@@ -78,6 +78,8 @@ func (w *TWebUI) start() {
 	mux.HandleFunc(prefix+"/api/prefs", w.handlePrefs)
 	mux.HandleFunc(prefix+"/frag/edit/", w.handleEditFrag)
 	mux.HandleFunc(prefix+"/api/edit/", w.handleEditSave)
+	mux.HandleFunc(prefix+"/frag/editauthor/", w.handleEditAuthorFrag)
+	mux.HandleFunc(prefix+"/api/editauthor/", w.handleEditAuthorSave)
 	mux.HandleFunc(prefix+"/api/selects", w.handleSelects)
 	mux.HandleFunc(prefix+"/api/selstate", w.handleSelState)
 	mux.HandleFunc(prefix+"/api/selstates", w.handleSelStates)
@@ -307,6 +309,7 @@ type TWebEntryRow struct {
 	Authors                []TWebPerson
 	HTML                   template.HTML // the reference as the homepage fragments render it ("": not available)
 	Roles                  string        // on an author's list: "author", "editor" or both (space-separated)
+	HasPDF                 bool          // on an author's list: the entry has a PDF
 }
 
 // handleEntries answers a page of the Search table (JSON): q filters (every
@@ -574,6 +577,9 @@ func (w *TWebUI) handleAuthor(rw http.ResponseWriter, r *http.Request) {
 	for _, k := range keys {
 		row := webEntryRow(ro, k)
 		row.Roles = strings.Join(roles[k], " ")
+		if _, err := os.Stat(entryPDFPath(k)); err == nil {
+			row.HasPDF = true
+		}
 		if strings.Contains(row.Roles, "author") {
 			authored++
 		}

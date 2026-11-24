@@ -293,3 +293,110 @@ func editChanges(orig, new TEditState) int {
 	json.Unmarshal([]byte(cmds[0][2]), &edit) //nolint:errcheck
 	return len(edit.Set) + len(edit.Join) + len(edit.Leave)
 }
+
+// ---- editing an author (a contributor) ----
+
+// handleEditAuthorFrag serves the edit form of a contributor (GET
+// /frag/editauthor/<id>): the stored name (a change keeps the old one as a
+// name form), an ORCID to add, and what is known (ORCIDs, DBLP, name forms).
+func (w *TWebUI) handleEditAuthorFrag(rw http.ResponseWriter, r *http.Request) {
+	id := strings.TrimPrefix(r.URL.Path, "/"+w.token+"/frag/editauthor/")
+	ro, err := openReadOnly()
+	if err != nil {
+		http.Error(rw, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer ro.Close()
+	var canonical string
+	if ro.QueryRow(`SELECT canonical_id FROM contributor_id_oldies WHERE absorbed_id = ?`, id).Scan(&canonical) == nil {
+		id = canonical
+	}
+	var name string
+	var dblpKey sql.NullString
+	if ro.QueryRow(`SELECT name, dblp_key FROM contributors WHERE id = ?`, id).Scan(&name, &dblpKey) != nil {
+		http.NotFound(rw, r)
+		return
+	}
+	list := func(query string, args ...any) []string {
+		var out []string
+		if rows, err := ro.Query(query, args...); err == nil {
+			for rows.Next() {
+				var v string
+				if rows.Scan(&v) == nil {
+					out = append(out, v)
+				}
+			}
+			rows.Close()
+		}
+		return out
+	}
+	var entries int
+	ro.QueryRow(`SELECT COUNT(DISTINCT entry_key) FROM contributor_roles WHERE contributor_id = ?`, id).Scan(&entries) //nolint:errcheck
+	w.render(rw, "editauthor", map[string]any{
+		"ID": id, "Name": name, "Entries": entries,
+		"ORCIDs": list(`SELECT orcid FROM contributor_orcids WHERE contributor_id = ? ORDER BY is_canonical DESC, orcid`, id),
+		"Forms":  list(`SELECT name FROM contributor_names WHERE id = ? AND name != ? ORDER BY name`, id, name),
+		"DBLP":   strings.TrimPrefix(dblpKey.String, "homepages/"),
+	})
+}
+
+// handleEditAuthorSave saves an author edit tab (POST /api/editauthor/<id>,
+// JSON {origName, name, orcid}): refused when the name changed meanwhile; the
+// changes run as jobs (-rename_contributor, -assign_orcid) in one go.
+func (w *TWebUI) handleEditAuthorSave(rw http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(rw, "not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	id := strings.TrimPrefix(r.URL.Path, "/"+w.token+"/api/editauthor/")
+	var req struct {
+		OrigName string `json:"origName"`
+		Name     string `json:"name"`
+		ORCID    string `json:"orcid"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(rw, r.Body, 1<<16)).Decode(&req); err != nil {
+		http.Error(rw, "not a valid request", http.StatusBadRequest)
+		return
+	}
+	ro, err := openReadOnly()
+	if err != nil {
+		http.Error(rw, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	var current string
+	found := ro.QueryRow(`SELECT name FROM contributors WHERE id = ?`, id).Scan(&current) == nil
+	ro.Close()
+	if !found {
+		http.NotFound(rw, r)
+		return
+	}
+	if current != req.OrigName {
+		http.Error(rw, "The author changed since this form was read. Reload the form; your changes are not saved.", http.StatusConflict)
+		return
+	}
+	var cmds [][]string
+	if name := strings.TrimSpace(req.Name); name != "" && name != current {
+		cmds = append(cmds, []string{"-rename_contributor", id, name})
+	}
+	if orcid := strings.TrimSpace(req.ORCID); orcid != "" {
+		cmds = append(cmds, []string{"-assign_orcid", id, orcid})
+	}
+	if len(cmds) == 0 {
+		writeJSON(rw, map[string]any{"ok": true, "message": "Nothing changed."})
+		return
+	}
+	out := &collectSink{}
+	done := make(chan []int, 1)
+	cwd, _ := os.Getwd()
+	if err := w.service.runWebJobs(cmds, cwd, out, func(codes []int) { done <- codes }); err != nil {
+		http.Error(rw, err.Error(), http.StatusConflict)
+		return
+	}
+	codes := <-done
+	ok := len(codes) == len(cmds) && codes[len(codes)-1] == 0
+	msg := "Saved."
+	if !ok {
+		msg = fmt.Sprintf("Not all saved: %s ended with code %d.", strings.Join(cmds[len(codes)-1], " "), codes[len(codes)-1])
+	}
+	writeJSON(rw, map[string]any{"ok": ok, "message": msg, "output": strings.TrimSpace(out.text())})
+}

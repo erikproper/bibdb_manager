@@ -683,6 +683,70 @@ class EditView {
   }
   closeSelect() { this.close(); } // the × on the tab
 }
+// An author's edit tab: the stored name (the old one kept as a name form), an ORCID to add.
+class AuthorEditView {
+  constructor(panel, id) { this.panel = panel; this.id = id; this.load(); }
+  async load(message) {
+    try { this.panel.innerHTML = await get("/frag/editauthor/" + encodeURIComponent(this.id)); }
+    catch (e) { lost(e); this.panel.innerHTML = '<p class="muted">' + esc(e.message || e) + "</p>"; return; }
+    const q = (c) => this.panel.querySelector("." + c);
+    this.origName = q("edstate").dataset.name;
+    const tab = document.querySelector('.tabs button[data-tab="' + CSS.escape("author-" + this.id) + '"]');
+    if (tab) tab.innerHTML = "Author: " + esc(this.origName) + '<span class="tabx" title="Close this tab">×</span>';
+    q("edsave").onclick = () => this.save();
+    q("edrevert").onclick = () => { if (!this.dirty() || confirm("Undo your changes?")) this.load(); };
+    q("edclose").onclick = () => this.close();
+    this.panel.addEventListener("input", () => this.mark());
+    if (message) { q("edmsg").textContent = message.text; if (message.output) { const pre = document.createElement("pre"); pre.className = "edout"; pre.textContent = message.output; q("editbar").appendChild(pre); } }
+  }
+  values() { return { name: this.panel.querySelector(".edname").value.trim(), orcid: this.panel.querySelector(".edorcid").value.trim() }; }
+  dirty() { const v = this.values(); return v.name !== this.origName || v.orcid !== ""; }
+  mark() {
+    const v = this.values();
+    this.panel.querySelector(".edname").closest("tr").classList.toggle("changed", v.name !== this.origName);
+    this.panel.querySelector(".edorcid").closest("tr").classList.toggle("changed", v.orcid !== "");
+    this.panel.querySelector(".edmsg").textContent = this.dirty() ? "Changes not saved." : "";
+  }
+  async save() {
+    if (!this.dirty()) { this.panel.querySelector(".edmsg").textContent = "Nothing changed."; return; }
+    this.panel.querySelector(".edmsg").textContent = "Saving…";
+    try {
+      const r = await fetch(BASE + "/api/editauthor/" + encodeURIComponent(this.id), { method: "POST",
+        headers: { "Content-Type": "application/json" }, body: JSON.stringify(Object.assign({ origName: this.origName }, this.values())) });
+      if (!r.ok) { this.panel.querySelector(".edmsg").textContent = await r.text(); return; }
+      const d = await r.json();
+      await this.load({ text: d.message, output: d.output || "" });
+    } catch (e) { lost(e); this.panel.querySelector(".edmsg").textContent = String(e.message || e); }
+  }
+  close() {
+    if (this.dirty() && !confirm("Close without saving your changes?")) return;
+    const name = "author-" + this.id;
+    const b = document.querySelector('.tabs button[data-tab="' + CSS.escape(name) + '"]');
+    if (b) b.remove();
+    this.panel.remove();
+    delete views[name];
+    if (current === name) showTab("search");
+  }
+  closeSelect() { this.close(); }
+}
+function openEditAuthor(id) {
+  const name = "author-" + id;
+  if (!views[name]) {
+    const b = document.createElement("button");
+    b.dataset.tab = name;
+    b.className = "edittab";
+    b.innerHTML = "Author: " + esc(id) + '<span class="tabx" title="Close this tab">×</span>';
+    $("tabs").insertBefore(b, document.querySelector('.tabs button[data-tab="stats"]'));
+    const panel = document.createElement("section");
+    panel.className = "panel";
+    panel.id = "panel-" + name;
+    panel.hidden = true;
+    document.querySelector("main").appendChild(panel);
+    views[name] = new AuthorEditView(panel, id);
+  }
+  closePopup();
+  showTab(name);
+}
 function openEdit(key) {
   const name = "edit-" + key;
   if (!views[name]) {
@@ -808,10 +872,11 @@ document.addEventListener("keydown", (e) => { if (e.key === "Escape" && $("overl
 
 // ---- clicks inside fragments ----
 document.addEventListener("click", async (e) => {
-  const el = e.target.closest("[data-entry],[data-author],[data-pdf],[data-edit],#stop");
+  const el = e.target.closest("[data-entry],[data-author],[data-pdf],[data-edit],[data-editauthor],#stop");
   if (!el) return;
   e.preventDefault();
-  if (el.dataset.edit) openEdit(el.dataset.edit);
+  if (el.dataset.editauthor) openEditAuthor(el.dataset.editauthor);
+  else if (el.dataset.edit) openEdit(el.dataset.edit);
   else if (el.dataset.entry) openEntry(el.dataset.entry);
   else if (el.dataset.author) open1("author", el.dataset.author, el.dataset.name || el.dataset.author);
   else if (el.dataset.pdf) {
@@ -843,6 +908,7 @@ await refreshSelects();
 // #<tab>/entry:<key> and #<tab>/author:<id>: that tab with the pop-up over it.
 const deep = location.hash.match(/^#(?:([^/]*)\/)?(entry|author):(.+)$/);
 if (deep) { showTab(deep[1] || "search"); const id = decodeURIComponent(deep[3]); open1(deep[2], id, id); }
+else if (location.hash.startsWith("#author-")) { const id = decodeURIComponent(location.hash.slice(8)); showTab("search"); openEditAuthor(id); }
 else if (location.hash.startsWith("#edit-")) { const key = decodeURIComponent(location.hash.slice(6)); showTab("search"); openEdit(key); }
 else showTab(location.hash.slice(1) || "search");
 })();
@@ -925,7 +991,25 @@ else showTab(location.hash.slice(1) || "search");
 </div>
 {{end}}
 
+{{define "editauthor"}}
+<div class="editbar"><b>Editing author</b> <span class="key">{{.ID}}</span><span class="muted">({{.Entries}} entries)</span>
+  <button class="action edsave">Save</button><button class="plain edrevert">Revert</button><button class="plain edclose">Close</button>
+  <span class="edmsg"></span></div>
+<div class="edstate" hidden data-name="{{.Name}}"></div>
+<div class="card">
+  <table class="edit">
+    <tr><td class="field">name</td><td><textarea class="edname" rows="1">{{.Name}}</textarea>
+      <div class="out">Changing it keeps the current name as another name form (an alias). A name that is another author's is refused: merge them instead (-merge_contributors).</div></td></tr>
+    <tr><td class="field">ORCID</td><td>{{range $i, $o := .ORCIDs}}{{if $i}}, {{end}}<a href="https://orcid.org/{{$o}}" target="_blank" rel="noopener">{{$o}}</a>{{else}}<span class="muted">none</span>{{end}}
+      <textarea class="edorcid" rows="1" placeholder="add an ORCID: 0000-0000-0000-0000" style="margin-top:6px"></textarea></td></tr>
+    <tr><td class="field">DBLP</td><td>{{if .DBLP}}<a href="https://dblp.org/pid/{{.DBLP}}.html" target="_blank" rel="noopener">{{.DBLP}}</a>{{else}}<span class="muted">none</span>{{end}}</td></tr>
+    <tr><td class="field">name forms</td><td>{{range $i, $f := .Forms}}{{if $i}}; {{end}}{{tex $f}}{{else}}<span class="muted">none</span>{{end}}</td></tr>
+  </table>
+</div>
+{{end}}
+
 {{define "author"}}
+<div class="line"><button class="plain" data-editauthor="{{.ID}}" title="Edit this author in an edit tab">Edit</button></div>
 <div class="card">
   <h2>{{tex .Name}} <span class="muted key">{{.ID}}</span></h2>
   <table class="list">
@@ -939,7 +1023,8 @@ else showTab(location.hash.slice(1) || "search");
     <label class="rolepick"><input type="checkbox" class="rolefilter" value="author" checked> authored ({{.Authored}})</label>
     <label class="rolepick"><input type="checkbox" class="rolefilter" value="editor" checked> edited ({{.Edited}})</label></h2>
   <table class="list">
-    {{range .Results}}<tr data-key="{{.Key}}" data-roles="{{.Roles}}" title="{{.Key}}"><td class="year">{{.Year}}</td><td class="ref">{{if .HTML}}{{.HTML}}{{else}}{{if .Title}}{{tex .Title}}{{else}}<span class="key">{{.Key}}</span>{{end}}{{if .Authors}} — {{template "peopletext" .Authors}}{{end}}{{end}}</td></tr>{{end}}
+    {{range .Results}}<tr data-key="{{.Key}}" data-roles="{{.Roles}}" title="{{.Key}}"><td class="year">{{.Year}}</td><td class="ref">{{if .HTML}}{{.HTML}}{{else}}{{if .Title}}{{tex .Title}}{{else}}<span class="key">{{.Key}}</span>{{end}}{{if .Authors}} — {{template "peopletext" .Authors}}{{end}}{{end}}</td>
+      <td style="width:34px">{{if .HasPDF}}<button class="pdf rowpdf" data-pdf="{{.Key}}" title="Open the PDF"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg></button>{{end}}</td></tr>{{end}}
   </table>
 </div>
 {{end}}

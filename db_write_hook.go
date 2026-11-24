@@ -21,10 +21,29 @@ import (
 type TDbWrites struct {
 	tables  map[string]int
 	entries map[string]map[string]bool
+	kept    map[string]bool // tables the job kept up to date in memory itself (see writesKeptInMemory)
 }
 
 func newDbWrites() TDbWrites {
-	return TDbWrites{tables: map[string]int{}, entries: map[string]map[string]bool{}}
+	return TDbWrites{tables: map[string]int{}, entries: map[string]map[string]bool{}, kept: map[string]bool{}}
+}
+
+// writesKeptInMemory tells that the running job keeps the loaded library up to
+// date with its writes to tables itself, and which entries to refresh (e.g.
+// -rename_contributor: the contributor in memory, and the author fields of
+// their entries, which name them).
+func writesKeptInMemory(tables []string, entries []string) {
+	dbWritesMu.Lock()
+	defer dbWritesMu.Unlock()
+	for _, t := range tables {
+		dbWrites.kept[t] = true
+	}
+	for _, key := range entries {
+		if dbWrites.entries[key] == nil {
+			dbWrites.entries[key] = map[string]bool{}
+		}
+		dbWrites.entries[key]["author"] = true
+	}
 }
 
 var (
@@ -112,7 +131,7 @@ func refreshAfterWrites(w TDbWrites) (bool, string) {
 	groups := false
 	for table := range w.tables {
 		switch {
-		case tablesNotInMemory[table]:
+		case tablesNotInMemory[table], w.kept[table]:
 		case table == "bib_entries" || table == "contributor_roles":
 		case table == "bib_groups":
 			groups = true

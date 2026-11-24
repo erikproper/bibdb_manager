@@ -55,7 +55,7 @@ var (
 	Reporting TInteraction
 )
 
-const AppVersion = "30.93"
+const AppVersion = "30.96"
 
 // Run-state flags consumed by the write tail in main.
 var (
@@ -3353,6 +3353,56 @@ func doAddNameMapping(args []string) {
 	Library.RenormaliseNameFields()
 }
 
+// doRenameContributor is -rename_contributor <id> <name> (the web UI's author
+// edit, Erik 2026-11-24): the contributor's stored name becomes name; the old
+// one stays a name form of theirs (an alias), as does the new one. A name that
+// is another contributor's stored name is refused (merge them instead).
+func doRenameContributor(args []string) {
+	if !openLibraryToUpdate() {
+		return
+	}
+	id, oldName, ok := resolveContributorArg(args[0])
+	if !ok {
+		return
+	}
+	newName := strings.TrimSpace(args[1])
+	if newName == "" || newName == oldName {
+		messageln("rename_contributor: nothing to change.")
+		return
+	}
+	var other string
+	bibQueryRow(`SELECT id FROM contributors WHERE name = ? AND id != ?`, newName, id).Scan(&other) //nolint:errcheck
+	if other != "" {
+		messagef("rename_contributor: %q is the name of contributor %s; merge them instead (-merge_contributors).\n", newName, other)
+		endRun(1)
+	}
+	if err := bibExec(`UPDATE contributors SET name = ? WHERE id = ?`, newName, id); err != nil {
+		Library.Error("contributors rename failed: %s", err)
+		return
+	}
+	upsertContributorNameToDB(id, oldName)
+	upsertContributorNameToDB(id, newName)
+	if c := Library.ContributorByID[id]; c != nil {
+		c.Name = newName
+	}
+	Library.NameToContributorID[newName] = id
+	Library.NameToContributorID[oldName] = id
+	// The loaded library is current now but for the entries naming them: those the
+	// service refreshes (no load afresh).
+	var keys []string
+	if rows, err := bibQuery(`SELECT DISTINCT entry_key FROM contributor_roles WHERE contributor_id = ?`, id); err == nil {
+		for rows.Next() {
+			var k string
+			if rows.Scan(&k) == nil {
+				keys = append(keys, k)
+			}
+		}
+		rows.Close()
+	}
+	writesKeptInMemory([]string{"contributors", "contributor_names"}, keys)
+	messagef("Contributor %s is now %q (%q kept as a name form).\n", id, newName, oldName)
+}
+
 func doCorrectName(args []string) {
 	if !openLibraryToUpdate() {
 		return
@@ -4144,6 +4194,7 @@ var (
 	cmdSetGroups                bool
 	cmdSetField                 bool
 	cmdEditEntry                bool
+	cmdRenameContributor        bool
 	cmdRenderAsBibTeX           bool
 	cmdRenderGroup              bool
 	cmdListGroupAliases         bool
@@ -4274,6 +4325,7 @@ func main() {
 	flag.BoolVar(&cmdAddToGroup, "add_to_group", false, "add an entry to a group: -add_to_group <key> <group>")
 	flag.BoolVar(&cmdRemoveFromGroup, "remove_from_group", false, "remove an entry from a group")
 	flag.BoolVar(&cmdSetGroups, "set_groups", false, "set group membership: -set_groups <key> [+] <group>...")
+	flag.BoolVar(&cmdRenameContributor, "rename_contributor", false, "give a contributor another stored name, keeping the old one as a name form: -rename_contributor <EP-id> <name>")
 	flag.BoolVar(&cmdEditEntry, "edit_entry", false, "internal (web UI): apply an entry's changes in one go: -edit_entry <key> <json {set, join, leave}>")
 	flag.BoolVar(&cmdSetField, "set_field", false, "set a field on an entry: -set_field <key> <field> [<value>] (omit value to clear)")
 	flag.BoolVar(&cmdRenderGroup, "render_group", false, "render all entries in a group to pubs/citations folders")

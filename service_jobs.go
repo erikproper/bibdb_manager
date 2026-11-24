@@ -422,6 +422,7 @@ func (s *TService) schedulePush() {
 // command, run by the service itself). Commands arriving meanwhile wait.
 func (s *TService) pushWhenDue() {
 	for range time.Tick(5 * time.Second) {
+		s.reloadWhenIdle()
 		s.mu.Lock()
 		due := !s.pushDue.IsZero() && time.Now().After(s.pushDue) && !s.busy && !s.stopping.Load()
 		if due {
@@ -446,6 +447,25 @@ func (s *TService) pushWhenDue() {
 		s.mu.Unlock()
 	}
 }
+
+// reloadWhenIdle loads the library again in the background once no job runs,
+// after a job left it unloaded (one that added an entry, changed a dblp key or
+// preferred alias, ended with an error, ...): so the web UI has its references
+// again, and the next command does not wait for the load (Erik, 2026-11-24).
+func (s *TService) reloadWhenIdle() {
+	s.mu.Lock()
+	idle := !s.busy && !s.stopping.Load() && time.Since(s.lastActive) > 2*time.Second
+	s.mu.Unlock()
+	if idle && serviceLibraryLevel == libraryNotLoaded && time.Now().After(reloadNotBefore) {
+		s.loadAtStart()
+		if serviceLibraryLevel == libraryNotLoaded { // the load failed: not again for a while
+			reloadNotBefore = time.Now().Add(10 * time.Minute)
+		}
+	}
+}
+
+// reloadNotBefore holds back reloadWhenIdle after a load that failed.
+var reloadNotBefore time.Time
 
 // loadAtStart loads the library right after the service starts (Erik,
 // 2026-11-24), so the first command finds it loaded; commands arriving
