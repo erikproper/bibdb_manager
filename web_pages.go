@@ -37,6 +37,8 @@ body { margin: 0; background: var(--bg); color: var(--text); display: flex; flex
        font: 15px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
 header { background: var(--primary); color: var(--primary-text); padding: 0 16px; flex: none;
          display: flex; align-items: last baseline; gap: 24px; height: 56px; } /* tabs at the bottom, the title on their baseline */
+header .logo { width: 32px; height: 32px; flex: none; align-self: center; margin-right: -12px; border-radius: 7px;
+               box-shadow: 0 0 0 1.5px rgba(255,255,255,.7); }
 header .title { font-size: 20px; font-weight: 400; white-space: nowrap; }
 header .ver { font-size: 12px; opacity: .75; white-space: nowrap; }
 header .conn { margin-left: auto; font-size: 13px; } /* pushes the version to the far right */
@@ -143,20 +145,29 @@ table.grid tbody tr.dropping { outline: 2px dashed var(--primary); outline-offse
 table.grid tbody tr, #mbody table.list tr[data-key] { cursor: pointer; }
 #mbody table.list tr[data-key]:hover { background: var(--hover); }
 table.grid td.inh { color: var(--muted); font-style: italic; }
-table.grid td.op { padding: 2px 4px; text-align: left; }
-table.grid td.op button.rowpdf { margin-left: 0; padding: 0 4px; vertical-align: middle; }
-table.grid td.op button.rowpdf svg { vertical-align: -2px; }
+table.grid td.op { padding: 2px 3px; text-align: left; white-space: nowrap; }
+table.grid td.op .tick { margin-right: 3px; }
+table.grid td.op button.copykey, table.grid td.op button.rowpdf { border: 0 !important; padding: 0 2px !important; margin: 0 2px 0 0; vertical-align: middle; }
+table.grid td.op .copyslot { display: inline-block; width: 17px; margin-right: 2px; }
+table.grid td.op button.rowpdf svg, table.grid td.op button.copykey svg { vertical-align: -2px; }
 table.grid td.op button { background: transparent; border: 1px solid var(--border); border-radius: 6px; color: var(--primary);
                           cursor: pointer; padding: 0 6px; font-size: 13px; line-height: 18px; }
 .loading { padding: 12px; }
 
 /* Log */
+ul.notes { margin: 0; padding-left: 20px; } ul.notes li { margin: 4px 0; }
+.qwarn { padding: 8px 12px; border-radius: 10px; background: var(--hover); border-left: 4px solid var(--warn); margin-bottom: 12px; }
+.qtext { font-weight: 600; margin: 12px 0 8px; }
+.qopts label { display: flex; gap: 10px; align-items: flex-start; padding: 8px 10px; border: 1px solid var(--border); border-radius: 10px; margin-bottom: 8px; cursor: pointer; background: var(--card); }
+.qopts label:has(input:checked) { border-color: var(--chosen); box-shadow: 0 0 0 1px var(--chosen); }
+.qopts input[type=radio] { margin-top: 3px; }
+.qopts .qlabel { font-weight: 500; }
+.qbib { font-family: ui-monospace, Menlo, monospace; font-size: 12.5px; margin-top: 4px; }
+.qbib table { border-collapse: collapse; } .qbib td { padding: 0 6px 0 0; vertical-align: top; } .qbib td.f { color: var(--muted); white-space: nowrap; }
+.qsub { color: var(--muted); margin-top: 6px; font-size: 13px; }
+.qactions { display: flex; gap: 10px; margin-top: 14px; align-items: center; }
+.qactions input { flex: 1; font: 14px ui-monospace, Menlo, monospace; padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--card); color: var(--text); }
 .dialoguecard { flex: 1; min-height: 0; display: flex; flex-direction: column; margin: 0; }
-.dlgask { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 10px; padding: 8px 10px;
-          border-radius: 10px; background: var(--hover); border-left: 4px solid var(--warn); }
-.dlgask input { flex: 1; min-width: 200px; font: 13px ui-monospace, Menlo, monospace; padding: 5px 8px;
-                border: 1px solid var(--border); border-radius: 6px; background: var(--card); color: var(--text); }
-.dlgask button { min-width: 2.4em; }
 .tabs button .waiting { display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: var(--warn); margin-left: 7px;
                         box-shadow: 0 0 0 2px rgba(255,255,255,.6); animation: ledpulse 1s ease-in-out infinite alternate; }
 .tabs button .waiting.idle { background: var(--ok); animation: none; } /* green: no question waiting */
@@ -185,6 +196,7 @@ pre.log { flex: 1; min-height: 0; overflow: auto; margin: 0; white-space: pre-wr
 </head>
 <body>
 <header>
+  <svg class="logo" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="7" fill="#03a9f4"/><path d="M5 9.5c3.5-1.8 7.5-1.6 10.4 1.2v14c-2.9-2.6-6.9-2.8-10.4-1.2z" fill="#fff"/><path d="M27 9.5c-3.5-1.8-7.5-1.6-10.4 1.2v14c2.9-2.6 6.9-2.8 10.4-1.2z" fill="#fff"/><path d="M8 13.5h4.5M8 16.5h4.5M8 19.5h4.5M19.5 13.5H24M19.5 16.5H24M19.5 19.5H24" stroke="#03a9f4" stroke-width="1.2" stroke-linecap="round"/></svg>
   <span class="title">{{.Library}}</span>
   <nav class="tabs" id="tabs">
     <button data-tab="status">Status</button>
@@ -200,25 +212,26 @@ pre.log { flex: 1; min-height: 0; overflow: auto; margin: 0; white-space: pre-wr
 <main>
   <section class="panel" id="panel-status" hidden><div class="narrow" id="status"><p class="muted">Loading…</p></div></section>
   <section class="panel fill" id="panel-search" hidden></section>
-  <section class="panel fill" id="panel-dialogue" hidden>
-    <div class="card dialoguecard">
-      <div class="line" style="margin:0 0 10px">
+  <section class="panel" id="panel-dialogue" hidden><div class="narrow">
+    <div class="card">
+      <div class="line" style="margin:0">
         <span class="label">Actions</span>
-        <button class="plain" data-action="check" title="bib.check: check the library">Check</button>
-        <button class="plain" data-action="homework" title="bib.check -homework">Homework</button>
-        <button class="plain" data-action="fix_candidates" title="bib.check -fix_candidates">Fix DBLP candidates</button>
-        <button class="plain" data-action="fix_duplicates" title="bib.check -fix_duplicates">Fix duplicates</button>
-        <button class="plain" data-action="push" title="bib.check -push">Push</button>
-        <span style="margin-left:auto" class="muted" id="dlgstate"></span>
-        <button class="action danger" id="dlgstop" hidden title="Stop the job, as Ctrl-C does">Stop</button>
-      </div>
-      <pre class="log" id="dlglog"></pre>
-      <div class="dlgask" id="dlgask" hidden>
-        <span class="label">Answer</span><span id="dlgopts"></span>
-        <input id="dlgtext" placeholder="or type an answer, then Enter" autocomplete="off">
+        <button class="plain" data-action="check" title="Check the library">Check</button>
+        <button class="plain" data-action="homework" title="Run the pending homework in order">Homework</button>
+        <button class="plain" data-action="fix_candidates" title="Link entries without a DBLP key to DBLP records">Fix DBLP candidates</button>
+        <button class="plain" data-action="fix_duplicates" title="Resolve title duplicates">Fix duplicates</button>
+        <button class="plain" data-action="push" title="Push the changes of this machine to the shared DB folder now">Push</button>
       </div>
     </div>
-  </section>
+    <div class="card">
+      <div class="state"><span class="dot ok" id="dlgdot"></span><div><b id="dlgtitle">No job yet</b><br><span class="muted" id="dlgstate">Start one with an action above. Its output goes to the Log tab.</span></div>
+        <span style="margin-left:auto"></span>
+        <button class="action" id="dlgopen" hidden>Answer the question</button>
+        <button class="action danger" id="dlgstop" hidden title="Stop the job, as Ctrl-C does">Stop</button></div>
+    </div>
+    <div class="card" id="dlgnotescard" hidden><h2>Warnings</h2><ul class="notes" id="dlgnotes"></ul></div>
+    <div class="card" id="dlghistcard" hidden><h2>Answers</h2><table class="list" id="dlghist"></table></div>
+  </div></section>
   <section class="panel" id="panel-stats" hidden><div class="narrow"><div class="card"><h2>Library statistics <button class="plain" id="statsrefresh">Refresh</button></h2><div id="stats"><p class="muted">Loading…</p></div></div></div></section>
   <section class="panel fill" id="panel-log" hidden><div class="card logcard"><h2>Log <span class="muted">(the service and its jobs)</span>
       <button class="plain" id="logend">To the end</button></h2><pre class="log" id="log"></pre></div></section>
@@ -272,6 +285,7 @@ const onShow = {}, timers = {};
 let current = "";
 function showTab(name) {
   if (!$("panel-" + name)) name = "search";
+  if (current === "dialogue" && name !== "dialogue" && qOpen) { qOpen = false; qShown = ""; closePopup(); } // back when the tab is shown again
   current = name;
   for (const b of document.querySelectorAll(".tabs button")) b.classList.toggle("active", b.dataset.tab === name);
   for (const p of document.querySelectorAll(".panel")) p.hidden = p.id !== "panel-" + name;
@@ -371,43 +385,154 @@ async function pollState() {
 }
 setInterval(() => { if (!stopped) pollState(); }, 2000);
 
-// ---- Dialogue: actions, the job's output, its questions ----
-let dlgNext = 0, dlgLines = [], dlgTitle = "", dlgShown = false;
+// ---- Dialogue: actions, warnings, and questions as pop-ups (the output goes to the Log tab) ----
+let dlg = null, qOpen = false, qShown = ""; // qShown: the question the pop-up shows (its line and position)
 async function loadDialogue() {
-  let d;
-  try { d = await get("/api/dialogue?from=" + dlgNext, "json"); } catch (e) { lost(e); return; }
-  const box = $("dlglog"), atEnd = box.scrollTop + box.clientHeight >= box.scrollHeight - 30;
-  if (d.title !== dlgTitle || d.next < dlgNext) { dlgLines = []; dlgTitle = d.title; }
-  dlgLines.push(...d.lines);
-  dlgNext = d.next;
-  box.textContent = dlgLines.join("\n") + (d.current ? (dlgLines.length ? "\n" : "") + d.current : "");
-  if (atEnd || !dlgShown) { box.scrollTop = box.scrollHeight; dlgShown = true; }
-  $("dlgstate").textContent = d.title ? d.title + (d.running ? " — running since " + d.since : " — ended" + (d.code ? " (code " + d.code + ")" : "")) : "No job yet.";
+  try { dlg = await get("/api/dialogue?from=999999999", "json"); } catch (e) { lost(e); return; }
+  const d = dlg;
+  $("dlgtitle").textContent = d.title || "No job yet";
+  $("dlgstate").textContent = d.title ? (d.running ? (d.asking ? "Waits for your answer" : "Running since " + d.since) + " — its output is in the Log tab"
+                                                  : "Ended" + (d.code ? " with code " + d.code : "") + " — its output is in the Log tab")
+                                      : "Start one with an action above. Its output goes to the Log tab.";
+  $("dlgdot").className = "dot " + (d.asking ? "warn" : d.running ? "busy" : "ok");
   $("dlgstop").hidden = !d.running;
-  const wasHidden = $("dlgask").hidden;
-  $("dlgask").hidden = !d.asking;
-  if (d.asking) {
-    $("dlgopts").innerHTML = (d.options || []).map((o) => '<button class="plain" data-answer="' + esc(o) + '">' + esc(o) + "</button>").join(" ");
-    if (wasHidden && current === "dialogue") $("dlgtext").focus();
+  $("dlgopen").hidden = !d.asking;
+  $("dlgnotescard").hidden = !(d.notes && d.notes.length);
+  $("dlgnotes").innerHTML = (d.notes || []).map((n) => "<li>" + esc(n) + "</li>").join("");
+  $("dlghistcard").hidden = !(d.history && d.history.length);
+  $("dlghist").innerHTML = (d.history || []).map((h) => '<tr><td class="year">' + esc(h.at) + "</td><td>" + esc(h.question.replace(/^QUESTION:\s*/, "")) +
+    '</td><td class="key">' + esc(h.answer) + "</td></tr>").join("");
+  // The question pop-up: opened while the tab is shown; a new question re-uses it; when the
+  // job goes on without asking, it waits (Confirm greyed); when the job ends, it says so.
+  const key = d.asking ? d.next + "|" + d.question : "";
+  if (current === "dialogue") {
+    if (d.asking && (!qOpen || key !== qShown) && (qOpen || !$("overlay").classList.contains("open"))) openQuestion();
+    else if (qOpen && !d.asking && !d.running) qEnded(d);
   }
 }
-async function answer(text) {
+// bibRows renders "name : value" lines as the entry pop-up's BibTeX layout.
+function bibRows(lines) {
+  const rows = [], rest = [];
+  for (const l of lines) {
+    const m = l.match(/^\s*([A-Za-z][\w-]*)\s*[:=]\s*\{?(.*?)\}?,?\s*$/);
+    if (m && !/^Parent$/i.test(m[1])) rows.push('<tr><td class="f">' + esc(m[1]) + '</td><td>= {' + esc(m[2]) + "},</td></tr>");
+    else if (l.trim()) rest.push(l.trim());
+  }
+  return { rows: rows.join(""), rest };
+}
+function blockHTML(header, lines) {
+  // A block: a header ("[1] conf/x/Y (inproceedings)", "@type{key,"), its fields, and a crossref parent.
+  let html = "", part = [], sub = "";
+  const flush = () => {
+    if (!part.length && !sub) return;
+    const b = bibRows(part);
+    html += (sub ? '<div class="qsub">' + esc(sub) + "</div>" : "") + '<div class="qbib"><table>' + b.rows + "</table>" +
+      (b.rest.length ? '<div class="muted">' + b.rest.map(esc).join("<br>") + "</div>" : "") + "</div>";
+    part = []; sub = "";
+  };
+  for (const l of lines) {
+    const p = l.match(/^\s*Parent:\s*(.*)$/);
+    if (p) { flush(); sub = "crossref parent: " + p[1]; continue; }
+    if (/^\s*@\w+\{/.test(l) || /^\s*\}\s*$/.test(l)) continue;
+    part.push(l);
+  }
+  flush();
+  return html;
+}
+function openQuestion() {
+  const d = dlg;
+  if (!d || !d.asking) return;
+  const ctx = (d.context || []).slice();
+  const q = (d.question || "").replace(/^QUESTION:\s*/, "");
+  // The options, and what they mean: "(0 = none, k = enter key manually) (0/1/k/q)".
+  const opts = d.options || [];
+  const meaning = { y: "Yes", n: "No", q: "Stop (quit this job)", s: "Skip" };
+  for (const m of q.matchAll(/(\w+)\s*=\s*([^,()]+)/g)) meaning[m[1]] = m[2].trim();
+  const qtext = q.replace(/\s*\((?:[^()]*=[^()]*)\)/g, "").replace(/\s*\([^()]*\/[^()]*\)\s*:?\s*$/, "").trim();
+  // The context: warnings, the original (before the first "[n]"), the numbered options' blocks.
+  const warns = [], original = [], blocks = {};
+  let cur = null;
+  for (const l of ctx) {
+    const w = l.match(/^\s*WARNING:\s*(.*)$/);
+    if (w) { warns.push(w[1]); continue; }
+    const b = l.match(/^\s*\[(\w+)\]\s*(.*)$/);
+    if (b) { cur = b[1]; blocks[cur] = { header: b[2], lines: [] }; continue; }
+    if (cur) blocks[cur].lines.push(l); else original.push(l);
+  }
+  let html = warns.map((w) => '<div class="qwarn">' + esc(w) + "</div>").join("");
+  // The entries the question is about: the run of headed BibTeX blocks ("Library entry:",
+  // "Parent entry:", "@type{…") at the end of what came before the options, not the job's
+  // earlier progress lines. Each heading gets a card.
+  const origText = original.filter((l) => l.trim());
+  const entryLine = (l) => /^\s*[A-Z][^:{}=]{0,48}:\s*$/.test(l) || /^\s*@\w+\{/.test(l) || /^\s*[\w-]+\s*=\s*\{/.test(l) || /^\s*\}\s*$/.test(l);
+  let from = origText.length;
+  while (from > 0 && entryLine(origText[from - 1])) from--;
+  const cards = [];
+  for (const l of origText.slice(from)) {
+    if (/^\s*[A-Z][^:{}=]{0,48}:\s*$/.test(l) || (!cards.length)) cards.push({ title: /:\s*$/.test(l) ? l.trim().replace(/:$/, "") : "", lines: [] });
+    if (!/:\s*$/.test(l) || /=/.test(l)) cards[cards.length - 1].lines.push(l);
+  }
+  for (const c of cards) {
+    const head = c.lines.find((l) => /^\s*@\w+\{/.test(l));
+    html += '<div class="card ref" style="margin-bottom:8px">' + (c.title ? "<b>" + esc(c.title) + "</b> " : "") +
+      (head ? '<span class="key">' + esc(head.trim().replace(/,$/, "")) + "}</span>" : "") + blockHTML("", c.lines) + "</div>";
+  }
+  html += '<div class="qtext">' + esc(qtext || "Your answer?") + "</div>";
+  if (opts.length) {
+    html += '<div class="qopts">' + opts.map((o, i) => {
+      const blk = blocks[o];
+      const label = blk ? esc(blk.header) : esc(meaning[o] || o);
+      return '<label><input type="radio" name="qopt" value="' + esc(o) + '"' + (i === 0 && !blocks[opts[1]] ? "" : "") + '><div><span class="qlabel"><span class="key">' + esc(o) + "</span> — " + label + "</span>" +
+        (blk ? blockHTML(blk.header, blk.lines) : "") + "</div></label>";
+    }).join("") + "</div>" +
+      '<div class="qactions"><button class="action" id="qconfirm" disabled>Confirm</button><span class="muted">Choose one, then confirm.</span></div>';
+  } else {
+    html += '<div class="qactions"><input id="qtextin" placeholder="Your answer" autocomplete="off"><button class="action" id="qconfirm">Confirm</button></div>';
+  }
+  qOpen = true;
+  qShown = d.next + "|" + d.question;
+  popup("Question — " + (d.title || ""), html, false);
+  const confirmBtn = $("qconfirm");
+  if (opts.length) {
+    for (const r of $("mbody").querySelectorAll('input[name="qopt"]')) r.onchange = () => { confirmBtn.disabled = false; };
+    confirmBtn.onclick = () => { const r = $("mbody").querySelector('input[name="qopt"]:checked'); if (r) sendAnswer(r.value); };
+  } else {
+    const t = $("qtextin"); t.focus();
+    t.onkeydown = (e) => { if (e.key === "Enter") sendAnswer(t.value); };
+    confirmBtn.onclick = () => sendAnswer(t.value);
+  }
+}
+// qWaiting greys the pop-up's Confirm while the job takes the answer (the pop-up stays).
+function qWaiting() {
+  const b = $("qconfirm");
+  if (b) { b.disabled = true; b.textContent = "Waiting for the job…"; }
+  for (const el of $("mbody").querySelectorAll("input")) el.disabled = true;
+}
+// qEnded: the job ended while the pop-up was open.
+function qEnded(d) {
+  qShown = "";
+  const b = $("qconfirm");
+  if (b && b.dataset.ended) return;
+  $("mbody").insertAdjacentHTML("beforeend", '<div class="qwarn" style="margin-top:12px">The job ended' + (d.code ? " with code " + d.code : "") +
+    '. Its output is in the Log tab.</div><div class="qactions"><button class="action" id="qclose">Close</button></div>');
+  if (b) { b.dataset.ended = "1"; b.textContent = "Done"; }
+  $("qclose").onclick = () => { qOpen = false; closePopup(); };
+}
+async function sendAnswer(text) {
+  qWaiting();
   try {
     const r = await fetch(BASE + "/api/dialogue/answer", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }) });
     if (!r.ok && r.status !== 409) alert(await r.text());
   } catch (e) { lost(e); }
-  $("dlgask").hidden = true;
-  setTimeout(loadDialogue, 300);
+  setTimeout(loadDialogue, 400);
 }
-$("dlgopts").addEventListener("click", (e) => { const b = e.target.closest("button[data-answer]"); if (b) answer(b.dataset.answer); });
-$("dlgtext").addEventListener("keydown", (e) => { if (e.key === "Enter") { const t = $("dlgtext").value; $("dlgtext").value = ""; answer(t); } });
+$("dlgopen").onclick = openQuestion;
 $("dlgstop").onclick = async () => { try { await fetch(BASE + "/api/dialogue/stop", { method: "POST" }); } catch (e) {} setTimeout(loadDialogue, 300); };
 for (const b of document.querySelectorAll("[data-action]")) b.onclick = async () => {
   try {
     const r = await fetch(BASE + "/api/dialogue/start", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: b.dataset.action }) });
     if (!r.ok) { alert(await r.text()); return; }
   } catch (e) { lost(e); }
-  dlgShown = false;
   setTimeout(loadDialogue, 300);
 };
 onShow.dialogue = loadDialogue;
@@ -451,6 +576,7 @@ const defaultWidth = { year: 60, author: 260, title: 420, booktitle: 240, journa
 let layout = JSON.parse(JSON.stringify(defaultLayout)), layoutVersion = 0;
 let fields = [];
 const PAGE = 200;
+const COPYICON = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
 const PDFICON = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>';
 function width(c) { return layout.widths[c] || defaultWidth[c] || 160; }
 function saveLayout() { layoutVersion++; save("layout", layout); }
@@ -467,7 +593,7 @@ class SearchView {
                 selinfo: q("selinfo"), selmsg: q("selmsg"), selname: q("selname") };
     this.rows = []; this.total = 0; this.gen = 0; this.busy = false; this.query = ""; this.groups = new Set();
     this.only = false; this.started = false; this.seenLayout = -1;
-    this.opW = sel ? 56 : 34; // the first column: (tick and) PDF button
+    this.opW = sel ? 64 : 30; // the first column: (tick, copy) and PDF, as bare icons
     const el = this.el;
     el.gridbox.addEventListener("scroll", () => {
       if (this.rows.length < this.total && el.gridbox.scrollTop + el.gridbox.clientHeight > el.gridbox.scrollHeight - 600) this.fetchRows(false);
@@ -608,6 +734,12 @@ class SearchView {
       chips.appendChild(c);
     }
   }
+  // copyHTML: for a selected entry, a button putting its local key (as in the .keys file) on
+  // the clipboard, for citing it in LaTeX.
+  copyHTML(r) {
+    if (r.t !== 1 || !r.l) return '<span class="copyslot"></span>';
+    return '<button class="copykey" data-copy="' + esc(r.l) + '" title="Copy ' + esc(r.l) + ' to the clipboard">' + COPYICON + "</button>";
+  }
   tickHTML(state) {
     const cls = state === 1 ? "tick on" : state === 2 ? "tick kept" : "tick";
     const title = state === 1 ? "Selected; click to unselect" : state === 2 ? "Unselected, its local key kept until saved; click to select it again" : "Click to select";
@@ -619,7 +751,7 @@ class SearchView {
     const html = [];
     for (let n = from; n < this.rows.length; n++) {
       const r = this.rows[n];
-      html.push('<tr data-key="' + esc(r.k) + '"><td class="op">' + (this.sel ? this.tickHTML(r.t) : "") +
+      html.push('<tr data-key="' + esc(r.k) + '"><td class="op">' + (this.sel ? this.tickHTML(r.t) + this.copyHTML(r) : "") +
         (r.pdf ? '<button class="rowpdf" data-pdf="' + esc(r.k) + '" title="Open the PDF">' + PDFICON + "</button><span></span>" : "") + "</td>");
       for (const c of layout.cols) {
         const v = r.cells[c] || "";
@@ -653,7 +785,7 @@ class SearchView {
         const cells = {}, inh = {};
         layout.cols.forEach((c, i) => { cells[c] = r.c[i]; });
         for (const i of r.i || []) inh[layout.cols[i]] = true;
-        return { k: r.k, cells, inh, pdf: !!r.p, t: r.t || 0 };
+        return { k: r.k, cells, inh, pdf: !!r.p, t: r.t || 0, l: r.l || "" };
       });
       if (reset) this.rows = got; else this.rows.push(...got);
       this.renderRows(reset ? 0 : this.rows.length - got.length);
@@ -678,7 +810,7 @@ class SearchView {
         const cells = {}, inh = {};
         layout.cols.forEach((c, i) => { cells[c] = r.c[i]; });
         for (const i of r.i || []) inh[layout.cols[i]] = true;
-        return { k: r.k, cells, inh, pdf: !!r.p, t: r.t || 0 };
+        return { k: r.k, cells, inh, pdf: !!r.p, t: r.t || 0, l: r.l || "" };
       });
       this.renderRows(0);
       this.el.gridbox.scrollTop = top;
@@ -714,14 +846,17 @@ class SearchView {
     if (row) row.t = state;
     const tr = this.el.grid.querySelector('tr[data-key="' + CSS.escape(key) + '"] .tick');
     if (tr) tr.outerHTML = this.tickHTML(state);
+    this.refreshRows(); // its local key (the copy button) comes with the rows
   }
   async toggle(tick) {
     const tr = tick.closest("tr[data-key]");
     try {
       const d = await this.post("toggle", { key: tr.dataset.key });
       const row = this.rows.find((r) => r.k === tr.dataset.key);
-      if (row) row.t = d.state;
+      if (row) { row.t = d.state; row.l = d.local || ""; }
+      const slot = tr.querySelector(".copykey, .copyslot");
       tick.outerHTML = this.tickHTML(d.state);
+      if (slot && row) slot.outerHTML = this.copyHTML(row);
       if (this.only) this.markOnlyStale(true);
       this.setInfo(d.info);
       if (d.error) alert(d.error);
@@ -1072,7 +1207,7 @@ function open1(kind, id, title) {
   show(item);
 }
 function openEntry(key) { open1("entry", key, key); }
-function closePopup() { stack = []; $("overlay").classList.remove("open"); }
+function closePopup() { stack = []; qOpen = false; $("overlay").classList.remove("open"); }
 $("mclose").onclick = closePopup;
 // In a pop-up's list of entries (an author's), a click on a row opens the entry,
 // but on its links and tick, and when it ends selecting text.
@@ -1116,9 +1251,14 @@ document.addEventListener("keydown", (e) => { if (e.key === "Escape" && $("overl
 
 // ---- clicks inside fragments ----
 document.addEventListener("click", async (e) => {
-  const el = e.target.closest("[data-entry],[data-author],[data-pdf],[data-pdfremove],[data-edit],[data-editauthor],#stop");
+  const el = e.target.closest("[data-entry],[data-author],[data-pdf],[data-pdfremove],[data-edit],[data-editauthor],[data-copy],#stop");
   if (!el) return;
   e.preventDefault();
+  if (el.dataset.copy) {
+    try { await navigator.clipboard.writeText(el.dataset.copy); toast("Copied: " + el.dataset.copy); }
+    catch (err) { prompt("Copy the key:", el.dataset.copy); }
+    return;
+  }
   if (el.dataset.pdfremove) {
     try {
       const r = await fetch(BASE + "/api/pdfremove/" + encodeURIComponent(el.dataset.pdfremove), { method: "POST" });

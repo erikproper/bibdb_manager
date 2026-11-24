@@ -473,6 +473,11 @@ func (w *TWebUI) handleSelect(rw http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			extra["error"] = err.Error()
 		}
+		s.mu.Lock()
+		if e := s.entries[r.FormValue("key")]; e != nil {
+			extra["local"] = e.Local
+		}
+		s.mu.Unlock()
 		reply(extra)
 	case "save":
 		if err := s.save(); err != nil {

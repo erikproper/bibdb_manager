@@ -337,6 +337,7 @@ type TWebRow struct {
 	Inherited []int    `json:"i,omitempty"`
 	PDF       bool     `json:"p,omitempty"` // the entry has a PDF (checked on the fly)
 	Tick      int      `json:"t,omitempty"` // in a Select tab: selectOn, selectKept
+	Local     string   `json:"l,omitempty"` // in a Select tab: the entry's local key in the .keys file
 }
 
 // TWebPage is a page of the Search table.
@@ -496,6 +497,9 @@ func webIndexPage(query string, groups []string, sel *TSelectSession, onlySelect
 		if sel != nil {
 			sel.mu.Lock()
 			row.Tick = sel.state(row.Key)
+			if e := sel.entries[row.Key]; e != nil {
+				row.Local = e.Local
+			}
 			sel.mu.Unlock()
 		}
 		out.Rows = append(out.Rows, row)

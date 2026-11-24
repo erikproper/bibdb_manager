@@ -34,6 +34,16 @@ type TDialogue struct {
 	asking  bool
 	sio     *TSocketIO
 	started time.Time
+	since   int              // the line number after the last answer: a question's context starts there
+	notes   []string         // the warnings of this job (shown in the tab)
+	history []TDialogueReply // the questions answered in this job
+}
+
+// TDialogueReply is a question answered in the Dialogue tab.
+type TDialogueReply struct {
+	Question string `json:"question"`
+	Answer   string `json:"answer"`
+	At       string `json:"at"`
 }
 
 const dialogueLines = 5000
@@ -44,7 +54,7 @@ func (d *TDialogue) start(title string, sio *TSocketIO) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.title, d.sio, d.running, d.asking, d.code, d.started = title, sio, true, false, 0, time.Now()
-	d.lines, d.ended = nil, 0
+	d.lines, d.ended, d.since, d.notes, d.history = nil, 0, 0, nil, nil
 	d.current.Reset()
 }
 
@@ -64,7 +74,11 @@ func (d *TDialogue) write(s string) {
 		case '\r':
 			d.current.Reset()
 		case '\n':
-			d.lines = append(d.lines, d.current.String())
+			line := d.current.String()
+			if strings.HasPrefix(strings.TrimSpace(line), "WARNING:") {
+				d.notes = append(d.notes, strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), "WARNING:")))
+			}
+			d.lines = append(d.lines, line)
 			d.ended++
 			d.current.Reset()
 			if len(d.lines) > dialogueLines {
@@ -143,7 +157,6 @@ func (s *TService) runDialogueJob(title string, cmds [][]string, own bool, done 
 		for _, args := range cmds {
 			sio := &TSocketIO{out: teeSink{logSink{}, dialogueSink{}}, interactive: true, lines: make(chan string, 16)}
 			dialogue.start(title, sio)
-			dialogue.write("$ bib.check " + strings.Join(args, " ") + "\n")
 			fmt.Fprintf(os.Stderr, "%s  job (Dialogue tab): %s\n", time.Now().Format(time.DateTime), strings.Join(append([]string{title + ":"}, args...), " "))
 			req := serviceFrame{T: "run", Args: append([]string{"-base", libraryBase()}, args...), Version: AppVersion, Base: libraryBase()}
 			flag.CommandLine.SetOutput(flagOutput{sio})
@@ -213,6 +226,22 @@ func (w *TWebUI) handleDialogue(rw http.ResponseWriter, r *http.Request) {
 			"title": d.title, "running": d.running, "asking": d.asking, "code": d.code,
 			"lines": append([]string{}, d.lines[from-first:]...), "next": d.ended, "current": d.current.String(),
 			"options": d.options(), "since": d.started.Format("15:04:05"),
+			"notes": append([]string{}, d.notes...), "history": append([]TDialogueReply{}, d.history...),
+		}
+		if d.asking {
+			// The question (its line) and its context: what the job wrote since the last answer.
+			ctxFrom := d.since
+			if ctxFrom < first {
+				ctxFrom = first
+			}
+			context := append([]string{}, d.lines[ctxFrom-first:]...)
+			question := strings.TrimSpace(d.current.String())
+			if question == "" && len(context) > 0 {
+				question = strings.TrimSpace(context[len(context)-1])
+				context = context[:len(context)-1]
+			}
+			out["question"] = question
+			out["context"] = context
 		}
 		d.mu.Unlock()
 		writeJSON(rw, out)
@@ -249,7 +278,18 @@ func (w *TWebUI) handleDialogue(rw http.ResponseWriter, r *http.Request) {
 			http.Error(rw, "no question is waiting", http.StatusConflict)
 			return
 		}
+		d.mu.Lock()
+		q := strings.TrimSpace(d.current.String())
+		if q == "" {
+			q = strings.TrimSpace(lastLine(d.lines))
+		}
+		d.history = append(d.history, TDialogueReply{Question: q, Answer: req.Text, At: time.Now().Format("15:04:05")})
+		d.mu.Unlock()
 		d.write(req.Text + "\n") // as a terminal echoes it
+		d.mu.Lock()
+		d.since = d.ended
+		d.mu.Unlock()
+		fmt.Fprintf(os.Stderr, "  answer (Dialogue tab): %s\n", req.Text) // the selection, in the log
 		sio.asked.Store(false)
 		select {
 		case sio.lines <- req.Text:
