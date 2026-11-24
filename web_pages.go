@@ -540,22 +540,30 @@ function bibRows(lines) {
   return { rows: rows.join(""), rest };
 }
 function blockHTML(header, lines) {
-  // A block: a header ("[1] conf/x/Y (inproceedings)", "@type{key,"), its fields, and a crossref parent.
-  let html = "", part = [], sub = "";
-  const flush = () => {
-    if (!part.length && !sub) return;
-    const b = bibRows(part);
-    html += (sub ? '<div class="qsub">' + esc(sub) + "</div>" : "") + '<div class="qbib"><table>' + b.rows + "</table>" +
-      (b.rest.length ? '<div class="muted">' + b.rest.map(esc).join("<br>") + "</div>" : "") + "</div>";
-    part = []; sub = "";
+  // A candidate laid out as the library entry is: "@type{key," with its fields and "}",
+  // from a header "conf/x/Y (inproceedings)"; its crossref parent ("Parent: conf/x/86")
+  // likewise under "Crossref parent:"; counts ("children : …") as a note under it.
+  const parse = (h) => { const m = (h || "").match(/^(\S+)\s*\((\w+)\)/); return m ? { key: m[1], type: m[2] } : { key: (h || "").trim(), type: "" }; };
+  const parentType = { inproceedings: "proceedings", incollection: "book", inbook: "book" };
+  const box = (type, key, part) => {
+    const fields = [], notes = [];
+    for (const l of part) (/^\s*children\s*:/.test(l) ? notes : fields).push(l);
+    const b = bibRows(fields);
+    return '<div class="qbib">' + (key ? "<div>@" + esc(type || "misc") + "{" + esc(key) + ",</div>" : "") +
+      '<table style="margin-left:2ch">' + b.rows + "</table>" + (key ? "<div>}</div>" : "") +
+      (b.rest.length ? '<div class="muted">' + b.rest.map(esc).join("<br>") + "</div>" : "") + "</div>" +
+      notes.map((n) => '<div class="muted" style="font-size:12.5px">' + esc(n.trim().replace(/\s*:\s*/, ": ")) + "</div>").join("");
   };
+  const own = parse(header);
+  let html = "", part = [], parent = null;
   for (const l of lines) {
     const p = l.match(/^\s*Parent:\s*(.*)$/);
-    if (p) { flush(); sub = "crossref parent: " + p[1]; continue; }
+    if (p) { html += box(own.type, own.key, part); part = []; parent = p[1].trim(); continue; }
     if (/^\s*@\w+\{/.test(l) || /^\s*\}\s*$/.test(l)) continue;
     part.push(l);
   }
-  flush();
+  if (parent === null) html += box(own.type, own.key, part);
+  else html += '<div class="qsub" style="font-weight:600;color:var(--text);margin-top:8px">Crossref parent:</div>' + box(parentType[own.type] || "proceedings", parent, part);
   return html;
 }
 function openQuestion() {
@@ -717,8 +725,8 @@ function openQuestion() {
   if (opts.length) {
     html += '<div class="qopts">' + radios.map((o) => {
       const blk = blocks[o];
-      const label = blk ? esc(blk.header) : esc(meaning[o] || o);
-      return '<label><input type="radio" name="qopt" value="' + esc(o) + '"' + (single ? " checked" : "") + '><div><span class="qlabel">' + label + "</span>" +
+      const label = blk ? "" : esc(meaning[o] || o);
+      return '<label><input type="radio" name="qopt" value="' + esc(o) + '"' + (single ? " checked" : "") + '><div style="flex:1">' + (label ? '<span class="qlabel">' + label + "</span>" : "") +
         (blk ? blockHTML(blk.header, blk.lines) : "") + "</div></label>";
     }).join("") + "</div>" +
       '<div class="qactions">' + (radios.length ? '<button class="action" id="qconfirm"' + (single ? "" : " disabled") + ">Confirm</button>" : "") +
