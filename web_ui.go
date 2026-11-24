@@ -80,6 +80,7 @@ func (w *TWebUI) start() {
 	mux.HandleFunc(prefix+"/api/state", w.handleState)
 	mux.HandleFunc(prefix+"/api/dialogue", w.handleDialogue)
 	mux.HandleFunc(prefix+"/api/dialogue/", w.handleDialogue)
+	mux.HandleFunc(prefix+"/api/dblpsearch", w.handleDBLPSearch)
 	mux.HandleFunc(prefix+"/api/stop", w.handleStop)
 	mux.HandleFunc(prefix+"/api/prefs", w.handlePrefs)
 	mux.HandleFunc(prefix+"/frag/edit/", w.handleEditFrag)

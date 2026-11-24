@@ -10,6 +10,7 @@ package main
 // stays shown until the next starts.
 
 import (
+	"database/sql"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -307,4 +308,79 @@ func (w *TWebUI) handleDialogue(rw http.ResponseWriter, r *http.Request) {
 	default:
 		http.NotFound(rw, r)
 	}
+}
+
+// handleDBLPSearch looks entries up in the local DBLP store, for a question's
+// "enter key manually" (GET /api/dblpsearch?q=…&author=…): q a DBLP key (or part
+// of one), else a title (as the store indexes titles: the whole title,
+// normalised); author an author's name as DBLP writes it ("Judi Romijn"), the
+// words of q then filtering their entries. At most 40 results.
+func (w *TWebUI) handleDBLPSearch(rw http.ResponseWriter, r *http.Request) {
+	q := strings.TrimSpace(r.URL.Query().Get("q"))
+	author := strings.TrimSpace(r.URL.Query().Get("author"))
+	var keys []string
+	seen := map[string]bool{}
+	add := func(rows *sql.Rows, err error) {
+		if err != nil {
+			return
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var k string
+			if rows.Scan(&k) == nil && !seen[k] {
+				seen[k] = true
+				keys = append(keys, k)
+			}
+		}
+	}
+	stmt := func(name string) *sql.Stmt { return dblpStmt(name) }
+	if author != "" {
+		if s := stmt("person"); s != nil {
+			add(s.Query(author))
+		}
+	} else if strings.Contains(q, "/") {
+		if s := stmt("search"); s != nil {
+			add(s.Query(q, 40))
+		}
+	} else if q != "" {
+		if s := stmt("title"); s != nil {
+			add(s.Query(libraryTitleHash(q)))
+		}
+	}
+	words := strings.Fields(foldText(q))
+	type result struct {
+		Key    string            `json:"key"`
+		Fields map[string]string `json:"fields"`
+	}
+	out := []result{}
+	for _, k := range keys {
+		e := dblpEntryFromStore(k)
+		if e == nil {
+			continue
+		}
+		if author != "" && len(words) > 0 {
+			hay := foldText(e.Fields["title"])
+			match := true
+			for _, w := range words {
+				if !strings.Contains(hay, w) {
+					match = false
+					break
+				}
+			}
+			if !match {
+				continue
+			}
+		}
+		fields := map[string]string{}
+		for _, f := range []string{"entrytype", "title", "author", "editor", "booktitle", "journal", "year", "volume", "number", "pages", "doi", "crossref"} {
+			if v := e.Fields[f]; v != "" {
+				fields[f] = texToText(v)
+			}
+		}
+		out = append(out, result{k, fields})
+		if len(out) >= 40 {
+			break
+		}
+	}
+	writeJSON(rw, out)
 }

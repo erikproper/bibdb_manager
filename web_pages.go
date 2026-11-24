@@ -74,6 +74,7 @@ input[type=search] { width: 100%; padding: 10px 12px; font-size: 16px; border: 1
 button.action { background: var(--primary); color: var(--primary-text); border: 0; border-radius: 8px;
                 padding: 8px 16px; font-size: 14px; cursor: pointer; }
 button.action.danger { background: var(--danger); }
+button.action:disabled, button.plain:disabled { opacity: .45; cursor: default; }
 button.plain { background: transparent; color: var(--primary); border: 1px solid var(--border); border-radius: 8px;
                padding: 4px 12px; font-size: 13px; cursor: pointer; }
 .chip { display: inline-block; padding: 2px 10px; border-radius: 12px; border: 1px solid var(--border);
@@ -102,6 +103,7 @@ select.groupadd { font-size: 13px; padding: 3px 6px; border: 1px solid var(--bor
 .tabs button .tabx:hover { opacity: 1; background: rgba(0,0,0,.15); }
 .tabs button.seltab { font-style: italic; }
 .selbar { flex: none; display: flex; gap: 10px; align-items: center; margin-bottom: 8px; font-size: 13px; flex-wrap: wrap; }
+.selbar button.action, .editbar button.action { padding: 4px 12px; font-size: 13px; } /* the size of the other small buttons */
 .selbar .selmsg { color: var(--muted); }
 button.toggle { border: 1px solid var(--border); background: var(--card); color: var(--text); border-radius: 14px;
                 padding: 2px 10px; font-size: 13px; cursor: pointer; white-space: nowrap; }
@@ -157,6 +159,7 @@ table.grid td.op button { background: transparent; border: 1px solid var(--borde
 /* Log */
 ul.notes { margin: 0; padding-left: 20px; } ul.notes li { margin: 4px 0; }
 .qwarn { padding: 8px 12px; border-radius: 10px; background: var(--hover); border-left: 4px solid var(--warn); margin-bottom: 12px; }
+.qvals { margin: 6px 0 2px; border-collapse: collapse; } .qvals td { padding: 2px 10px 2px 0; vertical-align: top; } .qvals td.f { white-space: nowrap; }
 .qtext { font-weight: 600; margin: 12px 0 8px; }
 .qopts label { display: flex; gap: 10px; align-items: flex-start; padding: 8px 10px; border: 1px solid var(--border); border-radius: 10px; margin-bottom: 8px; cursor: pointer; background: var(--card); }
 .qopts label:has(input:checked) { border-color: var(--chosen); box-shadow: 0 0 0 1px var(--chosen); }
@@ -404,6 +407,10 @@ async function loadDialogue() {
     '</td><td class="key">' + esc(h.answer) + "</td></tr>").join("");
   // The question pop-up: opened while the tab is shown; a new question re-uses it; when the
   // job goes on without asking, it waits (Confirm greyed); when the job ends, it says so.
+  // A key chosen in Lookup answers the question that asks for it ("DBLP key").
+  if (d.asking && pendingDblpKey && !(d.options && d.options.length) && /key/i.test(d.question || "")) {
+    const k = pendingDblpKey; pendingDblpKey = ""; sendAnswer(k); return;
+  }
   const key = d.asking ? d.next + "|" + d.question : "";
   if (current === "dialogue") {
     if (d.asking && (!qOpen || key !== qShown) && (qOpen || !$("overlay").classList.contains("open"))) openQuestion();
@@ -450,16 +457,32 @@ function openQuestion() {
   for (const m of q.matchAll(/(\w+)\s*=\s*([^,()]+)/g)) meaning[m[1]] = m[2].trim();
   const qtext = q.replace(/\s*\((?:[^()]*=[^()]*)\)/g, "").replace(/\s*\([^()]*\/[^()]*\)\s*:?\s*$/, "").trim();
   // The context: warnings, the original (before the first "[n]"), the numbered options' blocks.
+  // A warning runs on over the lines after it (e.g. "- Current : …", "- Challenger: …",
+  // "needs to be resolved"), up to a blank line, a question line or an entry.
   const warns = [], original = [], blocks = {};
-  let cur = null;
+  let cur = null, inWarn = null;
   for (const l of ctx) {
     const w = l.match(/^\s*WARNING:\s*(.*)$/);
-    if (w) { warns.push(w[1]); continue; }
+    if (w) { inWarn = { head: w[1], lines: [] }; warns.push(inWarn); continue; }
+    if (inWarn) {
+      if (!l.trim() || /^\s*QUESTION:/.test(l) || /^\s*@\w+\{/.test(l) || /^\s*\[\w+\]/.test(l) || /^\s*[A-Z][^:{}=]{0,48}:\s*$/.test(l)) inWarn = null;
+      else { inWarn.lines.push(l); continue; }
+    }
+    if (/^\s*QUESTION:/.test(l)) continue; // a question's heading line ("QUESTION: Challenging entry:")
     const b = l.match(/^\s*\[(\w+)\]\s*(.*)$/);
     if (b) { cur = b[1]; blocks[cur] = { header: b[2], lines: [] }; continue; }
     if (cur) blocks[cur].lines.push(l); else original.push(l);
   }
-  let html = warns.map((w) => '<div class="qwarn">' + esc(w) + "</div>").join("");
+  let html = warns.map((w) => {
+    let rows = "", rest = "";
+    for (const l of w.lines) {
+      const m = l.match(/^\s*-\s*([^:]{1,24}?)\s*:\s*(.*)$/);
+      if (m) rows += '<tr><td class="f"><b>' + esc(m[1]) + "</b></td><td>" + esc(m[2]) + "</td></tr>";
+      else if (/^\s*\(.*\)\s*$/.test(l) && rows) rows += '<tr><td></td><td class="muted">' + esc(l.trim()) + "</td></tr>";
+      else rest += "<div>" + esc(l.trim()) + "</div>";
+    }
+    return '<div class="qwarn"><div>' + esc(w.head) + "</div>" + (rows ? '<table class="qvals">' + rows + "</table>" : "") + rest + "</div>";
+  }).join("");
   // The entries the question is about: the run of headed BibTeX blocks ("Library entry:",
   // "Parent entry:", "@type{…") at the end of what came before the options, not the job's
   // earlier progress lines. Each heading gets a card.
@@ -478,14 +501,24 @@ function openQuestion() {
       (head ? '<span class="key">' + esc(head.trim().replace(/,$/, "")) + "}</span>" : "") + blockHTML("", c.lines) + "</div>";
   }
   html += '<div class="qtext">' + esc(qtext || "Your answer?") + "</div>";
+  // Options with a button of their own: "none" (0), "enter key manually" (k: Lookup),
+  // stop (q); the others are radio buttons (without their letters or numbers).
+  const isNone = (o) => /^none$/i.test(meaning[o] || "");
+  const isKey = (o) => /key/i.test(meaning[o] || "") && !blocks[o];
+  const special = (o) => o === "q" || isNone(o) || isKey(o);
+  const radios = opts.filter((o) => !special(o));
+  const noneOpt = opts.find(isNone), keyOpt = opts.find(isKey), stopOpt = opts.includes("q") ? "q" : "";
   if (opts.length) {
-    html += '<div class="qopts">' + opts.map((o, i) => {
+    html += '<div class="qopts">' + radios.map((o) => {
       const blk = blocks[o];
       const label = blk ? esc(blk.header) : esc(meaning[o] || o);
-      return '<label><input type="radio" name="qopt" value="' + esc(o) + '"' + (i === 0 && !blocks[opts[1]] ? "" : "") + '><div><span class="qlabel"><span class="key">' + esc(o) + "</span> — " + label + "</span>" +
+      return '<label><input type="radio" name="qopt" value="' + esc(o) + '"><div><span class="qlabel">' + label + "</span>" +
         (blk ? blockHTML(blk.header, blk.lines) : "") + "</div></label>";
     }).join("") + "</div>" +
-      '<div class="qactions"><button class="action" id="qconfirm" disabled>Confirm</button><span class="muted">Choose one, then confirm.</span></div>';
+      '<div class="qactions">' + (radios.length ? '<button class="action" id="qconfirm" disabled>Confirm</button>' : "") +
+      (keyOpt ? '<button class="plain" id="qlookup" title="Find the key in the local DBLP data">Lookup</button>' : "") +
+      (noneOpt ? '<button class="plain" id="qnone">' + esc(meaning[noneOpt].charAt(0).toUpperCase() + meaning[noneOpt].slice(1)) + "</button>" : "") +
+      '<span style="flex:1"></span>' + (stopOpt ? '<button class="plain" id="qstop" title="Stop the job">Stop</button>' : "") + "</div>";
   } else {
     html += '<div class="qactions"><input id="qtextin" placeholder="Your answer" autocomplete="off"><button class="action" id="qconfirm">Confirm</button></div>';
   }
@@ -494,13 +527,52 @@ function openQuestion() {
   popup("Question — " + (d.title || ""), html, false);
   const confirmBtn = $("qconfirm");
   if (opts.length) {
-    for (const r of $("mbody").querySelectorAll('input[name="qopt"]')) r.onchange = () => { confirmBtn.disabled = false; };
-    confirmBtn.onclick = () => { const r = $("mbody").querySelector('input[name="qopt"]:checked'); if (r) sendAnswer(r.value); };
+    if (confirmBtn) {
+      for (const r of $("mbody").querySelectorAll('input[name="qopt"]')) r.onchange = () => { confirmBtn.disabled = false; };
+      confirmBtn.onclick = () => { const r = $("mbody").querySelector('input[name="qopt"]:checked'); if (r) sendAnswer(r.value); };
+    }
+    if ($("qnone")) $("qnone").onclick = () => sendAnswer(noneOpt);
+    if ($("qstop")) $("qstop").onclick = () => sendAnswer("q");
+    if ($("qlookup")) $("qlookup").onclick = () => openLookup(keyOpt, cards);
   } else {
     const t = $("qtextin"); t.focus();
     t.onkeydown = (e) => { if (e.key === "Enter") sendAnswer(t.value); };
     confirmBtn.onclick = () => sendAnswer(t.value);
   }
+}
+// The Lookup pop-up: finds a DBLP key in the local DBLP data; "Use" answers the question
+// with "enter key manually" and then with that key.
+let pendingDblpKey = "";
+function openLookup(keyOpt, cards) {
+  const field = (name) => { for (const c of cards || []) for (const l of c.lines) { const m = l.match(new RegExp("^\\s*" + name + "\\s*=\\s*\\{(.*)\\},?\\s*$")); if (m) return m[1].replace(/[{}]/g, ""); } return ""; };
+  const title = field("title"), firstAuthor = (field("author").split(" and ")[0] || "").trim();
+  const authorDblp = firstAuthor.includes(",") ? firstAuthor.split(",").slice(1).join(",").trim() + " " + firstAuthor.split(",")[0].trim() : firstAuthor;
+  popup("Lookup a DBLP key", '<div class="line"><input id="lkq" style="flex:1;min-width:260px" placeholder="title (whole), or a DBLP key" value="' + esc(title) + '">' +
+    '<input id="lka" style="width:220px" placeholder="author as in DBLP (optional)" value=""></div>' +
+    '<div class="line"><button class="action" id="lkgo">Search</button><button class="plain" id="lkauthor">Search by ' + esc(authorDblp || "author") + '</button>' +
+    '<span style="flex:1"></span><button class="plain" id="lkback">Back to the question</button></div>' +
+    '<div class="muted" style="font-size:13px">A title is looked up whole (as the matching does); with an author, the words of the title filter their entries.</div>' +
+    '<div id="lkres" style="margin-top:12px"></div>', false);
+  qOpen = true;
+  for (const i of $("mbody").querySelectorAll("input")) { i.style.font = "14px ui-monospace, Menlo, monospace"; i.style.padding = "6px 8px"; i.style.border = "1px solid var(--border)"; i.style.borderRadius = "6px"; i.style.background = "var(--card)"; i.style.color = "var(--text)"; }
+  const search = async () => {
+    $("lkres").innerHTML = '<p class="muted">Searching…</p>';
+    const p = new URLSearchParams({ q: $("lkq").value.trim(), author: $("lka").value.trim() });
+    let list = [];
+    try { list = await get("/api/dblpsearch?" + p, "json"); } catch (e) { lost(e); }
+    $("lkres").innerHTML = list.length ? '<div class="qopts">' + list.map((r) => '<label style="cursor:default"><div style="flex:1"><span class="qlabel key">' + esc(r.key) +
+      "</span> (" + esc(r.fields.entrytype || "") + ')<div class="qbib"><table>' +
+      Object.entries(r.fields).filter(([f]) => f !== "entrytype").map(([f, v]) => '<tr><td class="f">' + esc(f) + "</td><td>= {" + esc(v) + "},</td></tr>").join("") +
+      '</table></div></div><button class="action" data-use="' + esc(r.key) + '">Use</button></label>').join("") + "</div>"
+      : '<p class="muted">Nothing found.' + ($("lka").value.trim() ? "" : " Try with the author, or part of the key.") + "</p>";
+    for (const b of $("lkres").querySelectorAll("button[data-use]")) b.onclick = () => { pendingDblpKey = b.dataset.use; sendAnswer(keyOpt); };
+  };
+  $("lkgo").onclick = search;
+  $("lkauthor").onclick = () => { $("lka").value = authorDblp; search(); };
+  $("lkq").onkeydown = (e) => { if (e.key === "Enter") search(); };
+  $("lka").onkeydown = (e) => { if (e.key === "Enter") search(); };
+  $("lkback").onclick = () => { qShown = ""; openQuestion(); };
+  search();
 }
 // qWaiting greys the pop-up's Confirm while the job takes the answer (the pop-up stays).
 function qWaiting() {
