@@ -159,6 +159,7 @@ table.grid td.op button { background: transparent; border: 1px solid var(--borde
 .dlgask button { min-width: 2.4em; }
 .tabs button .waiting { display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: var(--warn); margin-left: 7px;
                         box-shadow: 0 0 0 2px rgba(255,255,255,.6); animation: ledpulse 1s ease-in-out infinite alternate; }
+.tabs button .waiting.idle { background: var(--ok); animation: none; } /* green: no question waiting */
 .logcard { flex: 1; min-height: 0; display: flex; flex-direction: column; margin: 0; }
 pre.log { flex: 1; min-height: 0; overflow: auto; margin: 0; white-space: pre-wrap; font: 12px/1.4 ui-monospace, Menlo, monospace; }
 
@@ -188,7 +189,7 @@ pre.log { flex: 1; min-height: 0; overflow: auto; margin: 0; white-space: pre-wr
   <nav class="tabs" id="tabs">
     <button data-tab="status">Status</button>
     <button data-tab="search">Search</button>
-    <button data-tab="dialogue">Dialogue</button>
+    <button data-tab="dialogue">Dialogue<span class="waiting idle" title="No question waiting"></span></button>
     <button data-tab="stats">Statistics</button>
     <button data-tab="log">Log<span class="led" id="led" title=""></span></button>
   </nav>
@@ -355,8 +356,9 @@ async function pollState() {
   const waitTitle = st.asking ? "A question waits for your answer here"
     : (st.terminal && st.busy) ? "The running job (" + (st.job || "") + ") waits for your answer on the terminal it was started from"
     : (st.answer && !st.busy) ? "The library is not loaded: it needed an answer. Run Check here, or bib.check in a terminal." : "";
-  tabBtn.innerHTML = "Dialogue" + (waitTitle ? '<span class="waiting" title="' + esc(waitTitle) + '"></span>' : "");
-  tabBtn.title = waitTitle;
+  const dlgTitle = waitTitle || "No question waiting";
+  tabBtn.innerHTML = "Dialogue" + '<span class="' + (waitTitle ? "waiting" : "waiting idle") + '" title="' + esc(dlgTitle) + '"></span>';
+  tabBtn.title = dlgTitle;
   // The Log tab's light: red while work is underway (a job, the library or the lists
   // being brought up to date), green when idle and up to date.
   const what = st.busy ? "Running: " + (st.job || "a job") : st.unloaded ? "Loading the library" : st.indexing ? "Bringing the lists up to date" : "";
