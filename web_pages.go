@@ -34,9 +34,9 @@ header { background: var(--primary); color: var(--primary-text); padding: 0 16px
          display: flex; align-items: last baseline; gap: 24px; height: 56px; } /* tabs at the bottom, the title on their baseline */
 header .title { font-size: 20px; font-weight: 400; white-space: nowrap; }
 header .conn { align-self: center; margin-left: auto; font-size: 13px; }
-.tabs { display: flex; gap: 4px; }
+.tabs { display: flex; gap: 4px; min-width: 0; overflow-x: auto; scrollbar-width: none; }
 .tabs button { background: transparent; color: var(--primary-text); border: 0; border-radius: 8px 8px 0 0;
-               padding: 8px 18px; font-size: 14px; cursor: pointer; opacity: .85; }
+               padding: 8px 18px; font-size: 14px; cursor: pointer; opacity: .85; white-space: nowrap; flex: none; }
 .tabs button:hover { opacity: 1; background: rgba(255,255,255,.15); }
 .tabs button.active { background: var(--bg); color: var(--text); opacity: 1; }
 main { flex: 1; min-height: 0; }
@@ -487,19 +487,45 @@ function dropSelectTab(id) {
   delete views[name];
   if (current === name) showTab("search");
 }
+// selectLabels names the Select tabs: the file name, with as many of its folders
+// in front as it takes to tell tabs of files with the same name apart.
+function selectLabels(list) {
+  const parts = list.map((info) => info.dir.split("/").filter(Boolean));
+  const depth = list.map(() => 0);
+  const label = (i) => (depth[i] ? parts[i].slice(-depth[i]).join("/") + "/" : "") + list[i].name;
+  for (let changed = true; changed; ) {
+    changed = false;
+    const seen = {};
+    list.forEach((_, i) => { (seen[label(i)] = seen[label(i)] || []).push(i); });
+    for (const same of Object.values(seen)) {
+      if (same.length < 2) continue;
+      for (const i of same) if (depth[i] < parts[i].length) { depth[i]++; changed = true; }
+    }
+  }
+  return list.map((_, i) => label(i));
+}
 async function refreshSelects() {
   let list;
   try { list = await get("/api/selects", "json"); } catch (e) { lost(e); return; }
+  list = list || [];
+  const labels = selectLabels(list);
   const open = new Set();
-  for (const info of list || []) {
+  for (const [i, info] of list.entries()) {
     const name = "sel-" + info.id;
     open.add(name);
-    if (views[name]) { if (!views[name].busyPosting) views[name].setInfo(info); continue; }
+    const tabHTML = "Select: " + esc(labels[i]) + '<span class="tabx" title="Close this tab">×</span>';
+    if (views[name]) {
+      views[name].setInfo(info);
+      const b = document.querySelector('.tabs button[data-tab="' + name + '"]');
+      if (b && b.dataset.label !== labels[i]) { b.innerHTML = tabHTML; b.dataset.label = labels[i]; }
+      continue;
+    }
     const b = document.createElement("button");
     b.dataset.tab = name;
+    b.dataset.label = labels[i];
     b.className = "seltab";
     b.title = info.dir + "/" + info.name + ".keys";
-    b.innerHTML = "Select: " + esc(info.name) + '<span class="tabx" title="Close this tab">×</span>';
+    b.innerHTML = tabHTML;
     $("tabs").insertBefore(b, document.querySelector('.tabs button[data-tab="stats"]')); // after Search and the earlier Select tabs
     const panel = document.createElement("section");
     panel.className = "panel fill";
