@@ -26,6 +26,7 @@ import (
 	"os/exec"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -38,6 +39,7 @@ type TWebUI struct {
 	token   string
 	port    int
 	pages   *template.Template
+	server  *http.Server
 }
 
 func newWebUI(s *TService) *TWebUI {
@@ -66,6 +68,7 @@ func (w *TWebUI) start() {
 	mux.HandleFunc(prefix+"/entry/", w.handleEntry)
 	mux.HandleFunc(prefix+"/pdf/", w.handlePDF)
 	mux.HandleFunc(prefix+"/author/", w.handleAuthor)
+	mux.HandleFunc(prefix+"/log", w.handleLog)
 	// Any other address (e.g. the bare http://localhost:<port>/): say how to get
 	// in, without giving the token away.
 	mux.HandleFunc("/", func(rw http.ResponseWriter, r *http.Request) {
@@ -83,14 +86,27 @@ command line with <code>bib.check -ui</code>; <code>bib.check -status</code> sho
 		Handler:           w.guard(mux),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
+	// A service that has just stopped may hold the port a moment longer.
 	listener, err := net.Listen("tcp", server.Addr)
+	for try := 0; err != nil && try < 10; try++ {
+		time.Sleep(500 * time.Millisecond)
+		listener, err = net.Listen("tcp", server.Addr)
+	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "%s  web UI not started: %s (set another service_port in the settings)\n",
 			time.Now().Format(time.DateTime), err)
 		return
 	}
 	fmt.Fprintf(os.Stderr, "%s  web UI on port %d\n", time.Now().Format(time.DateTime), w.port)
+	w.server = server
 	go server.Serve(listener) //nolint:errcheck
+}
+
+// stop closes the web server (and so its port).
+func (w *TWebUI) stop() {
+	if w != nil && w.server != nil {
+		w.server.Close() //nolint:errcheck
+	}
 }
 
 // guard refuses requests not addressed to localhost by name.
@@ -192,6 +208,7 @@ func (w *TWebUI) handleStats(rw http.ResponseWriter, r *http.Request) {
 type TWebEntryRow struct {
 	Key, Type, Year, Title string
 	Authors                []TWebPerson
+	HTML                   template.HTML // the reference as the homepage fragments render it ("": not available)
 }
 
 func (w *TWebUI) handleSearch(rw http.ResponseWriter, r *http.Request) {
@@ -256,6 +273,7 @@ func (w *TWebUI) handleSearch(rw http.ResponseWriter, r *http.Request) {
 		}
 		return list[i].Title < list[j].Title
 	})
+	addReferences(list)
 	data["Results"] = list
 	w.render(rw, "search", data)
 }
@@ -370,15 +388,20 @@ func (w *TWebUI) handleEntry(rw http.ResponseWriter, r *http.Request) {
 		gRows.Close()
 	}
 	_, pdfErr := os.Stat(entryPDFPath(key))
+	var reference template.HTML
+	if refs, ok := renderReferences([]string{key}); ok {
+		reference = refs[key]
+	}
 	w.render(rw, "entry", map[string]any{
-		"Key":     key,
-		"Type":    entryType,
-		"Authors": webContributors(ro, key, "author"),
-		"Editors": webContributors(ro, key, "editor"),
-		"Fields":  fields,
-		"Groups":  groups,
-		"HasPDF":  pdfErr == nil,
-		"Opened":  r.URL.Query().Get("opened") != "",
+		"Reference": reference,
+		"Key":       key,
+		"Type":      entryType,
+		"Authors":   webContributors(ro, key, "author"),
+		"Editors":   webContributors(ro, key, "editor"),
+		"Fields":    fields,
+		"Groups":    groups,
+		"HasPDF":    pdfErr == nil,
+		"Opened":    r.URL.Query().Get("opened") != "",
 	})
 }
 
@@ -459,9 +482,120 @@ func (w *TWebUI) handleAuthor(rw http.ResponseWriter, r *http.Request) {
 		}
 		return list[i].Title < list[j].Title
 	})
+	addReferences(list)
 	data := map[string]any{"ID": id, "Name": name, "ORCIDs": orcids, "Forms": forms, "Results": list}
 	if dblpKey.Valid && dblpKey.String != "" {
 		data["DBLP"] = strings.TrimPrefix(dblpKey.String, "homepages/")
 	}
 	w.render(rw, "author", data)
+}
+
+// webRenderMu lets one page at a time render from the library (the rendering
+// may fill caches of its own).
+var webRenderMu sync.Mutex
+
+// renderReferences renders entries as HTML references, as -render_as_html does
+// for the homepage fragments (with the crossref parent and the output mappings),
+// from the loaded library. It returns false, rendering nothing, when the library
+// is not loaded or a job is busy with it: the page then shows the stored values.
+func renderReferences(keys []string) (map[string]template.HTML, bool) {
+	webRenderMu.Lock()
+	defer webRenderMu.Unlock()
+	if !libraryLock.TryRLock() {
+		return nil, false
+	}
+	defer libraryLock.RUnlock()
+	if serviceLibraryLevel == libraryNotLoaded || entryCache == nil {
+		return nil, false
+	}
+	out := map[string]template.HTML{}
+	for _, key := range keys {
+		if html := Library.renderAsHTML(key); html != "" {
+			out[key] = template.HTML(html) //nolint:gosec // our own rendering of our own data
+		}
+	}
+	return out, true
+}
+
+// addReferences fills in the HTML references of a list, when available.
+func addReferences(list []TWebEntryRow) {
+	keys := make([]string, len(list))
+	for i, row := range list {
+		keys[i] = row.Key
+	}
+	if refs, ok := renderReferences(keys); ok {
+		for i := range list {
+			list[i].HTML = refs[list[i].Key]
+		}
+	}
+}
+
+// ---- the log ----
+
+// TWebLog keeps the last lines of what the service and its jobs wrote, for the
+// log page (Erik, 2026-11-24): the service log, and every job's output, also
+// of jobs run from the command line.
+type TWebLog struct {
+	mu      sync.Mutex
+	lines   []string
+	current strings.Builder // the line being written ("\r" starts it afresh)
+}
+
+const webLogLines = 3000
+
+var webLog = &TWebLog{}
+
+// write adds text: ANSI codes dropped, "\r" restarts the current line (a
+// progress line shows its latest state), "\n" ends it.
+func (l *TWebLog) write(s string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for _, r := range reANSIEscape.ReplaceAllString(s, "") {
+		switch r {
+		case '\r':
+			l.current.Reset()
+		case '\n':
+			l.lines = append(l.lines, l.current.String())
+			l.current.Reset()
+			if len(l.lines) > webLogLines {
+				l.lines = l.lines[len(l.lines)-webLogLines:]
+			}
+		default:
+			l.current.WriteRune(r)
+		}
+	}
+}
+
+func (l *TWebLog) text() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return strings.Join(append(append([]string{}, l.lines...), l.current.String()), "\n")
+}
+
+// teeServiceStderr sends what the service writes to stderr (its log file) to
+// the log page as well.
+func teeServiceStderr() {
+	r, w, err := os.Pipe()
+	if err != nil {
+		return
+	}
+	orig := os.Stderr
+	os.Stderr = w
+	go func() {
+		buf := make([]byte, 32*1024)
+		for {
+			n, err := r.Read(buf)
+			if n > 0 {
+				orig.Write(buf[:n]) //nolint:errcheck
+				webLog.write(string(buf[:n]))
+			}
+			if err != nil {
+				return
+			}
+		}
+	}()
+}
+
+func (w *TWebUI) handleLog(rw http.ResponseWriter, r *http.Request) {
+	w.render(rw, "log", map[string]any{"Log": webLog.text()})
 }

@@ -356,6 +356,7 @@ func runService() {
 	}
 	os.Chmod(path, 0o600) //nolint:errcheck
 
+	teeServiceStderr()
 	s := &TService{listener: listener, started: time.Now(), lastActive: time.Now(), done: make(chan struct{})}
 	// A job's bad flag must end the job, not the service (parseJobArguments).
 	flag.CommandLine.Init(os.Args[0], flag.ContinueOnError)
@@ -444,6 +445,7 @@ func (s *TService) stop(sink frameSink) {
 		s.busy = false
 		s.mu.Unlock()
 	}
+	s.web.stop()
 	close(s.done)
 }
 
@@ -654,6 +656,7 @@ func (s *TService) runChildJob(req serviceFrame, dec *json.Decoder, out *frameSe
 		for {
 			n, err := r.Read(buf)
 			if n > 0 {
+				webLog.write(string(buf[:n]))
 				out.send(serviceFrame{T: kind, D: string(buf[:n])}) //nolint:errcheck
 			}
 			if err != nil {

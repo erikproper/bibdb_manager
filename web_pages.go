@@ -11,6 +11,7 @@ const webPages = `
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{{.Library}} — bibdb</title>
+{{if eq .Page "log"}}<meta http-equiv="refresh" content="3">{{end}}
 <style>
 :root {
   --bg: #fafafa; --card: #ffffff; --text: #212121; --muted: #727272;
@@ -49,11 +50,15 @@ button { background: var(--primary); color: var(--primary-text); border: 0; bord
          padding: 8px 16px; font-size: 14px; cursor: pointer; }
 .chip { display: inline-block; padding: 2px 10px; border-radius: 12px; border: 1px solid var(--border);
         margin: 0 6px 6px 0; font-size: 13px; }
+pre.log { margin: 0; white-space: pre-wrap; font: 12px/1.4 ui-monospace, Menlo, monospace; }
 .key { font-family: ui-monospace, Menlo, monospace; font-size: 13px; }
 .bib { font-family: ui-monospace, Menlo, monospace; font-size: 13px; }
 .bib table { margin-left: 2ch; width: calc(100% - 2ch); }
 .bib td { border-bottom: 0; padding: 1px 4px; }
 .bib td.eq { width: 1ch; color: var(--muted); }
+td.year { width: 4em; color: var(--muted); }
+.ref { line-height: 1.5; }
+a.open { text-decoration: none; font-weight: 600; padding: 0 4px; }
 </style>
 </head>
 <body>
@@ -63,6 +68,7 @@ button { background: var(--primary); color: var(--primary-text); border: 0; bord
     <a href="{{.Base}}/" {{if eq .Page "status"}}class="current"{{end}}>Status</a>
     <a href="{{.Base}}/search" {{if or (eq .Page "search") (eq .Page "entry") (eq .Page "author")}}class="current"{{end}}>Search</a>
     <a href="{{.Base}}/stats" {{if eq .Page "stats"}}class="current"{{end}}>Statistics</a>
+    <a href="{{.Base}}/log" {{if eq .Page "log"}}class="current"{{end}}>Log</a>
   </nav>
 </header>
 <main>
@@ -71,6 +77,7 @@ button { background: var(--primary); color: var(--primary-text); border: 0; bord
 {{if eq .Page "search"}}{{template "search" .}}{{end}}
 {{if eq .Page "entry"}}{{template "entry" .}}{{end}}
 {{if eq .Page "author"}}{{template "author" .}}{{end}}
+{{if eq .Page "log"}}{{template "log" .}}{{end}}
 </main>
 </body>
 </html>{{end}}
@@ -115,8 +122,9 @@ button { background: var(--primary); color: var(--primary-text); border: 0; bord
 <div class="card">
   {{if .Results}}
   <table>
-    <tr><th>Year</th><th>Title</th><th>Authors</th><th>Type</th></tr>
-    {{range .Results}}<tr><td>{{.Year}}</td><td><a href="{{$.Base}}/entry/{{esc .Key}}">{{if .Title}}{{.Title}}{{else}}<span class="key">{{.Key}}</span>{{end}}</a></td><td>{{range $i, $p := .Authors}}{{if $i}} and {{end}}<a href="{{$.Base}}/author/{{esc $p.ID}}">{{$p.Name}}</a>{{end}}</td><td class="muted">{{.Type}}</td></tr>{{end}}
+    <tr><th>Year</th><th colspan="3">Reference</th></tr>
+    {{range .Results}}{{if .HTML}}<tr><td class="year">{{.Year}}</td><td colspan="3" class="ref">{{.HTML}} <a class="open" href="{{$.Base}}/entry/{{esc .Key}}" title="{{.Key}}">›</a></td></tr>
+    {{else}}<tr><td class="year">{{.Year}}</td><td><a href="{{$.Base}}/entry/{{esc .Key}}">{{if .Title}}{{.Title}}{{else}}<span class="key">{{.Key}}</span>{{end}}</a></td><td>{{range $i, $p := .Authors}}{{if $i}} and {{end}}<a href="{{$.Base}}/author/{{esc $p.ID}}">{{$p.Name}}</a>{{end}}</td><td class="muted">{{.Type}}</td></tr>{{end}}{{end}}
   </table>
   {{if .More}}<p class="muted">The first 200 shown; refine the search.</p>{{end}}
   {{else}}<p class="muted">Nothing found.</p>{{end}}
@@ -125,6 +133,7 @@ button { background: var(--primary); color: var(--primary-text); border: 0; bord
 {{end}}
 
 {{define "entry"}}
+{{if .Reference}}<div class="card ref">{{.Reference}}</div>{{end}}
 <div class="card bib">
   <div>@{{.Type}}{<span class="key">{{.Key}}</span>,</div>
   <table>
@@ -160,9 +169,18 @@ button { background: var(--primary); color: var(--primary-text); border: 0; bord
 <div class="card">
   <h2>Entries ({{len .Results}})</h2>
   <table>
-    <tr><th>Year</th><th>Title</th><th>Authors</th><th>Type</th></tr>
-    {{range .Results}}<tr><td>{{.Year}}</td><td><a href="{{$.Base}}/entry/{{esc .Key}}">{{if .Title}}{{.Title}}{{else}}<span class="key">{{.Key}}</span>{{end}}</a></td><td>{{range $i, $p := .Authors}}{{if $i}} and {{end}}<a href="{{$.Base}}/author/{{esc $p.ID}}">{{$p.Name}}</a>{{end}}</td><td class="muted">{{.Type}}</td></tr>{{end}}
+    <tr><th>Year</th><th colspan="3">Reference</th></tr>
+    {{range .Results}}{{if .HTML}}<tr><td class="year">{{.Year}}</td><td colspan="3" class="ref">{{.HTML}} <a class="open" href="{{$.Base}}/entry/{{esc .Key}}" title="{{.Key}}">›</a></td></tr>
+    {{else}}<tr><td class="year">{{.Year}}</td><td><a href="{{$.Base}}/entry/{{esc .Key}}">{{if .Title}}{{.Title}}{{else}}<span class="key">{{.Key}}</span>{{end}}</a></td><td>{{range $i, $p := .Authors}}{{if $i}} and {{end}}<a href="{{$.Base}}/author/{{esc $p.ID}}">{{$p.Name}}</a>{{end}}</td><td class="muted">{{.Type}}</td></tr>{{end}}{{end}}
   </table>
 </div>
+{{end}}
+
+{{define "log"}}
+<div class="card">
+  <h2>Log <span class="muted">(the service and its jobs; refreshed every 3 seconds)</span></h2>
+  <pre class="log" id="log">{{.Log}}</pre>
+</div>
+<script>window.scrollTo(0, document.body.scrollHeight);</script>
 {{end}}
 `

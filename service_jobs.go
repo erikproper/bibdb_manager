@@ -57,6 +57,12 @@ var (
 	deferServicePush bool
 )
 
+// libraryLock is held by a service job while it runs, except while it waits for
+// an answer (readStdinLine): the web UI renders from the loaded library only
+// when it gets the lock at once (plan 22.1: one writer, reads alongside). Go
+// does not allow a map to be read while it is written.
+var libraryLock sync.RWMutex
+
 // jobEnded is what endRun panics with inside a service job.
 type jobEnded struct{ code int }
 
@@ -181,11 +187,25 @@ func (s *TSocketIO) RequestInput() {
 	}
 }
 
-func (s *TSocketIO) IsInteractive() bool   { return s.interactive }
-func (s *TSocketIO) WriteMessage(m string) { s.out.send(serviceFrame{T: "err", D: m}) } //nolint:errcheck
-func (s *TSocketIO) WriteResult(m string)  { s.out.send(serviceFrame{T: "out", D: m}) } //nolint:errcheck
-func (s *TSocketIO) Input() <-chan string  { return s.lines }
-func (s *TSocketIO) endInput()             { s.closeOnce.Do(func() { close(s.lines) }) }
+func (s *TSocketIO) IsInteractive() bool { return s.interactive }
+func (s *TSocketIO) WriteMessage(m string) {
+	s.toWebLog(m)
+	s.out.send(serviceFrame{T: "err", D: m}) //nolint:errcheck
+}
+func (s *TSocketIO) WriteResult(m string) {
+	s.toWebLog(m)
+	s.out.send(serviceFrame{T: "out", D: m}) //nolint:errcheck
+}
+func (s *TSocketIO) Input() <-chan string { return s.lines }
+func (s *TSocketIO) endInput()            { s.closeOnce.Do(func() { close(s.lines) }) }
+
+// toWebLog adds a job's output to the log page; the service's own jobs write to
+// the service log, which reaches it already.
+func (s *TSocketIO) toWebLog(m string) {
+	if _, own := s.out.(logSink); !own {
+		webLog.write(m)
+	}
+}
 
 // frameSink takes the frames of a job's output: a command line's socket, or
 // the service log (a job the service runs itself, e.g. the push when it stops).
@@ -255,6 +275,8 @@ func (s *TService) runJobInService(req serviceFrame, positional []string, sio *T
 	jobChangedLibrary, jobAbandonedDatabase = false, false
 	inServiceJob = true
 
+	libraryLock.Lock()
+	defer libraryLock.Unlock() // deferred first: released after the clean-up below
 	ended := false
 	var command *TCommand
 	defer func() {

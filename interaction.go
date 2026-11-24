@@ -32,7 +32,13 @@ var isTTY = userIO.IsInteractive()
 // as "q" would: returning "" made the question loops ask again forever.
 func readStdinLine() string {
 	userIO.RequestInput()
+	if inServiceJob {
+		libraryLock.Unlock() // the web UI may read the library while the job waits
+	}
 	line, ok := <-userIO.Input()
+	if inServiceJob {
+		libraryLock.Lock()
+	}
 	if !ok {
 		messageln()
 		quitNow()
