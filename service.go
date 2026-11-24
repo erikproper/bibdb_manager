@@ -642,7 +642,7 @@ func (s *TService) runJob(req serviceFrame, dec *json.Decoder, out *frameSender)
 		}
 		if !toldAsking && dialogue.Asking() {
 			toldAsking = true
-			out.send(serviceFrame{T: "info", D: "It waits for an answer in the web UI's Dialogue tab (bib.check -ui).\n"}) //nolint:errcheck
+			out.send(serviceFrame{T: "info", D: "It waits for an answer in the web UI's Actions tab (bib.check -ui).\n"}) //nolint:errcheck
 		}
 		time.Sleep(300 * time.Millisecond)
 		s.mu.Lock()

@@ -1,6 +1,6 @@
 package main
 
-// The Dialogue tab (plan step 22.3d, Erik 2026-11-24): jobs started from the
+// The Actions tab (plan step 22.3d, Erik 2026-11-24; first named Dialogue): jobs started from the
 // web UI (action buttons: check, homework, ...) and the service's own load of
 // the library run here, their output shown as on a terminal, their questions
 // answered in the page (a button per option, or typed). A job from the command
@@ -22,7 +22,7 @@ import (
 	"time"
 )
 
-// TDialogue is the job of the Dialogue tab: its output, and whether it waits
+// TDialogue is the job of the Actions tab: its output, and whether it waits
 // for an answer.
 type TDialogue struct {
 	mu      sync.Mutex
@@ -36,11 +36,21 @@ type TDialogue struct {
 	sio     *TSocketIO
 	started time.Time
 	since   int              // the line number after the last answer: a question's context starts there
-	notes   []string         // the warnings of this job (shown in the tab)
+	notes   []TDialogueNote  // the warnings of this job (shown in the tab)
+	inNote  bool             // the last warning still takes the lines that follow it
+	step    string           // the current step ("Opening the library:", "Step 3: …")
+	substep string           // the last sub-step line (indented) after it
 	history []TDialogueReply // the questions answered in this job
 }
 
-// TDialogueReply is a question answered in the Dialogue tab.
+// TDialogueNote is a warning: its first line and the lines that belong to it
+// ("- Current : …", "needs to be resolved").
+type TDialogueNote struct {
+	Head  string   `json:"head"`
+	Lines []string `json:"lines"`
+}
+
+// TDialogueReply is a question answered in the Actions tab.
 type TDialogueReply struct {
 	Question string `json:"question"`
 	Answer   string `json:"answer"`
@@ -55,7 +65,7 @@ func (d *TDialogue) start(title string, sio *TSocketIO) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.title, d.sio, d.running, d.asking, d.code, d.started = title, sio, true, false, 0, time.Now()
-	d.lines, d.ended, d.since, d.notes, d.history = nil, 0, 0, nil, nil
+	d.lines, d.ended, d.since, d.notes, d.history, d.inNote, d.step, d.substep = nil, 0, 0, nil, nil, false, "", ""
 	d.current.Reset()
 }
 
@@ -76,9 +86,7 @@ func (d *TDialogue) write(s string) {
 			d.current.Reset()
 		case '\n':
 			line := d.current.String()
-			if strings.HasPrefix(strings.TrimSpace(line), "WARNING:") {
-				d.notes = append(d.notes, strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), "WARNING:")))
-			}
+			d.track(line)
 			d.lines = append(d.lines, line)
 			d.ended++
 			d.current.Reset()
@@ -88,6 +96,32 @@ func (d *TDialogue) write(s string) {
 		default:
 			d.current.WriteRune(r)
 		}
+	}
+}
+
+// track notes a finished output line: a warning (with the lines that belong to
+// it), a step (a heading line), a sub-step (an indented line). Called with d.mu held.
+func (d *TDialogue) track(line string) {
+	trimmed := strings.TrimSpace(line)
+	switch {
+	case strings.HasPrefix(trimmed, "WARNING:"):
+		d.notes = append(d.notes, TDialogueNote{Head: strings.TrimSpace(strings.TrimPrefix(trimmed, "WARNING:"))})
+		d.inNote = true
+		return
+	case d.inNote && trimmed != "" && !strings.HasPrefix(trimmed, "QUESTION:") && !strings.HasPrefix(trimmed, "@") &&
+		!(strings.HasSuffix(trimmed, ":") && !strings.HasPrefix(trimmed, "-")):
+		n := &d.notes[len(d.notes)-1]
+		n.Lines = append(n.Lines, line)
+		return
+	}
+	d.inNote = false
+	if trimmed == "" || strings.HasPrefix(trimmed, "QUESTION:") || strings.HasPrefix(trimmed, "@") || strings.Contains(trimmed, " = {") {
+		return
+	}
+	if line == trimmed && (strings.HasSuffix(trimmed, ":") || strings.HasPrefix(strings.ToLower(trimmed), "step ")) && len(trimmed) < 100 {
+		d.step, d.substep = strings.TrimSuffix(trimmed, ":"), ""
+	} else if line != trimmed && len(trimmed) < 160 {
+		d.substep = trimmed
 	}
 }
 
@@ -158,7 +192,7 @@ func (s *TService) runDialogueJob(title string, cmds [][]string, own bool, done 
 		for _, args := range cmds {
 			sio := &TSocketIO{out: teeSink{logSink{}, dialogueSink{}}, interactive: true, lines: make(chan string, 16)}
 			dialogue.start(title, sio)
-			fmt.Fprintf(os.Stderr, "%s  job (Dialogue tab): %s\n", time.Now().Format(time.DateTime), strings.Join(append([]string{title + ":"}, args...), " "))
+			fmt.Fprintf(os.Stderr, "%s  job (Actions tab): %s\n", time.Now().Format(time.DateTime), strings.Join(append([]string{title + ":"}, args...), " "))
 			req := serviceFrame{T: "run", Args: append([]string{"-base", libraryBase()}, args...), Version: AppVersion, Base: libraryBase()}
 			flag.CommandLine.SetOutput(flagOutput{sio})
 			code = 2
@@ -205,6 +239,7 @@ var dialogueActions = map[string]struct {
 	"homework":       {"Homework", []string{"-homework"}},
 	"fix_candidates": {"Fix DBLP candidates", []string{"-fix_candidates"}},
 	"fix_duplicates": {"Fix duplicates", []string{"-fix_duplicates"}},
+	"enrich":         {"Enrich contributor data", []string{"-enrich_contributor_data"}},
 	"push":           {"Push", []string{"-push"}},
 }
 
@@ -227,7 +262,8 @@ func (w *TWebUI) handleDialogue(rw http.ResponseWriter, r *http.Request) {
 			"title": d.title, "running": d.running, "asking": d.asking, "code": d.code,
 			"lines": append([]string{}, d.lines[from-first:]...), "next": d.ended, "current": d.current.String(),
 			"options": d.options(), "since": d.started.Format("15:04:05"),
-			"notes": append([]string{}, d.notes...), "history": append([]TDialogueReply{}, d.history...),
+			"notes": append([]TDialogueNote{}, d.notes...), "history": append([]TDialogueReply{}, d.history...),
+			"step": d.step, "substep": d.substep,
 		}
 		if d.asking {
 			// The question (its line) and its context: what the job wrote since the last answer.
@@ -290,7 +326,7 @@ func (w *TWebUI) handleDialogue(rw http.ResponseWriter, r *http.Request) {
 		d.mu.Lock()
 		d.since = d.ended
 		d.mu.Unlock()
-		fmt.Fprintf(os.Stderr, "  answer (Dialogue tab): %s\n", req.Text) // the selection, in the log
+		fmt.Fprintf(os.Stderr, "  answer (Actions tab): %s\n", req.Text) // the selection, in the log
 		sio.asked.Store(false)
 		select {
 		case sio.lines <- req.Text:
@@ -383,4 +419,65 @@ func (w *TWebUI) handleDBLPSearch(rw http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(rw, out)
+}
+
+// ---- the numbers on the action buttons ----
+
+// actionCounts are the cases waiting for an action (Erik, 2026-11-24), as the
+// homework summary of a check counts them: entries with unresolved DBLP
+// candidates, title groups with unresolved duplicates, contributors with an ORCID
+// not yet enriched, author/editor values awaiting triage. Worked out in the
+// background when the library is loaded and no job runs, again after a change.
+var (
+	actionCountsMu      sync.Mutex
+	actionCountsValue   map[string]int
+	actionCountsVersion int64 = -1
+)
+
+func currentActionCounts() map[string]int {
+	actionCountsMu.Lock()
+	defer actionCountsMu.Unlock()
+	return actionCountsValue
+}
+
+// refreshActionCounts works the numbers out when the search index (that is, the
+// database) changed since they were; a job arriving meanwhile waits for it.
+func refreshActionCounts(busy bool) {
+	version := webIndexVersion.Load()
+	actionCountsMu.Lock()
+	stale := version != actionCountsVersion
+	actionCountsMu.Unlock()
+	if busy || !stale || serviceLibraryLevel == libraryNotLoaded {
+		return
+	}
+	if !libraryLock.TryRLock() {
+		return
+	}
+	counts := map[string]int{}
+	func() {
+		defer libraryLock.RUnlock()
+		defer func() { recover() }() //nolint:errcheck // a count that needs more than the loaded library is left out
+		if entryCache == nil {
+			return
+		}
+		counts["fix_candidates"] = countDblpCandidates()
+		counts["fix_duplicates"] = countUnresolvedGroups()
+	}()
+	if ro, err := openReadOnly(); err == nil {
+		var n int
+		if ro.QueryRow(`SELECT COUNT(*) FROM superseded_field_values WHERE field IN ('author', 'editor') AND triage_status IS NULL`).Scan(&n) == nil {
+			counts["triage"] = n
+		}
+		var seen int
+		ro.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='contributor_orcid_seen'`).Scan(&seen) //nolint:errcheck
+		if seen > 0 && ro.QueryRow(`SELECT COUNT(*) FROM contributors WHERE orcid != '' AND NOT EXISTS
+			(SELECT 1 FROM contributor_orcid_seen s WHERE s.contributor_id = contributors.id AND s.canonical != '')`).Scan(&n) == nil {
+			counts["enrich"] = n
+		}
+		ro.Close()
+	}
+	counts["homework"] = counts["fix_candidates"] + counts["fix_duplicates"] + counts["triage"] + counts["enrich"]
+	actionCountsMu.Lock()
+	actionCountsValue, actionCountsVersion = counts, version
+	actionCountsMu.Unlock()
 }

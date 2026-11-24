@@ -130,6 +130,7 @@ command line with <code>bib.check -ui</code>; <code>bib.check -status</code> sho
 	go func() {
 		for !w.service.stopping.Load() {
 			refreshWebIndex(w.busy())
+			refreshActionCounts(w.busy())
 			time.Sleep(10 * time.Second)
 		}
 	}()
@@ -207,6 +208,7 @@ func (w *TWebUI) handleState(rw http.ResponseWriter, r *http.Request) {
 		"answer":   libraryNeedsAnswer.Load() || dialogue.Asking(),
 		"asking":   dialogue.Asking(),
 		"terminal": jobAsksOnTerminal(),
+		"counts":   currentActionCounts(),
 	})
 }
 

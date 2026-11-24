@@ -173,7 +173,7 @@ func jobAsksOnTerminal() bool {
 		return false
 	}
 	if _, web := sio.out.(teeSink); web {
-		return false // a job of the web UI: it asks in the Dialogue tab
+		return false // a job of the web UI: it asks in the Actions tab
 	}
 	return sio.asked.Load()
 }
@@ -505,14 +505,14 @@ var reloadNotBefore time.Time
 // meanwhile wait. The statistics go to the service log only.
 func (s *TService) loadAtStart() {
 	fmt.Fprintf(os.Stderr, "%s  loading the library\n", time.Now().Format(time.DateTime))
-	// As the Dialogue tab's job: a question (e.g. whether to keep the changes of a
+	// As the Actions tab's job: a question (e.g. whether to keep the changes of a
 	// run that did not finish) is answered there.
 	if s.runDialogueJob("Loading the library", [][]string{{"-load_library"}}, true, nil) != nil {
 		return // busy or stopping
 	}
 	if serviceLibraryLevel == libraryNotLoaded {
 		libraryNeedsAnswer.Store(true)
-		fmt.Fprintf(os.Stderr, "%s  library not loaded (see the Dialogue tab); run bib.check, or Check in the web UI\n", time.Now().Format(time.DateTime))
+		fmt.Fprintf(os.Stderr, "%s  library not loaded (see the Actions tab); run bib.check, or Check in the web UI\n", time.Now().Format(time.DateTime))
 		return
 	}
 	libraryNeedsAnswer.Store(false)

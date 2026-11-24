@@ -204,7 +204,7 @@ pre.log { flex: 1; min-height: 0; overflow: auto; margin: 0; white-space: pre-wr
   <nav class="tabs" id="tabs">
     <button data-tab="status">Status</button>
     <button data-tab="search">Search</button>
-    <button data-tab="dialogue">Dialogue<span class="waiting idle" title="No question waiting"></span></button>
+    <button data-tab="dialogue">Actions<span class="waiting idle" title="No question waiting"></span></button>
     <button data-tab="stats">Statistics</button>
     <button data-tab="log">Log<span class="led" id="led" title=""></span></button>
   </nav>
@@ -223,6 +223,7 @@ pre.log { flex: 1; min-height: 0; overflow: auto; margin: 0; white-space: pre-wr
         <button class="plain" data-action="homework" title="Run the pending homework in order">Homework</button>
         <button class="plain" data-action="fix_candidates" title="Link entries without a DBLP key to DBLP records">Fix DBLP candidates</button>
         <button class="plain" data-action="fix_duplicates" title="Resolve title duplicates">Fix duplicates</button>
+        <button class="plain" data-action="enrich" title="Absorb DBLP names and ORCIDs, enrich from ORCID profiles, merge ORCID duplicates">Enrich contributors</button>
         <button class="plain" data-action="push" title="Push the changes of this machine to the shared DB folder now">Push</button>
       </div>
     </div>
@@ -232,7 +233,10 @@ pre.log { flex: 1; min-height: 0; overflow: auto; margin: 0; white-space: pre-wr
         <button class="action" id="dlgopen" hidden>Answer the question</button>
         <button class="action danger" id="dlgstop" hidden title="Stop the job, as Ctrl-C does">Stop</button></div>
     </div>
-    <div class="card" id="dlgnotescard" hidden><h2>Warnings</h2><ul class="notes" id="dlgnotes"></ul></div>
+    <div class="card" id="dlgstepcard" hidden><h2>Progress</h2>
+      <table class="list"><tr><td class="field">step</td><td id="dlgstep"></td></tr><tr><td class="field">sub-step</td><td id="dlgsub"></td></tr>
+        <tr><td class="field">now</td><td class="key" id="dlgnow"></td></tr></table></div>
+    <div class="card" id="dlgnotescard" hidden><h2>Warnings</h2><div id="dlgnotes"></div></div>
     <div class="card" id="dlghistcard" hidden><h2>Answers</h2><table class="list" id="dlghist"></table></div>
   </div></section>
   <section class="panel" id="panel-stats" hidden><div class="narrow"><div class="card"><h2>Library statistics <button class="plain" id="statsrefresh">Refresh</button></h2><div id="stats"><p class="muted">Loading…</p></div></div></div></section>
@@ -368,19 +372,25 @@ async function pollState() {
   try { st = await get("/api/state", "json"); } catch (e) { lost(e); $("led").className = "led"; $("led").style.background = "var(--muted)"; $("led").title = "no connection"; return; }
   $("led").style.background = "";
   const tabBtn = document.querySelector('.tabs button[data-tab="dialogue"]');
-  // The Dialogue tab's light (amber): the current job waits for an answer, wherever
+  // The Actions tab's light (amber): the current job waits for an answer, wherever
   // it was started; or the library could not load without one.
   const waitTitle = st.asking ? "A question waits for your answer here"
     : (st.terminal && st.busy) ? "The running job (" + (st.job || "") + ") waits for your answer on the terminal it was started from"
     : (st.answer && !st.busy) ? "The library is not loaded: it needed an answer. Run Check here, or bib.check in a terminal." : "";
   const dlgTitle = waitTitle || "No question waiting";
-  tabBtn.innerHTML = "Dialogue" + '<span class="' + (waitTitle ? "waiting" : "waiting idle") + '" title="' + esc(dlgTitle) + '"></span>';
+  tabBtn.innerHTML = "Actions" + '<span class="' + (waitTitle ? "waiting" : "waiting idle") + '" title="' + esc(dlgTitle) + '"></span>';
   tabBtn.title = dlgTitle;
   // The Log tab's light: red while work is underway (a job, the library or the lists
   // being brought up to date), green when idle and up to date.
   const what = st.busy ? "Running: " + (st.job || "a job") : st.unloaded ? "Loading the library" : st.indexing ? "Bringing the lists up to date" : "";
   $("led").className = what ? "led busy" : "led";
   $("led").title = what || ("Idle, up to date" + (st.unpushed ? " (changes not pushed yet)" : ""));
+  // The number of cases on the action buttons ("Fix duplicates (1784)").
+  for (const b of document.querySelectorAll("[data-action]")) {
+    if (!b.dataset.label) b.dataset.label = b.textContent;
+    const n = st.counts ? st.counts[b.dataset.action] : undefined;
+    b.textContent = b.dataset.label + (n !== undefined ? " (" + n.toLocaleString() + ")" : "");
+  }
   if (seenIndex >= 0 && st.index !== seenIndex) { // a new index: refresh the tables shown
     for (const v of Object.values(views)) if (v instanceof SearchView && v.started) v.refreshRows();
   }
@@ -400,8 +410,12 @@ async function loadDialogue() {
   $("dlgdot").className = "dot " + (d.asking ? "warn" : d.running ? "busy" : "ok");
   $("dlgstop").hidden = !d.running;
   $("dlgopen").hidden = !d.asking;
+  $("dlgstepcard").hidden = !(d.running && (d.step || d.substep || d.current));
+  $("dlgstep").textContent = d.step || "—";
+  $("dlgsub").textContent = d.substep || "—";
+  $("dlgnow").textContent = (d.current || "").trim() || "—";
   $("dlgnotescard").hidden = !(d.notes && d.notes.length);
-  $("dlgnotes").innerHTML = (d.notes || []).map((n) => "<li>" + esc(n) + "</li>").join("");
+  $("dlgnotes").innerHTML = (d.notes || []).slice().reverse().map((n) => warnHTML(n.head, n.lines || [])).join("");
   $("dlghistcard").hidden = !(d.history && d.history.length);
   $("dlghist").innerHTML = (d.history || []).map((h) => '<tr><td class="year">' + esc(h.at) + "</td><td>" + esc(h.question.replace(/^QUESTION:\s*/, "")) +
     '</td><td class="key">' + esc(h.answer) + "</td></tr>").join("");
@@ -416,6 +430,18 @@ async function loadDialogue() {
     if (d.asking && (!qOpen || key !== qShown) && (qOpen || !$("overlay").classList.contains("open"))) openQuestion();
     else if (qOpen && !d.asking && !d.running) qEnded(d);
   }
+}
+// warnHTML renders a warning: its first line, value lines ("- Current : …") as a small
+// table with their notes ("(source: dblp)") under them, other lines as text.
+function warnHTML(head, lines) {
+  let rows = "", rest = "";
+  for (const l of lines) {
+    const m = l.match(/^\s*-\s*([^:]{1,24}?)\s*:\s*(.*)$/);
+    if (m) rows += '<tr><td class="f"><b>' + esc(m[1]) + "</b></td><td>" + esc(m[2]) + "</td></tr>";
+    else if (/^\s*\(.*\)\s*$/.test(l) && rows) rows += '<tr><td></td><td class="muted">' + esc(l.trim()) + "</td></tr>";
+    else rest += "<div>" + esc(l.trim()) + "</div>";
+  }
+  return '<div class="qwarn"><div>' + esc(head) + "</div>" + (rows ? '<table class="qvals">' + rows + "</table>" : "") + rest + "</div>";
 }
 // bibRows renders "name : value" lines as the entry pop-up's BibTeX layout.
 function bibRows(lines) {
@@ -473,16 +499,12 @@ function openQuestion() {
     if (b) { cur = b[1]; blocks[cur] = { header: b[2], lines: [] }; continue; }
     if (cur) blocks[cur].lines.push(l); else original.push(l);
   }
-  let html = warns.map((w) => {
-    let rows = "", rest = "";
-    for (const l of w.lines) {
-      const m = l.match(/^\s*-\s*([^:]{1,24}?)\s*:\s*(.*)$/);
-      if (m) rows += '<tr><td class="f"><b>' + esc(m[1]) + "</b></td><td>" + esc(m[2]) + "</td></tr>";
-      else if (/^\s*\(.*\)\s*$/.test(l) && rows) rows += '<tr><td></td><td class="muted">' + esc(l.trim()) + "</td></tr>";
-      else rest += "<div>" + esc(l.trim()) + "</div>";
-    }
-    return '<div class="qwarn"><div>' + esc(w.head) + "</div>" + (rows ? '<table class="qvals">' + rows + "</table>" : "") + rest + "</div>";
-  }).join("");
+  // A field challenge ("For entry X and field F:" with "- Current : …" and "- Challenger: …",
+  // asked as "Keep the value as is? (n/y/q)"): shown as a choice between the two values.
+  const challenge = warns.find((w) => /and field\s+(\S+?):?\s*$/.test(w.head) &&
+    w.lines.some((l) => /^\s*-\s*Current\s*:/.test(l)) && w.lines.some((l) => /^\s*-\s*Challenger\s*:/.test(l)));
+  const isChallenge = challenge && opts.includes("y") && opts.includes("n");
+  let html = warns.filter((w) => !(isChallenge && w === challenge)).map((w) => warnHTML(w.head, w.lines)).join("");
   // The entries the question is about: the run of headed BibTeX blocks ("Library entry:",
   // "Parent entry:", "@type{…") at the end of what came before the options, not the job's
   // earlier progress lines. Each heading gets a card.
@@ -499,6 +521,32 @@ function openQuestion() {
     const head = c.lines.find((l) => /^\s*@\w+\{/.test(l));
     html += '<div class="card ref" style="margin-bottom:8px">' + (c.title ? "<b>" + esc(c.title) + "</b> " : "") +
       (head ? '<span class="key">' + esc(head.trim().replace(/,$/, "")) + "}</span>" : "") + blockHTML("", c.lines) + "</div>";
+  }
+  if (isChallenge) {
+    const field = challenge.head.match(/and field\s+(\S+?):?\s*$/)[1];
+    const vals = {}; let last = "";
+    for (const l of challenge.lines) {
+      const m = l.match(/^\s*-\s*(Current|Challenger)\s*:\s*(.*)$/);
+      if (m) { last = m[1]; vals[last] = { value: m[2], note: "" }; }
+      else if (last && /^\s*\(.*\)\s*$/.test(l)) vals[last].note = l.trim().replace(/^\(|\)$/g, "");
+    }
+    const rest = challenge.lines.filter((l) => !/^\s*-\s*(Current|Challenger)\s*:/.test(l) && !/^\s*\(.*\)\s*$/.test(l) && !/needs to be resolved/.test(l));
+    if (!cards.length) html = '<div class="qwarn">' + esc(challenge.head) + "</div>" + html;
+    html = html.replace('<div class="card ref" style="margin-bottom:8px"><b>Current entry</b>', '<div class="card ref" style="margin-bottom:8px"><b>For entry</b>');
+    html += '<div class="qtext">Select as ' + esc(field) + ":</div>" + (rest.length ? '<div class="muted">' + rest.map((l) => esc(l.trim())).join("<br>") + "</div>" : "") +
+      '<div class="qopts">' + [["Current", "y"], ["Challenger", "n"]].map(([name, ans]) => vals[name] ?
+        '<label><input type="radio" name="qopt" value="' + ans + '"><div><span class="qlabel">' + name + '</span><div class="qbib" style="font-size:13.5px">' + esc(vals[name].value) + "</div>" +
+        (vals[name].note ? '<div class="muted" style="font-size:12.5px">' + esc(vals[name].note) + "</div>" : "") + "</div></label>" : "").join("") + "</div>" +
+      '<div class="qactions"><button class="action" id="qconfirm" disabled>Confirm</button><span style="flex:1"></span>' +
+      (opts.includes("q") ? '<button class="plain" id="qstop" title="Stop the job">Stop</button>' : "") + "</div>";
+    qOpen = true;
+    qShown = d.next + "|" + d.question;
+    popup("Question — " + (d.title || ""), html, false);
+    const cb = $("qconfirm");
+    for (const r of $("mbody").querySelectorAll('input[name="qopt"]')) r.onchange = () => { cb.disabled = false; };
+    cb.onclick = () => { const r = $("mbody").querySelector('input[name="qopt"]:checked'); if (r) sendAnswer(r.value); };
+    if ($("qstop")) $("qstop").onclick = () => sendAnswer("q");
+    return;
   }
   html += '<div class="qtext">' + esc(qtext || "Your answer?") + "</div>";
   // Options with a button of their own: "none" (0), "enter key manually" (k: Lookup),
