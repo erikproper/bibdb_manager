@@ -78,6 +78,8 @@ func (w *TWebUI) start() {
 	mux.HandleFunc(prefix+"/api/entries", w.handleEntries)
 	mux.HandleFunc(prefix+"/api/log", w.handleLog)
 	mux.HandleFunc(prefix+"/api/state", w.handleState)
+	mux.HandleFunc(prefix+"/api/dialogue", w.handleDialogue)
+	mux.HandleFunc(prefix+"/api/dialogue/", w.handleDialogue)
 	mux.HandleFunc(prefix+"/api/stop", w.handleStop)
 	mux.HandleFunc(prefix+"/api/prefs", w.handlePrefs)
 	mux.HandleFunc(prefix+"/frag/edit/", w.handleEditFrag)
@@ -201,7 +203,9 @@ func (w *TWebUI) handleState(rw http.ResponseWriter, r *http.Request) {
 		"index":    webIndexVersion.Load(),
 		"unloaded": serviceLibraryLevel == libraryNotLoaded,
 		"unpushed": readLibraryUnpushed() != nil,
-		"answer":   libraryNeedsAnswer.Load(),
+		"answer":   libraryNeedsAnswer.Load() || dialogue.Asking(),
+		"asking":   dialogue.Asking(),
+		"terminal": jobAsksOnTerminal(),
 	})
 }
 

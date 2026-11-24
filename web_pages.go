@@ -40,7 +40,7 @@ header { background: var(--primary); color: var(--primary-text); padding: 0 16px
 header .title { font-size: 20px; font-weight: 400; white-space: nowrap; }
 header .ver { font-size: 12px; opacity: .75; white-space: nowrap; }
 header .conn { margin-left: auto; font-size: 13px; } /* pushes the version to the far right */
-header .led { margin: 0 -8px 2px; width: 12px; /* on the baseline: its ring (2px) ends there */ height: 12px; border-radius: 50%; flex: none; background: var(--ok);
+header .led { display: inline-block; margin: 0 0 0 7px; vertical-align: 0; width: 9px; height: 9px; border-radius: 50%; flex: none; background: var(--ok);
               box-shadow: 0 0 0 2px rgba(255,255,255,.6); }
 header .led.busy { background: var(--danger); animation: ledpulse 1s ease-in-out infinite alternate; }
 @keyframes ledpulse { from { opacity: 1; } to { opacity: .45; } }
@@ -151,6 +151,14 @@ table.grid td.op button { background: transparent; border: 1px solid var(--borde
 .loading { padding: 12px; }
 
 /* Log */
+.dialoguecard { flex: 1; min-height: 0; display: flex; flex-direction: column; margin: 0; }
+.dlgask { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 10px; padding: 8px 10px;
+          border-radius: 10px; background: var(--hover); border-left: 4px solid var(--warn); }
+.dlgask input { flex: 1; min-width: 200px; font: 13px ui-monospace, Menlo, monospace; padding: 5px 8px;
+                border: 1px solid var(--border); border-radius: 6px; background: var(--card); color: var(--text); }
+.dlgask button { min-width: 2.4em; }
+.tabs button .waiting { display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: var(--warn); margin-left: 7px;
+                        box-shadow: 0 0 0 2px rgba(255,255,255,.6); animation: ledpulse 1s ease-in-out infinite alternate; }
 .logcard { flex: 1; min-height: 0; display: flex; flex-direction: column; margin: 0; }
 pre.log { flex: 1; min-height: 0; overflow: auto; margin: 0; white-space: pre-wrap; font: 12px/1.4 ui-monospace, Menlo, monospace; }
 
@@ -177,12 +185,12 @@ pre.log { flex: 1; min-height: 0; overflow: auto; margin: 0; white-space: pre-wr
 <body>
 <header>
   <span class="title">{{.Library}}</span>
-  <span class="led" id="led" title=""></span>
   <nav class="tabs" id="tabs">
     <button data-tab="status">Status</button>
     <button data-tab="search">Search</button>
+    <button data-tab="dialogue">Dialogue</button>
     <button data-tab="stats">Statistics</button>
-    <button data-tab="log">Log</button>
+    <button data-tab="log">Log<span class="led" id="led" title=""></span></button>
   </nav>
   <span class="conn" id="conn"></span>
   <span class="ver" title="bibtex_check version">{{.Version}}</span>
@@ -191,6 +199,25 @@ pre.log { flex: 1; min-height: 0; overflow: auto; margin: 0; white-space: pre-wr
 <main>
   <section class="panel" id="panel-status" hidden><div class="narrow" id="status"><p class="muted">Loading…</p></div></section>
   <section class="panel fill" id="panel-search" hidden></section>
+  <section class="panel fill" id="panel-dialogue" hidden>
+    <div class="card dialoguecard">
+      <div class="line" style="margin:0 0 10px">
+        <span class="label">Actions</span>
+        <button class="plain" data-action="check" title="bib.check: check the library">Check</button>
+        <button class="plain" data-action="homework" title="bib.check -homework">Homework</button>
+        <button class="plain" data-action="fix_candidates" title="bib.check -fix_candidates">Fix DBLP candidates</button>
+        <button class="plain" data-action="fix_duplicates" title="bib.check -fix_duplicates">Fix duplicates</button>
+        <button class="plain" data-action="push" title="bib.check -push">Push</button>
+        <span style="margin-left:auto" class="muted" id="dlgstate"></span>
+        <button class="action danger" id="dlgstop" hidden title="Stop the job, as Ctrl-C does">Stop</button>
+      </div>
+      <pre class="log" id="dlglog"></pre>
+      <div class="dlgask" id="dlgask" hidden>
+        <span class="label">Answer</span><span id="dlgopts"></span>
+        <input id="dlgtext" placeholder="or type an answer, then Enter" autocomplete="off">
+      </div>
+    </div>
+  </section>
   <section class="panel" id="panel-stats" hidden><div class="narrow"><div class="card"><h2>Library statistics <button class="plain" id="statsrefresh">Refresh</button></h2><div id="stats"><p class="muted">Loading…</p></div></div></div></section>
   <section class="panel fill" id="panel-log" hidden><div class="card logcard"><h2>Log <span class="muted">(the service and its jobs)</span>
       <button class="plain" id="logend">To the end</button></h2><pre class="log" id="log"></pre></div></section>
@@ -322,12 +349,16 @@ async function pollState() {
   let st;
   try { st = await get("/api/state", "json"); } catch (e) { lost(e); $("led").className = "led"; $("led").style.background = "var(--muted)"; $("led").title = "no connection"; return; }
   $("led").style.background = "";
-  if (st.answer && !st.busy) { // pending: the library waits for an answer
-    $("led").className = "led";
-    $("led").style.background = "var(--warn)";
-    $("led").title = "The library is not loaded: it needs an answer (e.g. after a run that did not finish). Run bib.check in a terminal.";
-    return;
-  }
+  const tabBtn = document.querySelector('.tabs button[data-tab="dialogue"]');
+  // The Dialogue tab's light (amber): the current job waits for an answer, wherever
+  // it was started; or the library could not load without one.
+  const waitTitle = st.asking ? "A question waits for your answer here"
+    : (st.terminal && st.busy) ? "The running job (" + (st.job || "") + ") waits for your answer on the terminal it was started from"
+    : (st.answer && !st.busy) ? "The library is not loaded: it needed an answer. Run Check here, or bib.check in a terminal." : "";
+  tabBtn.innerHTML = "Dialogue" + (waitTitle ? '<span class="waiting" title="' + esc(waitTitle) + '"></span>' : "");
+  tabBtn.title = waitTitle;
+  // The Log tab's light: red while work is underway (a job, the library or the lists
+  // being brought up to date), green when idle and up to date.
   const what = st.busy ? "Running: " + (st.job || "a job") : st.unloaded ? "Loading the library" : st.indexing ? "Bringing the lists up to date" : "";
   $("led").className = what ? "led busy" : "led";
   $("led").title = what || ("Idle, up to date" + (st.unpushed ? " (changes not pushed yet)" : ""));
@@ -337,6 +368,48 @@ async function pollState() {
   seenIndex = st.index;
 }
 setInterval(() => { if (!stopped) pollState(); }, 2000);
+
+// ---- Dialogue: actions, the job's output, its questions ----
+let dlgNext = 0, dlgLines = [], dlgTitle = "", dlgShown = false;
+async function loadDialogue() {
+  let d;
+  try { d = await get("/api/dialogue?from=" + dlgNext, "json"); } catch (e) { lost(e); return; }
+  const box = $("dlglog"), atEnd = box.scrollTop + box.clientHeight >= box.scrollHeight - 30;
+  if (d.title !== dlgTitle || d.next < dlgNext) { dlgLines = []; dlgTitle = d.title; }
+  dlgLines.push(...d.lines);
+  dlgNext = d.next;
+  box.textContent = dlgLines.join("\n") + (d.current ? (dlgLines.length ? "\n" : "") + d.current : "");
+  if (atEnd || !dlgShown) { box.scrollTop = box.scrollHeight; dlgShown = true; }
+  $("dlgstate").textContent = d.title ? d.title + (d.running ? " — running since " + d.since : " — ended" + (d.code ? " (code " + d.code + ")" : "")) : "No job yet.";
+  $("dlgstop").hidden = !d.running;
+  const wasHidden = $("dlgask").hidden;
+  $("dlgask").hidden = !d.asking;
+  if (d.asking) {
+    $("dlgopts").innerHTML = (d.options || []).map((o) => '<button class="plain" data-answer="' + esc(o) + '">' + esc(o) + "</button>").join(" ");
+    if (wasHidden && current === "dialogue") $("dlgtext").focus();
+  }
+}
+async function answer(text) {
+  try {
+    const r = await fetch(BASE + "/api/dialogue/answer", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }) });
+    if (!r.ok && r.status !== 409) alert(await r.text());
+  } catch (e) { lost(e); }
+  $("dlgask").hidden = true;
+  setTimeout(loadDialogue, 300);
+}
+$("dlgopts").addEventListener("click", (e) => { const b = e.target.closest("button[data-answer]"); if (b) answer(b.dataset.answer); });
+$("dlgtext").addEventListener("keydown", (e) => { if (e.key === "Enter") { const t = $("dlgtext").value; $("dlgtext").value = ""; answer(t); } });
+$("dlgstop").onclick = async () => { try { await fetch(BASE + "/api/dialogue/stop", { method: "POST" }); } catch (e) {} setTimeout(loadDialogue, 300); };
+for (const b of document.querySelectorAll("[data-action]")) b.onclick = async () => {
+  try {
+    const r = await fetch(BASE + "/api/dialogue/start", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: b.dataset.action }) });
+    if (!r.ok) { alert(await r.text()); return; }
+  } catch (e) { lost(e); }
+  dlgShown = false;
+  setTimeout(loadDialogue, 300);
+};
+onShow.dialogue = loadDialogue;
+every("dialogue", 1000, loadDialogue);
 
 // ---- status ----
 async function loadStatus() { try { $("status").innerHTML = await get("/frag/status"); } catch (e) { lost(e); } }
@@ -718,7 +791,7 @@ async function refreshSelects() {
     b.className = "seltab";
     b.title = info.dir + "/" + info.name + ".keys";
     b.innerHTML = tabHTML;
-    $("tabs").insertBefore(b, document.querySelector('.tabs button[data-tab="stats"]')); // after Search and the earlier Select tabs
+    $("tabs").insertBefore(b, document.querySelector('.tabs button[data-tab="dialogue"]')); // after Search and the earlier Select tabs
     const panel = document.createElement("section");
     panel.className = "panel fill";
     panel.id = "panel-" + name;
@@ -889,7 +962,7 @@ function openEditAuthor(id) {
     b.dataset.tab = name;
     b.className = "edittab";
     b.innerHTML = "Author: " + esc(id) + '<span class="tabx" title="Close this tab">×</span>';
-    $("tabs").insertBefore(b, document.querySelector('.tabs button[data-tab="stats"]'));
+    $("tabs").insertBefore(b, document.querySelector('.tabs button[data-tab="dialogue"]'));
     const panel = document.createElement("section");
     panel.className = "panel";
     panel.id = "panel-" + name;
@@ -908,7 +981,7 @@ function openEdit(key) {
     b.className = "edittab";
     b.title = "Edit " + key;
     b.innerHTML = "Edit: " + esc(key) + '<span class="tabx" title="Close this tab">×</span>';
-    $("tabs").insertBefore(b, document.querySelector('.tabs button[data-tab="stats"]'));
+    $("tabs").insertBefore(b, document.querySelector('.tabs button[data-tab="dialogue"]'));
     const panel = document.createElement("section");
     panel.className = "panel";
     panel.id = "panel-" + name;

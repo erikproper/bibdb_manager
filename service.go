@@ -634,10 +634,15 @@ func (s *TService) runJob(req serviceFrame, dec *json.Decoder, out *frameSender)
 
 	s.mu.Lock()
 	// The service's own push: wait for it, rather than refuse.
+	toldAsking := false
 	for waited := false; s.busy && s.ownJob && !s.stopping.Load(); waited = true {
 		s.mu.Unlock()
 		if !waited {
 			out.send(serviceFrame{T: "info", D: "Waiting for the service: " + s.ownWhat + "...\n"}) //nolint:errcheck
+		}
+		if !toldAsking && dialogue.Asking() {
+			toldAsking = true
+			out.send(serviceFrame{T: "info", D: "It waits for an answer in the web UI's Dialogue tab (bib.check -ui).\n"}) //nolint:errcheck
 		}
 		time.Sleep(300 * time.Millisecond)
 		s.mu.Lock()

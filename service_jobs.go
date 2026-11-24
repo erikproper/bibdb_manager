@@ -161,6 +161,23 @@ func runsInService() bool {
 	return true
 }
 
+// currentJobIO is the running job's input/output (nil between jobs): the web
+// UI shows when it waits for an answer, wherever it was started.
+var currentJobIO atomic.Pointer[TSocketIO]
+
+// jobAsksOnTerminal tells whether the running job, started from a command line,
+// waits for an answer on its terminal.
+func jobAsksOnTerminal() bool {
+	sio := currentJobIO.Load()
+	if sio == nil {
+		return false
+	}
+	if _, web := sio.out.(teeSink); web {
+		return false // a job of the web UI: it asks in the Dialogue tab
+	}
+	return sio.asked.Load()
+}
+
 // TSocketIO is the TUserIO of a job run for a command line over the socket.
 type TSocketIO struct {
 	out         frameSink
@@ -270,6 +287,8 @@ func parseJobArguments(args []string) ([]string, bool) {
 // runJobInService runs the parsed command in this process and returns its exit
 // code. The caller holds the service's job slot.
 func (s *TService) runJobInService(req serviceFrame, positional []string, sio *TSocketIO) (code int) {
+	currentJobIO.Store(sio)
+	defer currentJobIO.Store(nil)
 	savedIO, savedTTY := userIO, isTTY
 	userIO, isTTY = sio, sio.interactive
 	if logFilePath != "" {
@@ -485,24 +504,15 @@ var reloadNotBefore time.Time
 // 2026-11-24), so the first command finds it loaded; commands arriving
 // meanwhile wait. The statistics go to the service log only.
 func (s *TService) loadAtStart() {
-	s.mu.Lock()
-	if s.busy || s.stopping.Load() {
-		s.mu.Unlock()
-		return
-	}
-	s.busy, s.ownJob, s.jobStop, s.jobArgs, s.jobFrom = true, true, nil, []string{"(loading the library)"}, time.Now()
-	s.ownWhat = "loading the library"
-	s.mu.Unlock()
 	fmt.Fprintf(os.Stderr, "%s  loading the library\n", time.Now().Format(time.DateTime))
-	s.runOwnJob([]string{"-load_library"}, logSink{})
-	s.mu.Lock()
-	s.busy, s.ownJob, s.lastActive = false, false, time.Now()
-	s.mu.Unlock()
+	// As the Dialogue tab's job: a question (e.g. whether to keep the changes of a
+	// run that did not finish) is answered there.
+	if s.runDialogueJob("Loading the library", [][]string{{"-load_library"}}, true, nil) != nil {
+		return // busy or stopping
+	}
 	if serviceLibraryLevel == libraryNotLoaded {
-		// It stopped at a question nobody here can answer (e.g. whether to keep the
-		// changes of a run that did not finish): a run from the command line has to.
 		libraryNeedsAnswer.Store(true)
-		fmt.Fprintf(os.Stderr, "%s  library not loaded: it needs an answer; run bib.check in a terminal\n", time.Now().Format(time.DateTime))
+		fmt.Fprintf(os.Stderr, "%s  library not loaded (see the Dialogue tab); run bib.check, or Check in the web UI\n", time.Now().Format(time.DateTime))
 		return
 	}
 	libraryNeedsAnswer.Store(false)
