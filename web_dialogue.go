@@ -104,6 +104,9 @@ func (d *TDialogue) write(s string) {
 func (d *TDialogue) track(line string) {
 	trimmed := strings.TrimSpace(line)
 	switch {
+	case strings.HasPrefix(trimmed, "WARNING:") && reHeadingWarning.MatchString(strings.TrimSpace(strings.TrimPrefix(trimmed, "WARNING:"))):
+		d.inNote = false // a heading printed as a warning ("WARNING:  First entry:")
+		return
 	case strings.HasPrefix(trimmed, "WARNING:"):
 		d.notes = append(d.notes, TDialogueNote{Head: strings.TrimSpace(strings.TrimPrefix(trimmed, "WARNING:"))})
 		d.inNote = true
@@ -150,6 +153,9 @@ func (dialogueSink) send(f serviceFrame) error {
 	}
 	return nil
 }
+
+// reHeadingWarning: a warning that is a heading of up to three words ("First entry:").
+var reHeadingWarning = regexp.MustCompile(`^[A-Z][\w-]*(?: [\w-]+){0,2}:$`)
 
 // reOptions finds a question's options at the end of its line: "(n/y/q)".
 var reOptions = regexp.MustCompile(`\(([^()\s/]{1,12}(?:/[^()\s/]{1,12})+)\)\s*:?\s*$`)

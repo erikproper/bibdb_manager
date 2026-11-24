@@ -159,6 +159,8 @@ table.grid td.op button { background: transparent; border: 1px solid var(--borde
 /* Log */
 ul.notes { margin: 0; padding-left: 20px; } ul.notes li { margin: 4px 0; }
 .qwarn { padding: 8px 12px; border-radius: 10px; background: var(--hover); border-left: 4px solid var(--warn); margin-bottom: 12px; }
+.qframe { padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; margin-bottom: 8px; background: var(--card); }
+.qactions button { padding: 8px 16px; font-size: 14px; min-width: 7em; } /* Confirm, Stop and the others the same size */
 .qvals { margin: 6px 0 2px; border-collapse: collapse; } .qvals td { padding: 2px 10px 2px 0; vertical-align: top; } .qvals td.f { white-space: nowrap; }
 .qtext { font-weight: 600; margin: 12px 0 8px; }
 .qopts label { display: flex; gap: 10px; align-items: flex-start; padding: 8px 10px; border: 1px solid var(--border); border-radius: 10px; margin-bottom: 8px; cursor: pointer; background: var(--card); }
@@ -489,12 +491,16 @@ function openQuestion() {
   let cur = null, inWarn = null;
   for (const l of ctx) {
     const w = l.match(/^\s*WARNING:\s*(.*)$/);
+    // A heading printed as a warning ("WARNING:  First entry:") is a heading.
+    if (w && /^[A-Z][\w-]*(?: [\w-]+){0,2}:\s*$/.test(w[1].trim())) { inWarn = null; original.push(w[1].trim()); continue; }
     if (w) { inWarn = { head: w[1], lines: [] }; warns.push(inWarn); continue; }
     if (inWarn) {
       if (!l.trim() || /^\s*QUESTION:/.test(l) || /^\s*@\w+\{/.test(l) || /^\s*\[\w+\]/.test(l) || /^\s*[A-Z][^:{}=]{0,48}:\s*$/.test(l)) inWarn = null;
       else { inWarn.lines.push(l); continue; }
     }
-    if (/^\s*QUESTION:/.test(l)) continue; // a question's heading line ("QUESTION: Challenging entry:")
+    const qh = l.match(/^\s*QUESTION:\s*([A-Z][^:{}=]{0,48}:)\s*$/); // a question's heading ("QUESTION: Challenging entry:")
+    if (qh) { original.push(qh[1]); continue; }
+    if (/^\s*QUESTION:/.test(l)) continue;
     const b = l.match(/^\s*\[(\w+)\]\s*(.*)$/);
     if (b) { cur = b[1]; blocks[cur] = { header: b[2], lines: [] }; continue; }
     if (cur) blocks[cur].lines.push(l); else original.push(l);
@@ -517,12 +523,21 @@ function openQuestion() {
     if (/^\s*[A-Z][^:{}=]{0,48}:\s*$/.test(l) || (!cards.length)) cards.push({ title: /:\s*$/.test(l) ? l.trim().replace(/:$/, "") : "", lines: [] });
     if (!/:\s*$/.test(l) || /=/.test(l)) cards[cards.length - 1].lines.push(l);
   }
-  for (const c of cards) {
+  // An entry in a frame, laid out as BibTeX with its braces balanced.
+  const entryBox = (c) => {
     const head = c.lines.find((l) => /^\s*@\w+\{/.test(l));
-    html += '<div class="card ref" style="margin-bottom:8px">' + (c.title ? "<b>" + esc(c.title) + "</b> " : "") +
-      (head ? '<span class="key">' + esc(head.trim().replace(/,$/, "")) + "}</span>" : "") + blockHTML("", c.lines) + "</div>";
-  }
+    return '<div class="qframe"><div class="qbib">' + (head ? "<div>" + esc(head.trim()) + "</div>" : "") +
+      '<table style="margin-left:2ch">' + bibRows(c.lines.filter((l) => !/^\s*@\w+\{/.test(l) && !/^\s*\}\s*$/.test(l))).rows + "</table>" + (head ? "<div>}</div>" : "") + "</div></div>";
+  };
+  const challengingCard = cards.find((c) => /^challenging entry$/i.test(c.title));
+  const shownCards = cards.filter((c) => c !== challengingCard && c.lines.some((l) => /=/.test(l)));
+  for (const c of shownCards) html += (c.title ? '<div class="qtext">' + esc(c.title === "Current entry" && isChallenge ? "For entry" : c.title) + ":</div>" : "") + entryBox(c);
   if (isChallenge) {
+    // Further options the question offers ("b = break down by name", "e = edit"); the ones
+    // that show a DBLP entry in the external viewer (s, S) are left out: the challenging
+    // entry is shown below.
+    const cap = (t) => (t || "").charAt(0).toUpperCase() + (t || "").slice(1);
+    const extra = opts.filter((o) => !["y", "n", "q", "s", "S"].includes(o) && meaning[o]);
     const field = challenge.head.match(/and field\s+(\S+?):?\s*$/)[1];
     const vals = {}; let last = "";
     for (const l of challenge.lines) {
@@ -532,13 +547,14 @@ function openQuestion() {
     }
     const rest = challenge.lines.filter((l) => !/^\s*-\s*(Current|Challenger)\s*:/.test(l) && !/^\s*\(.*\)\s*$/.test(l) && !/needs to be resolved/.test(l));
     if (!cards.length) html = '<div class="qwarn">' + esc(challenge.head) + "</div>" + html;
-    html = html.replace('<div class="card ref" style="margin-bottom:8px"><b>Current entry</b>', '<div class="card ref" style="margin-bottom:8px"><b>For entry</b>');
     html += '<div class="qtext">Select as ' + esc(field) + ":</div>" + (rest.length ? '<div class="muted">' + rest.map((l) => esc(l.trim())).join("<br>") + "</div>" : "") +
       '<div class="qopts">' + [["Current", "y"], ["Challenger", "n"]].map(([name, ans]) => vals[name] ?
         '<label><input type="radio" name="qopt" value="' + ans + '"><div><span class="qlabel">' + name + '</span><div class="qbib" style="font-size:13.5px">' + esc(vals[name].value) + "</div>" +
         (vals[name].note ? '<div class="muted" style="font-size:12.5px">' + esc(vals[name].note) + "</div>" : "") + "</div></label>" : "").join("") + "</div>" +
-      '<div class="qactions"><button class="action" id="qconfirm" disabled>Confirm</button><span style="flex:1"></span>' +
-      (opts.includes("q") ? '<button class="plain" id="qstop" title="Stop the job">Stop</button>' : "") + "</div>";
+      '<div class="qactions"><button class="action" id="qconfirm" disabled>Confirm</button>' +
+      extra.map((o) => '<button class="plain" data-qopt="' + esc(o) + '">' + esc(cap(meaning[o])) + "</button>").join("") +
+      '<span style="flex:1"></span>' + (opts.includes("q") ? '<button class="plain" id="qstop" title="Stop the job">Stop</button>' : "") + "</div>" +
+      (challengingCard && challengingCard.lines.some((l) => /=/.test(l)) ? '<div class="qtext" style="margin-top:18px">From challenging entry:</div>' + entryBox(challengingCard) : "");
     qOpen = true;
     qShown = d.next + "|" + d.question;
     popup("Question — " + (d.title || ""), html, false);
@@ -546,6 +562,20 @@ function openQuestion() {
     for (const r of $("mbody").querySelectorAll('input[name="qopt"]')) r.onchange = () => { cb.disabled = false; };
     cb.onclick = () => { const r = $("mbody").querySelector('input[name="qopt"]:checked'); if (r) sendAnswer(r.value); };
     if ($("qstop")) $("qstop").onclick = () => sendAnswer("q");
+    for (const b of $("mbody").querySelectorAll("button[data-qopt]")) b.onclick = () => sendAnswer(b.dataset.qopt);
+    return;
+  }
+  // A yes/no question: two buttons (no radio buttons, no Confirm), named after what they
+  // do where the question says ("Merge these entries" → Merge / Keep).
+  if (opts.length && opts.every((o) => ["y", "n", "q"].includes(o)) && opts.includes("y") && opts.includes("n") && !Object.keys(blocks).length) {
+    const yes = /^merge\b/i.test(qtext) ? "Merge" : "Yes", no = /^merge\b/i.test(qtext) ? "Keep" : "No";
+    html += '<div class="qtext">' + esc(qtext) + "</div>" +
+      '<div class="qactions"><button class="action" data-qopt="y">' + yes + '</button><button class="plain" data-qopt="n">' + no + "</button>" +
+      '<span style="flex:1"></span>' + (opts.includes("q") ? '<button class="plain" data-qopt="q" title="Stop the job">Stop</button>' : "") + "</div>";
+    qOpen = true;
+    qShown = d.next + "|" + d.question;
+    popup("Question — " + (d.title || ""), html, false);
+    for (const b of $("mbody").querySelectorAll("button[data-qopt]")) b.onclick = () => sendAnswer(b.dataset.qopt);
     return;
   }
   html += '<div class="qtext">' + esc(qtext || "Your answer?") + "</div>";
@@ -626,7 +656,7 @@ function openLookup(keyOpt, cards) {
 function qWaiting() {
   const b = $("qconfirm");
   if (b) { b.disabled = true; b.textContent = "Waiting for the job…"; }
-  for (const el of $("mbody").querySelectorAll("input")) el.disabled = true;
+  for (const el of $("mbody").querySelectorAll("input, .qactions button")) el.disabled = true;
 }
 // qEnded: the job ended while the pop-up was open.
 function qEnded(d) {

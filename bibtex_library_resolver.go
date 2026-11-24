@@ -20,6 +20,7 @@ package main
 import (
 	"fmt"
 	"slices"
+	"sort"
 	"strings"
 )
 
@@ -339,7 +340,7 @@ func (l *TBibTeXLibrary) ResolveFieldValue(key, challengeKey, field, challengeRa
 		"- Challenger: %s\n" +
 		"    (source: %s)\n" +
 		"needs to be resolved"
-	question := "Challenging entry:\n" + l.EntryString(challengeKey, "", "  ")
+	question := "Challenging entry:\n" + l.challengingEntryString(challengeKey)
 	question += "Current entry:\n" + l.EntryString(key, "", "  ")
 	question += "Keep the value as is?"
 	if canBreakDown {
@@ -838,4 +839,47 @@ func (l *TBibTeXLibrary) MaybeResolveFieldValue(key, challengeKey, field, challe
 	}
 
 	return l.ResolveFieldValue(key, challengeKey, field, challenge, current)
+}
+
+// challengingEntryString shows the entry a challenge comes from: a library entry,
+// or (a "DBLP:<key>" challenge) the DBLP record from the local store with its DBLP
+// key, so the challenge can be judged in its context (Erik, 2026-11-24; before,
+// a DBLP challenger showed nothing here).
+func (l *TBibTeXLibrary) challengingEntryString(challengeKey string) string {
+	if s := l.EntryString(challengeKey, "", "  "); s != "" {
+		return s
+	}
+	dblpKey, ok := strings.CutPrefix(challengeKey, "DBLP:")
+	if !ok {
+		return ""
+	}
+	e := dblpEntryFromStore(dblpKey)
+	if e == nil {
+		return ""
+	}
+	fields := make([]string, 0, len(e.Fields))
+	width := 0
+	for f := range e.Fields {
+		if f != EntryTypeField {
+			fields = append(fields, f)
+			if len(f) > width {
+				width = len(f)
+			}
+		}
+	}
+	if _, has := e.Fields[DBLPField]; !has {
+		fields = append(fields, DBLPField)
+		e.Fields[DBLPField] = dblpKey
+	}
+	if len(DBLPField) > width {
+		width = len(DBLPField)
+	}
+	sort.Strings(fields)
+	var b strings.Builder
+	fmt.Fprintf(&b, "  @%s{%s,\n", e.Fields[EntryTypeField], challengeKey)
+	for _, f := range fields {
+		fmt.Fprintf(&b, "     %-*s = {%s},\n", width, f, e.Fields[f])
+	}
+	b.WriteString("  }\n")
+	return b.String()
 }
