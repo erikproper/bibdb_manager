@@ -371,14 +371,14 @@ func webIndexPage(query string, groups []string, sel *TSelectSession, onlySelect
 			cols = append(cols, c)
 		}
 	}
-	if !known[sortOn] && sortOn != "pdf" {
+	if !known[sortOn] && sortOn != "pdf" && !(sortOn == "sel" && sel != nil) {
 		sortOn = ""
 	}
 
 	query = strings.TrimSpace(query)
 	groupKey := strings.Join(groups, "\x00")
-	if sel != nil && onlySelected {
-		groupKey += "\x00sel:" + sel.ID + ":" + fmt.Sprint(sel.version())
+	if sel != nil && (onlySelected || sortOn == "sel") {
+		groupKey += "\x00sel:" + sel.ID + ":" + fmt.Sprint(onlySelected) + ":" + fmt.Sprint(sel.version())
 	}
 	if r := x.last; r.order == nil || r.query != query || r.groups != groupKey || r.sortOn != sortOn || r.desc != desc {
 		order := x.filter(query)
@@ -410,7 +410,13 @@ func webIndexPage(query string, groups []string, sel *TSelectSession, onlySelect
 		}
 		if sortOn != "" {
 			sortKeys := make([]string, len(x.keys))
-			if sortOn == "pdf" { // entries with a PDF first (ascending)
+			if sortOn == "sel" { // selected first, then kept (blue), then the rest (ascending)
+				sel.mu.Lock()
+				for _, i := range order {
+					sortKeys[i] = string(rune('a' + []int{2, 0, 1}[sel.state(x.keys[i])]))
+				}
+				sel.mu.Unlock()
+			} else if sortOn == "pdf" { // entries with a PDF first (ascending)
 				withPDF := entriesWithPDF()
 				for _, i := range order {
 					sortKeys[i] = "b"

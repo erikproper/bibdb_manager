@@ -98,6 +98,16 @@ func handleServiceCommands() bool {
 		return true
 	case cmdStartService:
 		startService()
+		// -start implies -ui (Erik, 2026-11-24), unless -ui=false is given.
+		uiOff := false
+		flag.Visit(func(f *flag.Flag) {
+			if f.Name == "ui" && !cmdOpenUI {
+				uiOff = true
+			}
+		})
+		if !uiOff {
+			openWebUI()
+		}
 		return true
 	case cmdStopService:
 		stopService()
@@ -297,6 +307,22 @@ func stopService() {
 	}
 }
 
+// waitForWebUI waits (at most 6 s) until the web UI answers on its port: a
+// service just started may still be waiting for the port (see TWebUI.start).
+func waitForWebUI(address string) {
+	u, err := url.Parse(address)
+	if err != nil {
+		return
+	}
+	for i := 0; i < 60; i++ {
+		if conn, err := net.DialTimeout("tcp", u.Host, 200*time.Millisecond); err == nil {
+			conn.Close()
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
 // openWebUI opens the service's web UI in the default browser.
 func openWebUI() {
 	conn := dialService()
@@ -312,6 +338,7 @@ func openWebUI() {
 		endRun(1)
 	}
 	address := strings.TrimSpace(f.D)
+	waitForWebUI(address)
 	if reuseBrowserTabAt(address, "") {
 		return
 	}

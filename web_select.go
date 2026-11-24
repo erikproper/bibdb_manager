@@ -606,3 +606,56 @@ func syncOutcome(code int, name, bibPath string, before os.FileInfo, selected in
 	}
 	return fmt.Sprintf("%s %s at %s (%s).", filepath.Base(bibPath), what, at, detail)
 }
+
+// handleSelState answers an entry's tick in each open Select tab (GET
+// /api/selstate?key=…; an old key counts as its entry), for its pop-up.
+func (w *TWebUI) handleSelState(rw http.ResponseWriter, r *http.Request) {
+	key := r.URL.Query().Get("key")
+	if ro, err := openReadOnly(); err == nil {
+		var canonical string
+		if ro.QueryRow(`SELECT key FROM key_oldies WHERE alias = ?`, key).Scan(&canonical) == nil {
+			key = canonical
+		}
+		ro.Close()
+	}
+	selectSessionsMu.Lock()
+	list := make([]*TSelectSession, 0, len(selectSessions))
+	for _, s := range selectSessions {
+		list = append(list, s)
+	}
+	selectSessionsMu.Unlock()
+	sort.Slice(list, func(i, j int) bool { return list[i].opened.Before(list[j].opened) })
+	type state struct {
+		ID    string `json:"id"`
+		Name  string `json:"name"`
+		Dir   string `json:"dir"`
+		Key   string `json:"key"`
+		State int    `json:"state"`
+	}
+	out := []state{}
+	for _, s := range list {
+		s.mu.Lock()
+		out = append(out, state{s.ID, s.File.Name, tildePath(s.File.Dir), key, s.state(key)})
+		s.mu.Unlock()
+	}
+	writeJSON(rw, out)
+}
+
+// handleSelStates answers the ticks of entries in one Select tab (GET
+// /api/selstates?sel=<id>&keys=k1,k2,…), for an author's pop-up.
+func (w *TWebUI) handleSelStates(rw http.ResponseWriter, r *http.Request) {
+	s := selectSession(r.URL.Query().Get("sel"))
+	if s == nil {
+		http.Error(rw, "this Select tab is closed", http.StatusNotFound)
+		return
+	}
+	out := map[string]int{}
+	s.mu.Lock()
+	for _, key := range strings.Split(r.URL.Query().Get("keys"), ",") {
+		if key != "" {
+			out[key] = s.state(key)
+		}
+	}
+	s.mu.Unlock()
+	writeJSON(rw, out)
+}

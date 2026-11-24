@@ -97,9 +97,11 @@ button.toggle { border: 1px solid var(--border); background: var(--card); color:
 button.toggle.on { background: var(--chosen); border-color: var(--chosen); color: #fff; }
 .tick { display: inline-block; width: 16px; height: 16px; border: 1.5px solid var(--muted); border-radius: 4px;
         vertical-align: middle; cursor: pointer; margin-right: 4px; text-align: center; line-height: 13px; font-size: 12px; color: transparent; }
+.selpick { display: inline-flex; align-items: center; gap: 2px; margin-right: 14px; cursor: pointer; font-size: 14px; }
 .tick.on { background: #fbc02d; border-color: #f9a825; color: #000; }
 .tick.kept { background: var(--primary); border-color: var(--primary); color: #fff; }
 .groupchip button { background: transparent; border: 0; color: #fff; cursor: pointer; font-size: 14px; padding: 0 4px; line-height: 1; }
+.searchinfo > *:not(.hint) { white-space: nowrap; flex: none; }
 .searchinfo { flex: none; display: flex; gap: 12px; align-items: center; margin-bottom: 8px; font-size: 13px; }
 .gridbox { flex: 1; min-height: 0; overflow: auto; background: var(--card); border-radius: 12px; box-shadow: var(--shadow); }
 table.grid { border-collapse: separate; border-spacing: 0; table-layout: fixed; font-size: 13px; }
@@ -110,6 +112,8 @@ table.grid th { position: sticky; top: 0; background: var(--card); z-index: 1; c
 table.grid th.drop { box-shadow: inset 3px 0 0 var(--primary); }
 table.grid th .grip { position: absolute; top: 0; right: -3px; width: 7px; height: 100%; cursor: col-resize; z-index: 2; }
 table.grid tbody tr:hover { background: var(--hover); }
+table.grid tbody tr, #mbody table.list tr:has(a.open) { cursor: pointer; }
+#mbody table.list tr:has(a.open):hover { background: var(--hover); }
 table.grid td.inh { color: var(--muted); font-style: italic; }
 table.grid td.op { padding: 2px 4px; text-align: left; }
 table.grid td.op button.rowpdf { margin-left: 4px; padding: 0 4px; vertical-align: middle; }
@@ -285,7 +289,13 @@ class SearchView {
     let typing;
     el.q.addEventListener("input", () => { clearTimeout(typing); typing = setTimeout(() => { this.query = el.q.value.trim(); this.reload(); }, 300); });
     el.q.addEventListener("keydown", (e) => { if (e.key === "Enter") { clearTimeout(typing); this.query = el.q.value.trim(); this.reload(); } });
-    el.grid.addEventListener("dblclick", (e) => { const tr = e.target.closest("tr[data-key]"); if (tr && !e.target.closest(".tick")) openEntry(tr.dataset.key); });
+    // A click anywhere on a row opens the entry, but on its buttons and tick (they act
+    // themselves) and when it ends selecting text.
+    el.grid.addEventListener("click", (e) => {
+      const tr = e.target.closest("tbody tr[data-key]");
+      if (!tr || e.target.closest(".tick, button, a") || String(window.getSelection())) return;
+      openEntry(tr.dataset.key);
+    });
     el.groupadd.onchange = () => { const g = el.groupadd.value; if (g) { this.groups.add(g); this.reload(); } };
     q("resetcols").onclick = () => { layout = JSON.parse(JSON.stringify(defaultLayout)); saveLayout(); this.reload(); };
     q("choosecols").onclick = () => this.chooseColumns();
@@ -307,11 +317,14 @@ class SearchView {
     this.seenLayout = layoutVersion;
     const g = this.el.grid, cg = g.querySelector("colgroup"), tr = g.querySelector("thead tr");
     cg.innerHTML = '<col style="width:' + this.opW + 'px">' + layout.cols.map((c) => '<col style="width:' + width(c) + 'px">').join("");
-    tr.innerHTML = '<th title="Sort on having a PDF">PDF' + (layout.sort === "pdf" ? (layout.desc ? " ▼" : " ▲") : "") + "</th>";
-    tr.firstChild.onclick = () => this.sortOn("pdf");
+    // The first column: in a Select tab "Selection" (sorts on it), else unnamed (sorts on having a PDF).
+    const first = this.sel ? "sel" : "pdf";
+    tr.innerHTML = '<th title="' + (this.sel ? "Sort on being selected" : "Sort on having a PDF") + '">' + (this.sel ? "Selection" : "") +
+      (this.sortKey() === first ? ((this.selSort ? this.selDesc : layout.desc) ? " ▼" : " ▲") : "") + "</th>";
+    tr.firstChild.onclick = () => this.sortOn(first);
     layout.cols.forEach((c, i) => {
       const th = document.createElement("th");
-      th.textContent = c + (layout.sort === c ? (layout.desc ? " ▼" : " ▲") : "");
+      th.textContent = c + (this.sortKey() === c ? (layout.desc ? " ▼" : " ▲") : "");
       th.title = c;
       th.draggable = true;
       const grip = document.createElement("span");
@@ -346,7 +359,13 @@ class SearchView {
     this.header();
     this.renderRows(0);
   }
+  sortKey() { return this.selSort ? "sel" : layout.sort; }
   sortOn(c) {
+    if (c === "sel") { // a Select tab's own sorting, not in the shared layout
+      if (this.selSort) this.selDesc = !this.selDesc; else { this.selSort = true; this.selDesc = false; }
+      this.header(); this.fetchRows(true); return;
+    }
+    this.selSort = false;
     if (layout.sort === c) layout.desc = !layout.desc;
     else { layout.sort = c; layout.desc = c === "year"; }
     saveLayout();
@@ -409,7 +428,8 @@ class SearchView {
     this.busy = true;
     const from = reset ? 0 : this.rows.length;
     if (reset) this.el.gridmore.textContent = "Loading…";
-    const p = new URLSearchParams({ q: this.query, groups: [...this.groups].join("\n"), sort: layout.sort, desc: layout.desc ? "1" : "0",
+    const p = new URLSearchParams({ q: this.query, groups: [...this.groups].join("\n"), sort: this.sortKey(),
+                                    desc: (this.selSort ? this.selDesc : layout.desc) ? "1" : "0",
                                     cols: layout.cols.join(","), from, n: PAGE });
     if (this.sel) { p.set("sel", this.sel.id); if (this.only) p.set("only", "1"); }
     if (!fields.length) p.set("fields", "1");
@@ -448,6 +468,12 @@ class SearchView {
       headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams(body || {}) });
     if (!r.ok) throw new Error(await r.text());
     return r.status === 204 ? null : r.json();
+  }
+  setTick(key, state) { // a tick changed elsewhere (an entry's pop-up)
+    const row = this.rows.find((r) => r.k === key);
+    if (row) row.t = state;
+    const tr = this.el.grid.querySelector('tr[data-key="' + CSS.escape(key) + '"] .tick');
+    if (tr) tr.outerHTML = this.tickHTML(state);
   }
   async toggle(tick) {
     const tr = tick.closest("tr[data-key]");
@@ -559,12 +585,78 @@ async function show(item) {
   try {
     const html = await get(item.kind === "entry" ? "/frag/entry/" + encodeURIComponent(item.id) : "/frag/author/" + encodeURIComponent(item.id));
     popup(item.title, html, true);
+    if (item.kind === "entry") showSelectTicks(item.id);
+    else if (item.origin && item.origin.startsWith("sel-")) showListTicks(item.origin.slice(4));
   } catch (e) { lost(e); popup(item.title, '<p class="muted">' + esc(e.message || e) + "</p>", true); }
 }
-function open1(kind, id, title) { const item = { kind, id, title }; stack.push(item); show(item); }
+
+// In an author's pop-up opened from a Select tab: a tick before each entry, for
+// that tab's selection.
+async function showListTicks(selID) {
+  const links = [...$("mbody").querySelectorAll("table.list a.open[data-entry]")];
+  if (!links.length) return;
+  let states;
+  try { states = await get("/api/selstates?sel=" + selID + "&keys=" + encodeURIComponent(links.map((a) => a.dataset.entry).join(",")), "json"); }
+  catch (e) { return; }
+  const view = views["sel-" + selID];
+  const label = view ? document.querySelector('.tabs button[data-tab="sel-' + selID + '"]').dataset.label : "";
+  const head = $("mbody").querySelectorAll(".card h2");
+  if (head.length > 1 && label) head[1].insertAdjacentHTML("beforeend", ' <span class="muted">— ticks: Select: ' + esc(label) + "</span>");
+  for (const a of links) {
+    const key = a.dataset.entry, tr = a.closest("tr");
+    tr.insertAdjacentHTML("afterbegin", '<td style="width:28px"><span class="selpick" data-sel="' + esc(selID) + '" data-key="' + esc(key) + '">' + SearchView.prototype.tickHTML(states[key] || 0) + "</span></td>");
+    const pick = tr.firstElementChild.firstElementChild;
+    pick.onclick = () => selPick(pick);
+  }
+}
+
+// selPick turns a tick in a pop-up (as in the Select tab itself).
+async function selPick(pick) {
+  const view = views["sel-" + pick.dataset.sel];
+  try {
+    const r = await fetch(BASE + "/api/select/" + pick.dataset.sel + "/toggle", { method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ key: pick.dataset.key }) });
+    if (!r.ok) throw new Error(await r.text());
+    const d = await r.json();
+    pick.querySelector(".tick").outerHTML = SearchView.prototype.tickHTML(d.state);
+    if (view) { view.setInfo(d.info); view.setTick(pick.dataset.key, d.state); }
+    if (d.error) alert(d.error);
+  } catch (e) { lost(e); alert(e.message || e); }
+}
+
+// In an entry's pop-up: a tick per open Select tab, as in the tab itself.
+async function showSelectTicks(key) {
+  let states;
+  try { states = await get("/api/selstate?key=" + encodeURIComponent(key), "json"); } catch (e) { return; }
+  if (!states || !states.length || !$("overlay").classList.contains("open")) return;
+  const labels = selectLabels(states);
+  const line = document.createElement("div");
+  line.className = "line";
+  line.innerHTML = '<span class="label">Select</span>' + states.map((st, i) =>
+    '<span class="selpick" data-sel="' + esc(st.id) + '" data-key="' + esc(st.key) + '">' + SearchView.prototype.tickHTML(st.state) + esc(labels[i]) + "</span>").join("");
+  const groups = $("mbody").querySelector(".line");
+  if (groups) groups.after(line); else $("mbody").prepend(line);
+  for (const pick of line.querySelectorAll(".selpick")) pick.onclick = () => selPick(pick);
+}
+// A chain of pop-ups remembers the tab it was opened from (origin): from a Select
+// tab, an author's entries can be ticked for that tab's selection.
+function open1(kind, id, title) {
+  const origin = stack.length ? stack[0].origin : current;
+  const item = { kind, id, title, origin };
+  stack.push(item);
+  show(item);
+}
 function openEntry(key) { open1("entry", key, key); }
 function closePopup() { stack = []; $("overlay").classList.remove("open"); }
 $("mclose").onclick = closePopup;
+// In a pop-up's list of entries (an author's), a click on a row opens the entry,
+// but on its links and tick, and when it ends selecting text.
+$("mbody").addEventListener("click", (e) => {
+  const tr = e.target.closest("table.list tr");
+  const open = tr && tr.querySelector("a.open[data-entry]");
+  if (!open || e.target.closest("a, button, .selpick") || String(window.getSelection())) return;
+  openEntry(open.dataset.entry);
+});
 $("mback").onclick = () => { if (stack.length > 1) { stack.pop(); show(stack[stack.length - 1]); } };
 $("overlay").addEventListener("mousedown", (e) => { if (e.target === $("overlay")) closePopup(); });
 document.addEventListener("keydown", (e) => { if (e.key === "Escape" && $("overlay").classList.contains("open")) closePopup(); });
@@ -601,8 +693,10 @@ layout.widths = Object.assign({}, layout.widths);
 views.search = new SearchView($("panel-search"), null);
 onShow.search = () => views.search.show();
 await refreshSelects();
-// #<tab>, or #entry:<key> (the Search tab with that entry's pop-up).
-if (location.hash.startsWith("#entry:")) { const key = decodeURIComponent(location.hash.slice(7)); showTab("search"); openEntry(key); }
+// #<tab>, or #entry:<key> (the Search tab with that entry's pop-up);
+// #<tab>/entry:<key> and #<tab>/author:<id>: that tab with the pop-up over it.
+const deep = location.hash.match(/^#(?:([^/]*)\/)?(entry|author):(.+)$/);
+if (deep) { showTab(deep[1] || "search"); const id = decodeURIComponent(deep[3]); open1(deep[2], id, id); }
 else showTab(location.hash.slice(1) || "search");
 })();
 </script>

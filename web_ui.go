@@ -76,6 +76,8 @@ func (w *TWebUI) start() {
 	mux.HandleFunc(prefix+"/api/stop", w.handleStop)
 	mux.HandleFunc(prefix+"/api/prefs", w.handlePrefs)
 	mux.HandleFunc(prefix+"/api/selects", w.handleSelects)
+	mux.HandleFunc(prefix+"/api/selstate", w.handleSelState)
+	mux.HandleFunc(prefix+"/api/selstates", w.handleSelStates)
 	mux.HandleFunc(prefix+"/api/select/", w.handleSelect)
 	mux.HandleFunc(prefix+"/pdf/", w.handlePDF)
 	// Any other address (e.g. the bare http://localhost:<port>/): say how to get
@@ -337,7 +339,8 @@ func (w *TWebUI) handleEntries(rw http.ResponseWriter, r *http.Request) {
 	writeJSON(rw, page)
 }
 
-// webEntryRow reads the few fields a list shows.
+// webEntryRow reads the few fields a list shows; the year is the crossref
+// parent's when the entry has none.
 func webEntryRow(ro *sql.DB, key string) TWebEntryRow {
 	row := TWebEntryRow{Key: key}
 	rows, err := ro.Query(`SELECT field, value FROM bib_entries WHERE entry_key = ? AND field IN ('entrytype', 'year', 'title')`, key)
@@ -356,6 +359,10 @@ func webEntryRow(ro *sql.DB, key string) TWebEntryRow {
 			}
 		}
 		rows.Close()
+	}
+	if row.Year == "" { // the crossref parent's
+		ro.QueryRow(`SELECT p.value FROM bib_entries c JOIN bib_entries p ON p.entry_key = c.value AND p.field = 'year'
+			WHERE c.entry_key = ? AND c.field = 'crossref'`, key).Scan(&row.Year) //nolint:errcheck
 	}
 	row.Authors = webContributors(ro, key, "author")
 	if len(row.Authors) == 0 {

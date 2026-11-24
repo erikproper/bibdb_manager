@@ -54,7 +54,7 @@ var (
 	Reporting TInteraction
 )
 
-const AppVersion = "30.82"
+const AppVersion = "30.87"
 
 // Run-state flags consumed by the write tail in main.
 var (
@@ -4159,7 +4159,7 @@ func main() {
 	flag.StringVar(&logFilePath, "l", "", "short for -log")
 	flag.StringVar(&cmdHarvestGroup, "group", "", "harvest: add all resolved entries to this group")
 
-	flag.BoolVar(&cmdStartService, "start", false, "start the service for this library in the background; commands then run through it")
+	flag.BoolVar(&cmdStartService, "start", false, "start the service for this library in the background (commands then run through it) and open its web UI (-ui=false: not)")
 	flag.BoolVar(&cmdStopService, "stop", false, "stop the service gracefully (a running job is stopped as with Ctrl-C)")
 	flag.BoolVar(&cmdOpenUI, "ui", false, "open the service's web UI in the browser (the service must run: -start)")
 	flag.BoolVar(&cmdSelect, "select", false, "open a Select tab in the web UI per .keys file of this folder's bib.config (optional arg: one file)")
