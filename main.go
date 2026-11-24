@@ -55,7 +55,7 @@ var (
 	Reporting TInteraction
 )
 
-const AppVersion = "30.123"
+const AppVersion = "30.129"
 
 // Run-state flags consumed by the write tail in main.
 var (
@@ -4195,6 +4195,7 @@ var (
 	cmdSetField                 bool
 	cmdEditEntry                bool
 	cmdRenameContributor        bool
+	cmdTableEdit                bool
 	cmdRenderAsBibTeX           bool
 	cmdRenderGroup              bool
 	cmdListGroupAliases         bool
@@ -4325,6 +4326,7 @@ func main() {
 	flag.BoolVar(&cmdAddToGroup, "add_to_group", false, "add an entry to a group: -add_to_group <key> <group>")
 	flag.BoolVar(&cmdRemoveFromGroup, "remove_from_group", false, "remove an entry from a group")
 	flag.BoolVar(&cmdSetGroups, "set_groups", false, "set group membership: -set_groups <key> [+] <group>...")
+	flag.BoolVar(&cmdTableEdit, "table_edit", false, "internal (web UI): change a row of a mapping or alias table: -table_edit <table> <json {op, row, old}>")
 	flag.BoolVar(&cmdRenameContributor, "rename_contributor", false, "give a contributor another stored name, keeping the old one as a name form: -rename_contributor <EP-id> <name>")
 	flag.BoolVar(&cmdEditEntry, "edit_entry", false, "internal (web UI): apply an entry's changes in one go: -edit_entry <key> <json {set, join, leave}>")
 	flag.BoolVar(&cmdSetField, "set_field", false, "set a field on an entry: -set_field <key> <field> [<value>] (omit value to clear)")

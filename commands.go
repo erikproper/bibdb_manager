@@ -469,6 +469,18 @@ func init() {
 			},
 		},
 		{
+			name:     "table_edit",
+			kind:     commandWrite,
+			selected: func() bool { return cmdTableEdit },
+			run: func(args []string) {
+				if len(args) != 2 {
+					messageln("Usage: -table_edit <table> <json>")
+					endRun(1)
+				}
+				doTableEdit(args)
+			},
+		},
+		{
 			name:     "rename_contributor",
 			kind:     commandWrite,
 			selected: func() bool { return cmdRenameContributor },

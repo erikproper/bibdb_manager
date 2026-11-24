@@ -78,6 +78,7 @@ func (w *TWebUI) start() {
 	mux.HandleFunc(prefix+"/api/entries", w.handleEntries)
 	mux.HandleFunc(prefix+"/api/log", w.handleLog)
 	mux.HandleFunc(prefix+"/api/state", w.handleState)
+	mux.HandleFunc(prefix+"/api/table/", w.handleTable)
 	mux.HandleFunc(prefix+"/api/dialogue", w.handleDialogue)
 	mux.HandleFunc(prefix+"/api/dialogue/", w.handleDialogue)
 	mux.HandleFunc(prefix+"/api/dblpsearch", w.handleDBLPSearch)

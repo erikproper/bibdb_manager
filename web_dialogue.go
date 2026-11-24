@@ -38,9 +38,36 @@ type TDialogue struct {
 	since   int              // the line number after the last answer: a question's context starts there
 	notes   []TDialogueNote  // the warnings of this job (shown in the tab)
 	inNote  bool             // the last warning still takes the lines that follow it
+	pending []dialogueLine   // finished lines not in the log yet: a question's context stays out of it
 	step    string           // the current step ("Opening the library:", "Step 3: …")
 	substep string           // the last sub-step line (indented) after it
 	history []TDialogueReply // the questions answered in this job
+}
+
+// dialogueLine is an output line waiting to go to the log.
+type dialogueLine struct {
+	text string
+	at   time.Time
+}
+
+// dialogueLogDelay: a finished line goes to the log after this, unless a question
+// comes first (its context is printed right before it asks): the log then gets the
+// issue and the action taken instead (Erik, 2026-11-24).
+const dialogueLogDelay = 400 * time.Millisecond
+
+// flushLog writes the pending lines older than the delay (all: force) to the log.
+func (d *TDialogue) flushLog(force bool) {
+	d.mu.Lock()
+	n := 0
+	for n < len(d.pending) && (force || time.Since(d.pending[n].at) >= dialogueLogDelay) {
+		n++
+	}
+	lines := d.pending[:n]
+	d.pending = append([]dialogueLine{}, d.pending[n:]...)
+	d.mu.Unlock()
+	for _, l := range lines {
+		fmt.Fprintln(os.Stderr, l.text)
+	}
 }
 
 // TDialogueNote is a warning: its first line and the lines that belong to it
@@ -87,6 +114,7 @@ func (d *TDialogue) write(s string) {
 		case '\n':
 			line := d.current.String()
 			d.track(line)
+			d.pending = append(d.pending, dialogueLine{line, time.Now()})
 			d.lines = append(d.lines, line)
 			d.ended++
 			d.current.Reset()
@@ -149,7 +177,20 @@ func (dialogueSink) send(f serviceFrame) error {
 	case "out", "err", "info":
 		dialogue.write(f.D)
 	case "ask", "askall":
-		dialogue.setAsking(true)
+		dialogue.mu.Lock()
+		// The question's context (the run of entry, option and warning lines right before
+		// it) stays out of the log; what came before it (progress) goes there.
+		cut := len(dialogue.pending)
+		for cut > 0 && isQuestionContext(dialogue.pending[cut-1].text) {
+			cut--
+		}
+		keep := dialogue.pending[:cut]
+		dialogue.pending = nil
+		dialogue.asking = true
+		dialogue.mu.Unlock()
+		for _, l := range keep {
+			fmt.Fprintln(os.Stderr, l.text)
+		}
 	}
 	return nil
 }
@@ -183,7 +224,7 @@ func lastLine(lines []string) string {
 // the background, with questions answered in the page. own: the service's own
 // job (a command from the command line waits for it rather than being
 // refused). done (when not nil) gets the last exit code.
-func (s *TService) runDialogueJob(title string, cmds [][]string, own bool, done func(int)) error {
+func (s *TService) runDialogueJob(title string, cmds [][]string, own bool, done func(int), dir ...string) error {
 	s.mu.Lock()
 	if s.busy || s.stopping.Load() {
 		running := strings.Join(s.jobArgs, " ")
@@ -196,8 +237,19 @@ func (s *TService) runDialogueJob(title string, cmds [][]string, own bool, done 
 	run := func() {
 		code := 0
 		for _, args := range cmds {
-			sio := &TSocketIO{out: teeSink{logSink{}, dialogueSink{}}, interactive: true, lines: make(chan string, 16)}
+			sio := &TSocketIO{out: dialogueSink{}, interactive: true, lines: make(chan string, 16)}
 			dialogue.start(title, sio)
+			flushDone := make(chan struct{})
+			go func() {
+				for {
+					select {
+					case <-flushDone:
+						return
+					case <-time.After(150 * time.Millisecond):
+						dialogue.flushLog(false)
+					}
+				}
+			}()
 			fmt.Fprintf(os.Stderr, "%s  job (Actions tab): %s\n", time.Now().Format(time.DateTime), strings.Join(append([]string{title + ":"}, args...), " "))
 			req := serviceFrame{T: "run", Args: append([]string{"-base", libraryBase()}, args...), Version: AppVersion, Base: libraryBase()}
 			flag.CommandLine.SetOutput(flagOutput{sio})
@@ -208,11 +260,22 @@ func (s *TService) runDialogueJob(title string, cmds [][]string, own bool, done 
 				s.jobStop = sio.interrupt
 				s.mu.Unlock()
 				deferServicePush = len(args) == 0 || args[0] != "-push" // -push pushes now
-				code = s.runJobInService(req, positional, sio)
+				if len(dir) > 0 && dir[0] != "" {                       // a job from a command line: its folder
+					cwd, _ := os.Getwd()
+					if os.Chdir(dir[0]) == nil {
+						req.Cwd = dir[0]
+						code = s.runJobInService(req, positional, sio)
+						os.Chdir(cwd) //nolint:errcheck
+					}
+				} else {
+					code = s.runJobInService(req, positional, sio)
+				}
 			}
 			sio.finished.Store(true)
 			sio.endInput()
+			close(flushDone)
 			dialogue.write(fmt.Sprintf("\n[ended with code %d]\n", code))
+			dialogue.flushLog(true)
 			dialogue.finish(code)
 			if code != 0 {
 				break
@@ -234,6 +297,14 @@ func (s *TService) runDialogueJob(title string, cmds [][]string, own bool, done 
 		go run()
 	}
 	return nil
+}
+
+// actionFromCommandLine: the commands that, asked for at a terminal, run in the
+// Actions tab (command name → title).
+var actionFromCommandLine = map[string]string{
+	"check": "Check", "homework": "Homework", "fix_candidates": "Fix DBLP candidates",
+	"fix_duplicates": "Fix duplicates", "enrich_contributor_data": "Enrich contributor data",
+	"merge_entries": "Merge entries", "sync": "Sync",
 }
 
 // dialogueActions are the action buttons: name → command.
@@ -327,12 +398,21 @@ func (w *TWebUI) handleDialogue(rw http.ResponseWriter, r *http.Request) {
 			q = strings.TrimSpace(lastLine(d.lines))
 		}
 		d.history = append(d.history, TDialogueReply{Question: q, Answer: req.Text, At: time.Now().Format("15:04:05")})
+		first := d.ended - len(d.lines)
+		ctxFrom := d.since
+		if ctxFrom < first {
+			ctxFrom = first
+		}
+		context := append([]string{}, d.lines[ctxFrom-first:]...)
 		d.mu.Unlock()
 		d.write(req.Text + "\n") // as a terminal echoes it
 		d.mu.Lock()
 		d.since = d.ended
+		d.pending = nil // the question line and the echoed answer: the log gets the summary below
 		d.mu.Unlock()
-		fmt.Fprintf(os.Stderr, "  answer (Actions tab): %s\n", req.Text) // the selection, in the log
+		for _, line := range summariseAnswer(q, context, req.Text) {
+			fmt.Fprintln(os.Stderr, line)
+		}
 		sio.asked.Store(false)
 		select {
 		case sio.lines <- req.Text:
@@ -487,3 +567,122 @@ func refreshActionCounts(busy bool) {
 	actionCountsValue, actionCountsVersion = counts, version
 	actionCountsMu.Unlock()
 }
+
+// summariseAnswer is what the log says about a question answered in the Actions
+// tab (Erik, 2026-11-24), instead of the question's context (the entries, the
+// candidates): "ISSUE: …" (its warning) or "CHALLENGE: …" (with the current and
+// challenging values), then "ACTION: …" (what the answer does).
+func summariseAnswer(question string, context []string, answer string) []string {
+	question = strings.TrimSpace(strings.TrimPrefix(question, "QUESTION:"))
+	// The warnings (with the lines that belong to them) and the numbered options.
+	type warning struct {
+		head  string
+		lines []string
+	}
+	var warns []warning
+	blocks := map[string]string{}
+	in := false
+	for _, l := range context {
+		t := strings.TrimSpace(l)
+		if h, ok := strings.CutPrefix(t, "WARNING:"); ok {
+			h = strings.TrimSpace(h)
+			if reHeadingWarning.MatchString(h) {
+				in = false
+				continue
+			}
+			warns = append(warns, warning{head: h})
+			in = true
+			continue
+		}
+		if in && t != "" && !strings.HasPrefix(t, "QUESTION:") && !strings.HasPrefix(t, "@") && !(strings.HasSuffix(t, ":") && !strings.HasPrefix(t, "-")) {
+			warns[len(warns)-1].lines = append(warns[len(warns)-1].lines, l)
+			continue
+		}
+		in = false
+		if m := reOptionBlock.FindStringSubmatch(t); m != nil {
+			blocks[m[1]] = m[2]
+		}
+	}
+	var out []string
+	field := ""
+	for _, w := range warns {
+		var values []string
+		for _, l := range w.lines {
+			if v := strings.TrimSpace(l); strings.HasPrefix(v, "- Current") || strings.HasPrefix(v, "- Challenger") {
+				values = append(values, v)
+			}
+		}
+		if len(values) == 2 {
+			out = append(out, "CHALLENGE: "+w.head)
+			out = append(out, values...)
+			if m := reChallengeField.FindStringSubmatch(w.head); m != nil {
+				field = m[1]
+			}
+		} else {
+			head := w.head
+			if i := strings.Index(head, " — "); i > 0 {
+				head = head[:i]
+			}
+			out = append(out, "ISSUE: "+head)
+		}
+	}
+	lower := strings.ToLower(question)
+	action := "Answered " + answer
+	switch {
+	case answer == "q":
+		action = "Stopped"
+	case blocks[answer] != "":
+		action = "Selected " + strings.Fields(blocks[answer])[0]
+	case strings.Contains(lower, "dblp entry matches") && answer == "0":
+		action = "No DBLP entry matches"
+	case strings.Contains(lower, "dblp entry matches") && answer == "k":
+		action = "Looking up the DBLP key"
+	case strings.HasPrefix(lower, "dblp key"):
+		action = "Entered DBLP key " + answer
+	case strings.HasPrefix(lower, "merge these entries"):
+		action = map[string]string{"y": "Merged", "n": "Kept apart"}[answer]
+	case strings.HasPrefix(lower, "keep current name"):
+		action = map[string]string{"Y": "Kept the current name, everywhere", "y": "Kept the current name, in this entry",
+			"N": "Took the challenger's name, everywhere", "n": "Took the challenger's name, in this entry",
+			"e": "Editing the canonical name", "d": "Different people"}[answer]
+	case strings.HasPrefix(lower, "keep the value as is"):
+		f := field
+		if f == "" {
+			f = "value"
+		}
+		action = map[string]string{"y": "Kept the current " + f, "Y": "Kept the current " + f + ", for all entries",
+			"n": "Took the challenger's " + f, "N": "Took the challenger's " + f + ", for all entries",
+			"e": "Editing the " + f, "b": "Breaking it down by name"}[answer]
+	case strings.HasPrefix(lower, "enter"):
+		action = "Entered: " + answer
+	}
+	if action == "" {
+		action = "Answered " + answer
+	}
+	return append(out, "ACTION: "+action)
+}
+
+var (
+	reOptionBlock    = regexp.MustCompile(`^\[(\w+)\]\s+(\S.*)$`)
+	reChallengeField = regexp.MustCompile(`field\s+(\S+?):?$`)
+)
+
+// isQuestionContext tells whether an output line belongs to a question's context:
+// an entry in BibTeX, a numbered option and its "key : value" lines, a warning and
+// the lines that go with it, a heading, a blank line.
+func isQuestionContext(line string) bool {
+	t := strings.TrimSpace(line)
+	switch {
+	case t == "", strings.HasPrefix(t, "WARNING:"), strings.HasPrefix(t, "QUESTION:"), strings.HasPrefix(t, "@"),
+		t == "}", strings.HasPrefix(t, "["), strings.HasPrefix(t, "- "), strings.HasPrefix(t, "("),
+		strings.HasPrefix(t, "Parent:"), t == "needs to be resolved":
+		return true
+	case strings.Contains(t, " = {"), reContextField.MatchString(t):
+		return true
+	case strings.HasSuffix(t, ":") && len(t) < 60:
+		return true
+	}
+	return false
+}
+
+var reContextField = regexp.MustCompile(`^[a-z][\w-]*\s+:\s`)

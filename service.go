@@ -235,6 +235,11 @@ func relayToService(conn net.Conn) int {
 			os.Stdout.WriteString(f.D) //nolint:errcheck
 		case "err", "info":
 			os.Stderr.WriteString(f.D) //nolint:errcheck
+		case "open": // the service started the job in the web UI: bring it up there
+			address, hash, _ := strings.Cut(f.D, "#")
+			if !reuseBrowserTabAt(address, "#"+hash) {
+				openInBrowser(f.D) //nolint:errcheck
+			}
 		case "exit":
 			return f.Code
 		}
@@ -662,7 +667,11 @@ func (s *TService) runJob(req serviceFrame, dec *json.Decoder, out *frameSender)
 	s.mu.Unlock()
 	libraryNeedsAnswer.Store(false) // a person runs a job: the question reaches them
 	reloadNotBefore = time.Time{}
+	routed := false // handed to the Actions tab: that job holds the slot now
 	defer func() {
+		if routed {
+			return
+		}
 		s.mu.Lock()
 		s.busy, s.jobStop, s.lastActive = false, nil, time.Now()
 		s.mu.Unlock()
@@ -676,6 +685,31 @@ func (s *TService) runJob(req serviceFrame, dec *json.Decoder, out *frameSender)
 	positional, ok := parseJobArguments(req.Args)
 	if !ok {
 		out.send(serviceFrame{T: "exit", Code: 2}) //nolint:errcheck
+		return
+	}
+
+	// An interactive check or fix asked for at a terminal runs in the web UI's Actions
+	// tab (Erik, 2026-11-24): its questions as pop-ups there, its summaries in the log.
+	// The command line says so and is free again. A run without a person (a script)
+	// stays on its terminal: it waits for the result.
+	if req.Interactive && runsInService() && actionFromCommandLine[selectCommand().name] != "" {
+		name := selectCommand().name
+		s.mu.Lock()
+		s.busy = false
+		s.mu.Unlock()
+		args := req.Args
+		if len(args) >= 2 && args[0] == "-base" {
+			args = args[2:]
+		}
+		if err := s.runDialogueJob(actionFromCommandLine[name], [][]string{args}, false, nil, req.Cwd); err != nil {
+			refuse(out, "%s\n", err)
+			return
+		}
+		routed = true
+		out.send(serviceFrame{T: "info", D: fmt.Sprintf("Started in the web UI's Actions tab (%s): answer its questions there; its output is in the Log tab.\n",
+			actionFromCommandLine[name])}) //nolint:errcheck
+		out.send(serviceFrame{T: "open", D: s.web.URL() + "#dialogue"}) //nolint:errcheck
+		out.send(serviceFrame{T: "exit"})                               //nolint:errcheck
 		return
 	}
 

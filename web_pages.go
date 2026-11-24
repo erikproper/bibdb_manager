@@ -159,6 +159,10 @@ table.grid td.op button { background: transparent; border: 1px solid var(--borde
 /* Log */
 ul.notes { margin: 0; padding-left: 20px; } ul.notes li { margin: 4px 0; }
 .qwarn { padding: 8px 12px; border-radius: 10px; background: var(--hover); border-left: 4px solid var(--warn); margin-bottom: 12px; }
+.qrow { display: flex; gap: 8px; align-items: center; padding: 8px 10px; border: 1px solid var(--border); border-radius: 10px; margin-bottom: 8px; background: var(--card); }
+.qrow button { padding: 6px 12px; font-size: 13px; min-width: 8.5em; }
+.qedit { display: flex; gap: 8px; margin-top: 10px; }
+.qedit input { flex: 1; font: 14px ui-monospace, Menlo, monospace; padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--card); color: var(--text); }
 .qframe { padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; margin-bottom: 8px; background: var(--card); }
 .qactions button { padding: 8px 16px; font-size: 14px; min-width: 7em; } /* Confirm, Stop and the others the same size */
 .qvals { margin: 6px 0 2px; border-collapse: collapse; } .qvals td { padding: 2px 10px 2px 0; vertical-align: top; } .qvals td.f { white-space: nowrap; }
@@ -206,6 +210,9 @@ pre.log { flex: 1; min-height: 0; overflow: auto; margin: 0; white-space: pre-wr
   <nav class="tabs" id="tabs">
     <button data-tab="status">Status</button>
     <button data-tab="search">Search</button>
+    <button data-tab="tbl-field_mappings">Field mappings</button>
+    <button data-tab="tbl-key_oldies">Old keys</button>
+    <button data-tab="tbl-key_hints">Key aliases</button>
     <button data-tab="dialogue">Actions<span class="waiting idle" title="No question waiting"></span></button>
     <button data-tab="stats">Statistics</button>
     <button data-tab="log">Log<span class="led" id="led" title=""></span></button>
@@ -217,15 +224,21 @@ pre.log { flex: 1; min-height: 0; overflow: auto; margin: 0; white-space: pre-wr
 <main>
   <section class="panel" id="panel-status" hidden><div class="narrow" id="status"><p class="muted">Loading…</p></div></section>
   <section class="panel fill" id="panel-search" hidden></section>
+  <section class="panel fill" id="panel-tbl-field_mappings" hidden></section>
+  <section class="panel fill" id="panel-tbl-key_oldies" hidden></section>
+  <section class="panel fill" id="panel-tbl-key_hints" hidden></section>
   <section class="panel" id="panel-dialogue" hidden><div class="narrow">
     <div class="card">
-      <div class="line" style="margin:0">
-        <span class="label">Actions</span>
+      <div class="line" style="margin:0 0 8px">
+        <span class="label" style="min-width:4.5em">Checks</span>
         <button class="plain" data-action="check" title="Check the library">Check</button>
         <button class="plain" data-action="homework" title="Run the pending homework in order">Homework</button>
         <button class="plain" data-action="fix_candidates" title="Link entries without a DBLP key to DBLP records">Fix DBLP candidates</button>
         <button class="plain" data-action="fix_duplicates" title="Resolve title duplicates">Fix duplicates</button>
         <button class="plain" data-action="enrich" title="Absorb DBLP names and ORCIDs, enrich from ORCID profiles, merge ORCID duplicates">Enrich contributors</button>
+      </div>
+      <div class="line" style="margin:0">
+        <span class="label" style="min-width:4.5em">Other</span>
         <button class="plain" data-action="push" title="Push the changes of this machine to the shared DB folder now">Push</button>
       </div>
     </div>
@@ -245,6 +258,12 @@ pre.log { flex: 1; min-height: 0; overflow: auto; margin: 0; white-space: pre-wr
   <section class="panel fill" id="panel-log" hidden><div class="card logcard"><h2>Log <span class="muted">(the service and its jobs)</span>
       <button class="plain" id="logend">To the end</button></h2><pre class="log" id="log"></pre></div></section>
 </main>
+<template id="tabletpl">
+  <div class="searchbar"><input type="search" class="tq" placeholder="Filter: words in any column" autocomplete="off">
+    <button class="action tadd" title="Add a row">+</button></div>
+  <div class="searchinfo"><span class="tcount muted"></span><span class="muted hint thelp"></span></div>
+  <div class="gridbox tbox"><table class="list ttable"><thead><tr></tr></thead><tbody></tbody></table><div class="loading muted tmore"></div></div>
+</template>
 <template id="searchtpl">
   <div class="searchbar"><input type="search" class="q" placeholder="Filter: words from the key, alias, title, authors, editors, year, venue, DOI (empty: all entries)" autocomplete="off"></div>
   <div class="selbar" hidden><b class="selname"></b><span class="selinfo muted"></span>
@@ -427,6 +446,10 @@ async function loadDialogue() {
   if (d.asking && pendingDblpKey && !(d.options && d.options.length) && /key/i.test(d.question || "")) {
     const k = pendingDblpKey; pendingDblpKey = ""; sendAnswer(k); return;
   }
+  // A value typed in the pop-up (Edit) answers the question that asks for it.
+  if (d.asking && pendingText !== null && !(d.options && d.options.length) && /enter|value|name/i.test(d.question || "")) {
+    const t = pendingText; pendingText = null; sendAnswer(t); return;
+  }
   const key = d.asking ? d.next + "|" + d.question : "";
   if (current === "dialogue") {
     if (d.asking && (!qOpen || key !== qShown) && (qOpen || !$("overlay").classList.contains("open"))) openQuestion();
@@ -532,12 +555,46 @@ function openQuestion() {
   const challengingCard = cards.find((c) => /^challenging entry$/i.test(c.title));
   const shownCards = cards.filter((c) => c !== challengingCard && c.lines.some((l) => /=/.test(l)));
   for (const c of shownCards) html += (c.title ? '<div class="qtext">' + esc(c.title === "Current entry" && isChallenge ? "For entry" : c.title) + ":</div>" : "") + entryBox(c);
+  // editRow: [Edit…] opens a field (prefilled); its value answers "e" and then the question
+  // that asks for the value.
+  const editHTML = (prefill) => '<div class="qedit" hidden><input id="qeditin" value="' + esc(prefill || "") + '" autocomplete="off"><button class="action" id="qeditok">Use this value</button></div>';
+  const wireEdit = (opt) => {
+    const btn = $("qeditbtn"); if (!btn) return;
+    btn.onclick = () => { const box = $("mbody").querySelector(".qedit"); box.hidden = false; $("qeditin").focus(); $("qeditin").select(); };
+    const go = () => { const v = $("qeditin").value.trim(); if (!v) return; pendingText = v; sendAnswer(opt); };
+    $("qeditok").onclick = go;
+    $("qeditin").onkeydown = (e) => { if (e.key === "Enter") go(); };
+  };
+  // A name pair ("Name 2 of 6 … for entry X field author:", "Keep current name?"): each name
+  // with its buttons, everywhere (a name mapping) or for this entry only.
+  const namePair = /^keep current name/i.test(qtext) && warns.find((w) => w.lines.some((l) => /^\s*-\s*Current\s*:/.test(l)));
+  if (namePair) {
+    const val = (who) => { const l = namePair.lines.find((x) => new RegExp("^\\s*-\\s*" + who + "\\s*:").test(x)); return l ? l.replace(/^\s*-\s*\w+\s*:\s*/, "") : ""; };
+    const cur = val("Current"), chal = val("Challenger");
+    html = '<div class="qwarn">' + esc(namePair.head) + "</div>" + html.replace(warnHTML(namePair.head, namePair.lines), "");
+    html += '<div class="qtext">Which name?</div><div class="qopts">' +
+      '<div class="qrow"><div><span class="qlabel">Current</span><div class="qbib" style="font-size:13.5px">' + esc(cur) + '</div></div><span style="flex:1"></span>' +
+        '<button class="plain" data-qopt="Y" title="Keep it, and map the other name to it in every entry">Keep everywhere</button><button class="plain" data-qopt="y" title="Keep it in this entry only">Keep here</button></div>' +
+      '<div class="qrow"><div><span class="qlabel">Challenger</span><div class="qbib" style="font-size:13.5px">' + esc(chal) + '</div></div><span style="flex:1"></span>' +
+        '<button class="plain" data-qopt="N" title="Take it, and map the current name to it in every entry">Take everywhere</button><button class="plain" data-qopt="n" title="Take it in this entry only">Take here</button></div></div>' +
+      '<div class="muted" style="font-size:13px;margin:-2px 0 6px">Everywhere: remembered as a name mapping, for all entries. Here: this entry only.</div>' +
+      '<div class="qactions"><button class="plain" id="qeditbtn" title="Type the canonical name: both names are mapped to it">Edit…</button>' +
+      '<button class="plain" data-qopt="d" title="These are two different people: never ask again">Different people</button><span style="flex:1"></span>' +
+      (opts.includes("q") ? '<button class="plain" data-qopt="q" title="Stop the job">Stop</button>' : "") + "</div>" + editHTML(cur);
+    qOpen = true;
+    qShown = d.next + "|" + d.question;
+    popup("Question — " + (d.title || ""), html, false);
+    for (const b of $("mbody").querySelectorAll("button[data-qopt]")) b.onclick = () => sendAnswer(b.dataset.qopt);
+    wireEdit("e");
+    return;
+  }
   if (isChallenge) {
     // Further options the question offers ("b = break down by name", "e = edit"); the ones
     // that show a DBLP entry in the external viewer (s, S) are left out: the challenging
     // entry is shown below.
     const cap = (t) => (t || "").charAt(0).toUpperCase() + (t || "").slice(1);
-    const extra = opts.filter((o) => !["y", "n", "q", "s", "S"].includes(o) && meaning[o]);
+    const extra = opts.filter((o) => !["y", "n", "Y", "N", "e", "q", "s", "S"].includes(o) && meaning[o]);
+    const forAll = opts.includes("Y") && opts.includes("N");
     const field = challenge.head.match(/and field\s+(\S+?):?\s*$/)[1];
     const vals = {}; let last = "";
     for (const l of challenge.lines) {
@@ -551,18 +608,25 @@ function openQuestion() {
       '<div class="qopts">' + [["Current", "y"], ["Challenger", "n"]].map(([name, ans]) => vals[name] ?
         '<label><input type="radio" name="qopt" value="' + ans + '"><div><span class="qlabel">' + name + '</span><div class="qbib" style="font-size:13.5px">' + esc(vals[name].value) + "</div>" +
         (vals[name].note ? '<div class="muted" style="font-size:12.5px">' + esc(vals[name].note) + "</div>" : "") + "</div></label>" : "").join("") + "</div>" +
+      (forAll ? '<label class="muted" style="display:block;margin:2px 0 8px;font-size:13px"><input type="checkbox" id="qforall"> for all entries (remembered: the other value is mapped to this one everywhere)</label>' : "") +
       '<div class="qactions"><button class="action" id="qconfirm" disabled>Confirm</button>' +
+      (opts.includes("e") ? '<button class="plain" id="qeditbtn" title="Type the value to use">Edit…</button>' : "") +
       extra.map((o) => '<button class="plain" data-qopt="' + esc(o) + '">' + esc(cap(meaning[o])) + "</button>").join("") +
       '<span style="flex:1"></span>' + (opts.includes("q") ? '<button class="plain" id="qstop" title="Stop the job">Stop</button>' : "") + "</div>" +
+      editHTML(vals.Current ? vals.Current.value : "") +
       (challengingCard && challengingCard.lines.some((l) => /=/.test(l)) ? '<div class="qtext" style="margin-top:18px">From challenging entry:</div>' + entryBox(challengingCard) : "");
     qOpen = true;
     qShown = d.next + "|" + d.question;
     popup("Question — " + (d.title || ""), html, false);
     const cb = $("qconfirm");
     for (const r of $("mbody").querySelectorAll('input[name="qopt"]')) r.onchange = () => { cb.disabled = false; };
-    cb.onclick = () => { const r = $("mbody").querySelector('input[name="qopt"]:checked'); if (r) sendAnswer(r.value); };
+    cb.onclick = () => {
+      const r = $("mbody").querySelector('input[name="qopt"]:checked');
+      if (r) sendAnswer($("qforall") && $("qforall").checked ? r.value.toUpperCase() : r.value);
+    };
     if ($("qstop")) $("qstop").onclick = () => sendAnswer("q");
     for (const b of $("mbody").querySelectorAll("button[data-qopt]")) b.onclick = () => sendAnswer(b.dataset.qopt);
+    wireEdit("e");
     return;
   }
   // A yes/no question: two buttons (no radio buttons, no Confirm), named after what they
@@ -578,7 +642,7 @@ function openQuestion() {
     for (const b of $("mbody").querySelectorAll("button[data-qopt]")) b.onclick = () => sendAnswer(b.dataset.qopt);
     return;
   }
-  html += '<div class="qtext">' + esc(qtext || "Your answer?") + "</div>";
+  html += '<div class="qtext">' + esc(qtext || "Your answer?") + "</div>"; // (replaced below for a single DBLP candidate)
   // Options with a button of their own: "none" (0), "enter key manually" (k: Lookup),
   // stop (q); the others are radio buttons (without their letters or numbers).
   const isNone = (o) => /^none$/i.test(meaning[o] || "");
@@ -586,14 +650,17 @@ function openQuestion() {
   const special = (o) => o === "q" || isNone(o) || isKey(o);
   const radios = opts.filter((o) => !special(o));
   const noneOpt = opts.find(isNone), keyOpt = opts.find(isKey), stopOpt = opts.includes("q") ? "q" : "";
+  // One DBLP candidate: "Possible DBLP entry match:", chosen already; Confirm takes it.
+  const single = radios.length === 1 && blocks[radios[0]] && /DBLP entry matches/i.test(qtext);
+  if (single) html = html.replace('<div class="qtext">' + esc(qtext) + "</div>", '<div class="qtext">Possible DBLP entry match:</div>');
   if (opts.length) {
     html += '<div class="qopts">' + radios.map((o) => {
       const blk = blocks[o];
       const label = blk ? esc(blk.header) : esc(meaning[o] || o);
-      return '<label><input type="radio" name="qopt" value="' + esc(o) + '"><div><span class="qlabel">' + label + "</span>" +
+      return '<label><input type="radio" name="qopt" value="' + esc(o) + '"' + (single ? " checked" : "") + '><div><span class="qlabel">' + label + "</span>" +
         (blk ? blockHTML(blk.header, blk.lines) : "") + "</div></label>";
     }).join("") + "</div>" +
-      '<div class="qactions">' + (radios.length ? '<button class="action" id="qconfirm" disabled>Confirm</button>' : "") +
+      '<div class="qactions">' + (radios.length ? '<button class="action" id="qconfirm"' + (single ? "" : " disabled") + ">Confirm</button>" : "") +
       (keyOpt ? '<button class="plain" id="qlookup" title="Find the key in the local DBLP data">Lookup</button>' : "") +
       (noneOpt ? '<button class="plain" id="qnone">' + esc(meaning[noneOpt].charAt(0).toUpperCase() + meaning[noneOpt].slice(1)) + "</button>" : "") +
       '<span style="flex:1"></span>' + (stopOpt ? '<button class="plain" id="qstop" title="Stop the job">Stop</button>' : "") + "</div>";
@@ -620,7 +687,7 @@ function openQuestion() {
 }
 // The Lookup pop-up: finds a DBLP key in the local DBLP data; "Use" answers the question
 // with "enter key manually" and then with that key.
-let pendingDblpKey = "";
+let pendingDblpKey = "", pendingText = null;
 function openLookup(keyOpt, cards) {
   const field = (name) => { for (const c of cards || []) for (const l of c.lines) { const m = l.match(new RegExp("^\\s*" + name + "\\s*=\\s*\\{(.*)\\},?\\s*$")); if (m) return m[1].replace(/[{}]/g, ""); } return ""; };
   const title = field("title"), firstAuthor = (field("author").split(" and ")[0] || "").trim();
@@ -1078,7 +1145,7 @@ async function refreshSelects() {
     b.className = "seltab";
     b.title = info.dir + "/" + info.name + ".keys";
     b.innerHTML = tabHTML;
-    $("tabs").insertBefore(b, document.querySelector('.tabs button[data-tab="dialogue"]')); // after Search and the earlier Select tabs
+    $("tabs").insertBefore(b, document.querySelector('.tabs button[data-tab="tbl-field_mappings"]')); // after Search and the earlier Select tabs
     const panel = document.createElement("section");
     panel.className = "panel fill";
     panel.id = "panel-" + name;
@@ -1095,6 +1162,93 @@ window.addEventListener("hashchange", async () => {
   if (name.startsWith("sel-") && !$("panel-" + name)) await refreshSelects();
   if (name && name !== current) showTab(name);
 });
+
+// ---- table tabs: a mapping or alias table, listed; "+" adds, × deletes, a click edits ----
+class TableView {
+  constructor(panel, name) {
+    this.panel = panel; this.name = name; this.rows = []; this.total = 0; this.gen = 0; this.query = ""; this.sort = ""; this.desc = false; this.busy = false;
+    panel.appendChild($("tabletpl").content.cloneNode(true));
+    const q = (c) => panel.querySelector("." + c);
+    this.el = { q: q("tq"), count: q("tcount"), help: q("thelp"), box: q("tbox"), table: q("ttable"), more: q("tmore") };
+    let typing;
+    this.el.q.addEventListener("input", () => { clearTimeout(typing); typing = setTimeout(() => { this.query = this.el.q.value.trim(); this.load(true); }, 300); });
+    this.el.box.addEventListener("scroll", () => { const b = this.el.box; if (this.rows.length < this.total && b.scrollTop + b.clientHeight > b.scrollHeight - 400) this.load(false); });
+    q("tadd").onclick = () => this.editRow(null);
+    this.el.table.addEventListener("click", (e) => {
+      const del = e.target.closest("button[data-del]");
+      const tr = e.target.closest("tbody tr[data-i]");
+      if (!tr) return;
+      const row = this.rows[+tr.dataset.i];
+      if (del) { e.stopPropagation(); this.deleteRow(row); } else this.editRow(row);
+    });
+    this.started = false;
+  }
+  show() { if (!this.started) { this.started = true; this.load(true); } this.el.q.focus(); }
+  async load(reset) {
+    if (this.busy && !reset) return;
+    const my = reset ? ++this.gen : this.gen; this.busy = true;
+    const p = new URLSearchParams({ q: this.query, sort: this.sort, desc: this.desc ? "1" : "0", from: reset ? 0 : this.rows.length, n: 300 });
+    try {
+      const d = await get("/api/table/" + this.name + "?" + p, "json");
+      if (my !== this.gen) return;
+      this.def = d.table; this.total = d.total;
+      this.el.help.textContent = d.table.help;
+      const got = d.rows.map((r) => Object.fromEntries(d.table.columns.map((c, i) => [c, r[i]])));
+      this.rows = reset ? got : this.rows.concat(got);
+      this.render();
+    } catch (e) { lost(e); } finally { if (my === this.gen) this.busy = false; }
+  }
+  render() {
+    const cols = this.def.columns;
+    this.el.table.querySelector("thead tr").innerHTML = cols.map((c) => '<th data-col="' + esc(c) + '" style="cursor:pointer">' + esc(c) +
+      (this.sort === c ? (this.desc ? " ▼" : " ▲") : "") + "</th>").join("") + "<th></th>";
+    for (const th of this.el.table.querySelectorAll("th[data-col]")) th.onclick = () => {
+      if (this.sort === th.dataset.col) this.desc = !this.desc; else { this.sort = th.dataset.col; this.desc = false; }
+      this.load(true);
+    };
+    this.el.table.querySelector("tbody").innerHTML = this.rows.map((r, i) => '<tr data-i="' + i + '" style="cursor:pointer">' +
+      cols.map((c) => '<td class="' + (/key|alias|hint|field/.test(c) ? "key" : "") + '">' + esc(r[c]) + "</td>").join("") +
+      '<td style="width:32px"><button class="plain" data-del="1" title="Delete this row">×</button></td></tr>').join("");
+    this.el.count.textContent = this.total.toLocaleString() + " rows" + (this.query ? " match" : "");
+    this.el.more.textContent = this.rows.length < this.total ? "Scroll for more (" + this.rows.length.toLocaleString() + " shown)…" : "";
+  }
+  editRow(row) {
+    const cols = this.def.columns;
+    popup((row ? "Change a row — " : "Add a row — ") + this.def.title, '<p class="muted" style="font-size:13px">' + esc(this.def.help) + "</p>" +
+      '<table class="edit">' + cols.map((c) => '<tr><td class="field">' + esc(c) + '</td><td><textarea class="edval" rows="1" data-col="' + esc(c) + '">' +
+        esc(row ? row[c] : "") + "</textarea></td></tr>").join("") + "</table>" +
+      '<div class="qactions"><button class="action" id="tsave">' + (row ? "Save" : "Add") + "</button>" +
+      (row ? '<button class="plain" id="tdel">Delete</button>' : "") + '<span style="flex:1"></span><button class="plain" id="tcancel">Cancel</button></div>' +
+      '<div class="muted" id="tmsg" style="margin-top:8px"></div>', false);
+    $("tcancel").onclick = closePopup;
+    if (row) $("tdel").onclick = () => this.deleteRow(row);
+    $("tsave").onclick = async () => {
+      const vals = {};
+      for (const t of $("mbody").querySelectorAll("textarea[data-col]")) vals[t.dataset.col] = t.value.trim();
+      await this.change(row ? { op: "update", row: vals, old: row } : { op: "add", row: vals });
+    };
+    const first = $("mbody").querySelector("textarea"); if (first) first.focus();
+  }
+  async deleteRow(row) {
+    if (!confirm("Delete this row from " + this.def.title + "?\n\n" + this.def.columns.map((c) => c + ": " + row[c]).join("\n"))) return;
+    await this.change({ op: "delete", row });
+  }
+  async change(edit) {
+    if ($("tmsg")) $("tmsg").textContent = "Saving…";
+    try {
+      const r = await fetch(BASE + "/api/table/" + this.name, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(edit) });
+      if (!r.ok) { alert(await r.text()); return; }
+      const d = await r.json();
+      if (!d.ok) { if ($("tmsg")) $("tmsg").textContent = d.message; else alert(d.message); return; }
+      closePopup(); toast(d.message); this.load(true);
+    } catch (e) { lost(e); }
+  }
+}
+for (const name of ["field_mappings", "key_oldies", "key_hints"]) {
+  const v = new TableView($("panel-tbl-" + name), name);
+  views["tbl-" + name] = v;
+  onShow["tbl-" + name] = () => v.show();
+}
 
 // ---- edit tabs (22.3c): an entry's form; Save runs bib.field (-set_field) per change ----
 class EditView {
@@ -1249,7 +1403,7 @@ function openEditAuthor(id) {
     b.dataset.tab = name;
     b.className = "edittab";
     b.innerHTML = "Author: " + esc(id) + '<span class="tabx" title="Close this tab">×</span>';
-    $("tabs").insertBefore(b, document.querySelector('.tabs button[data-tab="dialogue"]'));
+    $("tabs").insertBefore(b, document.querySelector('.tabs button[data-tab="tbl-field_mappings"]'));
     const panel = document.createElement("section");
     panel.className = "panel";
     panel.id = "panel-" + name;
@@ -1268,7 +1422,7 @@ function openEdit(key) {
     b.className = "edittab";
     b.title = "Edit " + key;
     b.innerHTML = "Edit: " + esc(key) + '<span class="tabx" title="Close this tab">×</span>';
-    $("tabs").insertBefore(b, document.querySelector('.tabs button[data-tab="dialogue"]'));
+    $("tabs").insertBefore(b, document.querySelector('.tabs button[data-tab="tbl-field_mappings"]'));
     const panel = document.createElement("section");
     panel.className = "panel";
     panel.id = "panel-" + name;

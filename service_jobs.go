@@ -225,6 +225,9 @@ func (s *TSocketIO) toWebLog(m string) {
 	if _, own := s.out.(logSink); own {
 		return
 	}
+	if _, dlg := s.out.(dialogueSink); dlg {
+		return // the Actions tab's job: it writes to the log itself (summaries for its questions)
+	}
 	if t, tee := s.out.(teeSink); tee {
 		if _, own := t.a.(logSink); own {
 			return

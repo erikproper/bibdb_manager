@@ -303,19 +303,19 @@ func (l *TBibTeXLibrary) ResolveFieldValue(key, challengeKey, field, challengeRa
 	singleAuthor := len(currentAuthorNames) == 1 && len(challengeAuthorNames) == 1
 
 	options := TStringSetNew()
+	// Editing the value (e) is offered for every challenge (Erik, 2026-11-24): the
+	// "e" case below works for any field (with name mappings for a single author).
 	if field == "author" || field == "editor" {
 		if canBreakDown {
-			options.Add("y", "n", "b")
-		} else if singleAuthor {
-			options.Add("y", "n", "e")
+			options.Add("y", "n", "b", "e")
 		} else {
-			options.Add("y", "n")
+			options.Add("y", "n", "e")
 		}
 	} else if field == EntryTypeField || field == "year" || field == "pages" ||
 		field == "month" || field == "dblp" || field == "title" || field == "number" || field == "booktitle" {
-		options.Add("y", "n")
+		options.Add("y", "n", "e")
 	} else {
-		options.Add("Y", "y", "n", "N")
+		options.Add("Y", "y", "n", "N", "e")
 	}
 	// Offer to show the original DBLP entry (via displayContent) when this entry
 	// has a DBLP key — lets the user cross-check "Current" vs "Challenger" against
@@ -343,11 +343,13 @@ func (l *TBibTeXLibrary) ResolveFieldValue(key, challengeKey, field, challengeRa
 	question := "Challenging entry:\n" + l.challengingEntryString(challengeKey)
 	question += "Current entry:\n" + l.EntryString(key, "", "  ")
 	question += "Keep the value as is?"
+	if options.Contains("Y") {
+		question += " (Y/N = for all entries, y/n = this entry only)"
+	}
 	if canBreakDown {
 		question += " (b = break down by name)"
-	} else if singleAuthor {
-		question += " (e = edit)"
 	}
+	question += " (e = edit)"
 	if dblpKey != "" {
 		question += " (s = show original DBLP entry, S = look up another DBLP key)"
 	}
@@ -651,7 +653,7 @@ func (l *TBibTeXLibrary) resolveNamePair(key, field string, namePos, nameTotal, 
 	}
 
 	answer := l.WarningQuestionOrdered(
-		"Keep current name? (Y/N = globally, y/n = this entry only), edit canonical (e), different people (d), quit (q)?",
+		"Keep current name? (Y/N = everywhere, y/n = this entry only, e = edit canonical name, d = different people)",
 		[]string{"N", "Y", "n", "y", "e", "d", "q"},
 		"Name %d of %d (difference %d of %d) for entry %s field %s:\n- Current:    %s\n- Challenger: %s",
 		namePos, nameTotal, diffIdx, diffTotal, key, field, currentDisplay, challengerDisplay)
