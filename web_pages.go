@@ -40,7 +40,7 @@ header { background: var(--primary); color: var(--primary-text); padding: 0 16px
 header .title { font-size: 20px; font-weight: 400; white-space: nowrap; }
 header .ver { font-size: 12px; opacity: .75; white-space: nowrap; }
 header .conn { margin-left: auto; font-size: 13px; } /* pushes the version to the far right */
-header .led { align-self: flex-end; margin: 0 -8px 13px; width: 12px; height: 12px; border-radius: 50%; flex: none; background: var(--ok);
+header .led { margin: 0 -8px 2px; width: 12px; /* on the baseline: its ring (2px) ends there */ height: 12px; border-radius: 50%; flex: none; background: var(--ok);
               box-shadow: 0 0 0 2px rgba(255,255,255,.6); }
 header .led.busy { background: var(--danger); animation: ledpulse 1s ease-in-out infinite alternate; }
 @keyframes ledpulse { from { opacity: 1; } to { opacity: .45; } }
@@ -167,6 +167,10 @@ pre.log { flex: 1; min-height: 0; overflow: auto; margin: 0; white-space: pre-wr
 .modal-body { overflow: auto; padding: 16px; }
 .columns { column-width: 160px; column-gap: 16px; }
 .columns label { display: block; margin: 2px 0; font-size: 14px; break-inside: avoid; white-space: nowrap; }
+#toast { position: fixed; left: 50%; bottom: 24px; transform: translate(-50%, 40px); opacity: 0; transition: all .2s;
+         background: #323232; color: #fff; padding: 10px 16px; border-radius: 10px; box-shadow: 0 4px 16px rgba(0,0,0,.3);
+         display: flex; gap: 12px; align-items: center; z-index: 20; font-size: 14px; pointer-events: none; }
+#toast.show { transform: translate(-50%, 0); opacity: 1; pointer-events: auto; }
 #banner { display: none; background: var(--warn); color: #000; padding: 8px 16px; flex: none; }
 </style>
 </head>
@@ -259,6 +263,37 @@ function every(name, ms, fn) { // fn runs every ms while the tab is shown
 
 // ---- PDFs dropped on an entry (a row, an entry's pop-up, an author's list) ----
 function draggingFiles(e) { return e.dataTransfer && [...e.dataTransfer.types].includes("Files"); }
+// A note at the bottom with an Undo button, for 10 seconds.
+let toastTimer;
+function toast(text, undo) {
+  let t = $("toast");
+  if (!t) { t = document.createElement("div"); t.id = "toast"; document.body.appendChild(t); }
+  t.innerHTML = esc(text) + (undo ? ' <button class="action">Undo</button>' : "");
+  t.className = "show";
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { t.className = ""; }, 10000);
+  if (undo) t.querySelector("button").onclick = async () => {
+    t.className = "";
+    try {
+      const r = await fetch(BASE + "/api/pdfundo/" + undo, { method: "POST" });
+      if (!r.ok) { alert(await r.text()); return; }
+      const d = await r.json();
+      pdfChanged(d.key);
+      toast("Undone: the PDF of " + d.key + " is as it was.");
+    } catch (e) { lost(e); }
+  };
+}
+// pdfChanged shows an entry's PDF state anew: its rows and an open pop-up.
+async function pdfChanged(key) {
+  let has = false;
+  try { has = (await get("/frag/entry/" + encodeURIComponent(key))).includes('data-pdf="'); } catch (e) {}
+  for (const v of Object.values(views)) if (v instanceof SearchView) {
+    const row = v.rows.find((r) => r.k === key);
+    if (row && row.pdf !== has) { row.pdf = has; const top = v.el.gridbox.scrollTop; v.renderRows(0); v.el.gridbox.scrollTop = top; }
+  }
+  const top = stack[stack.length - 1];
+  if ($("overlay").classList.contains("open") && top) show(top);
+}
 // uploadPDF stores file as the entry's PDF; asks before replacing one. True when stored.
 async function uploadPDF(key, file) {
   if (!file || !(file.type === "application/pdf" || /\.pdf$/i.test(file.name))) { alert("Only a PDF file can be dropped on an entry."); return false; }
@@ -271,6 +306,8 @@ async function uploadPDF(key, file) {
         continue;
       }
       if (!r.ok) { alert("Not stored: " + await r.text()); return false; }
+      const d = await r.json();
+      toast(d.message, d.undo);
       return true;
     } catch (e) { lost(e); alert(String(e.message || e)); return false; }
   }
@@ -1004,9 +1041,19 @@ document.addEventListener("keydown", (e) => { if (e.key === "Escape" && $("overl
 
 // ---- clicks inside fragments ----
 document.addEventListener("click", async (e) => {
-  const el = e.target.closest("[data-entry],[data-author],[data-pdf],[data-edit],[data-editauthor],#stop");
+  const el = e.target.closest("[data-entry],[data-author],[data-pdf],[data-pdfremove],[data-edit],[data-editauthor],#stop");
   if (!el) return;
   e.preventDefault();
+  if (el.dataset.pdfremove) {
+    try {
+      const r = await fetch(BASE + "/api/pdfremove/" + encodeURIComponent(el.dataset.pdfremove), { method: "POST" });
+      if (!r.ok) { alert(await r.text()); return; }
+      const d = await r.json();
+      pdfChanged(el.dataset.pdfremove);
+      toast(d.message, d.undo);
+    } catch (err) { lost(err); }
+    return;
+  }
   if (el.dataset.editauthor) openEditAuthor(el.dataset.editauthor);
   else if (el.dataset.edit) openEdit(el.dataset.edit);
   else if (el.dataset.entry) openEntry(el.dataset.entry);
@@ -1086,7 +1133,7 @@ else showTab(location.hash.slice(1) || "search");
 <div class="line"><button class="plain" data-edit="{{.Key}}" title="Edit this entry in an edit tab">Edit</button></div>
 {{if .Reference}}<div class="card ref">{{.Reference}}</div>{{else}}<p class="muted">The reference (HTML) shows once the library is loaded or the running job is done (the busy light is then green); open the entry again then.</p>{{end}}
 <div class="line"><span class="label">Groups</span>{{range .Groups}}<span class="chip">{{.}}</span>{{else}}<span class="muted">none</span>{{end}}</div>
-{{if .HasPDF}}<div class="line"><span class="label">PDF</span><button class="pdf" data-pdf="{{.Key}}" title="Open the PDF with macOS"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M8 13h8M8 17h5"/></svg>Open the PDF</button><span class="muted"></span></div>{{end}}
+{{if .HasPDF}}<div class="line"><span class="label">PDF</span><button class="plain" data-pdfremove="{{.Key}}" title="Move this PDF to the Trash (Undo for a few minutes)" style="order:2">Remove</button><button class="pdf" data-pdf="{{.Key}}" title="Open the PDF"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M8 13h8M8 17h5"/></svg>Open the PDF</button><span class="muted"></span></div>{{end}}
 <div class="card bib">
   <div>@{{.Type}}{<span class="key">{{.Key}}</span>,</div>
   <table>

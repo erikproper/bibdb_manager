@@ -90,6 +90,8 @@ func (w *TWebUI) start() {
 	mux.HandleFunc(prefix+"/api/select/", w.handleSelect)
 	mux.HandleFunc(prefix+"/pdf/", w.handlePDF)
 	mux.HandleFunc(prefix+"/api/pdfup/", w.handlePDFUpload)
+	mux.HandleFunc(prefix+"/api/pdfremove/", w.handlePDFRemove)
+	mux.HandleFunc(prefix+"/api/pdfundo/", w.handlePDFUndo)
 	// Any other address (e.g. the bare http://localhost:<port>/): say how to get
 	// in, without giving the token away.
 	mux.HandleFunc("/", func(rw http.ResponseWriter, r *http.Request) {
@@ -132,6 +134,7 @@ command line with <code>bib.check -ui</code>; <code>bib.check -status</code> sho
 
 // stop closes the web server (and so its port).
 func (w *TWebUI) stop() {
+	flushPDFUndos()
 	if w != nil && w.server != nil {
 		w.server.Close() //nolint:errcheck
 	}
@@ -552,7 +555,7 @@ const maxPDFUpload = 300 << 20
 // handlePDFUpload stores a PDF dropped on an entry in the web UI (Erik,
 // 2026-11-24) as <base>.files/<key>.pdf (POST /api/pdfup/<key>, the file as the
 // body). Only a PDF (it starts with %PDF-); an entry that has a PDF already is
-// refused (409) unless replace=1, and then its old PDF goes to the Trash.
+// refused (409) unless replace=1, and then its old PDF is put aside (undo).
 func (w *TWebUI) handlePDFUpload(rw http.ResponseWriter, r *http.Request) {
 	key := strings.TrimPrefix(r.URL.Path, "/"+w.token+"/api/pdfup/")
 	if r.Method != http.MethodPost || key == "" || strings.ContainsAny(key, "/\\") || strings.HasPrefix(key, ".") {
@@ -600,28 +603,163 @@ func (w *TWebUI) handlePDFUpload(rw http.ResponseWriter, r *http.Request) {
 		http.Error(rw, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	if exists && !moveFileToTrash(path) {
-		os.Remove(tmp) //nolint:errcheck
-		http.Error(rw, "the old PDF could not be moved to the Trash", http.StatusInternalServerError)
-		return
+	old := ""
+	if exists {
+		if old, err = stashPDF(path); err != nil {
+			os.Remove(tmp) //nolint:errcheck
+			http.Error(rw, "the old PDF could not be put aside: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
 	}
 	if err := os.Rename(tmp, path); err != nil {
 		http.Error(rw, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	// The loaded library's list of PDFs, when it is free (else the next load reads it).
+	setLibraryPDF(key, true)
+	what := "stored"
+	if exists {
+		what = "replaced"
+	}
+	fmt.Fprintf(os.Stderr, "%s  PDF %s for %s (%d KB, dropped in the web UI)\n", time.Now().Format(time.DateTime), what, key, len(data)/1024)
+	undo := newPDFUndo(key, old, true)
+	writeJSON(rw, map[string]any{"ok": true, "undo": undo, "message": fmt.Sprintf("PDF %s for %s (%d KB).", what, key, len(data)/1024)})
+}
+
+// ---- undoing a PDF drop or removal ----
+//
+// A replaced or removed PDF is first put aside in the local DB folder (pdf_undo/),
+// not in the Trash, so Undo can put it back; after pdfUndoKeep it goes to the
+// Trash. Undo of a drop sends the dropped file to the Trash and puts a replaced
+// one back; undo of a removal puts the PDF back.
+
+const pdfUndoKeep = 5 * time.Minute
+
+type tPDFUndo struct {
+	key     string
+	stashed string // the PDF put aside ("" when there was none)
+	added   bool   // a drop (its file goes on undo), not a removal
+}
+
+var (
+	pdfUndos   = map[string]*tPDFUndo{}
+	pdfUndosMu sync.Mutex
+)
+
+// stashPDF puts a PDF aside for an undo and returns where.
+func stashPDF(path string) (string, error) {
+	dir := localDBFolder + "pdf_undo/"
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
+	dest := dir + time.Now().Format("20060102-150405.000") + "-" + filepath.Base(path)
+	return dest, os.Rename(path, dest)
+}
+
+// newPDFUndo records what an undo needs and returns its id; after pdfUndoKeep
+// the stashed PDF goes to the Trash and the undo is gone.
+func newPDFUndo(key, stashed string, added bool) string {
+	b := make([]byte, 6)
+	rand.Read(b) //nolint:errcheck
+	id := hex.EncodeToString(b)
+	pdfUndosMu.Lock()
+	pdfUndos[id] = &tPDFUndo{key: key, stashed: stashed, added: added}
+	pdfUndosMu.Unlock()
+	time.AfterFunc(pdfUndoKeep, func() {
+		pdfUndosMu.Lock()
+		u := pdfUndos[id]
+		delete(pdfUndos, id)
+		pdfUndosMu.Unlock()
+		if u != nil && u.stashed != "" {
+			moveFileToTrash(u.stashed)
+		}
+	})
+	return id
+}
+
+// flushPDFUndos sends the PDFs still put aside for an undo to the Trash (the
+// service stops: no undo after that).
+func flushPDFUndos() {
+	pdfUndosMu.Lock()
+	defer pdfUndosMu.Unlock()
+	for id, u := range pdfUndos {
+		if u.stashed != "" {
+			moveFileToTrash(u.stashed)
+		}
+		delete(pdfUndos, id)
+	}
+}
+
+// setLibraryPDF updates the loaded library's list of PDFs, when it is free
+// (else the next load reads the folder).
+func setLibraryPDF(key string, has bool) {
 	if libraryLock.TryLock() {
 		if Library.PDFFiles != nil {
-			Library.PDFFiles[key] = true
+			if has {
+				Library.PDFFiles[key] = true
+			} else {
+				delete(Library.PDFFiles, key)
+			}
 		}
 		libraryLock.Unlock()
 	}
-	what := "added"
-	if exists {
-		what = "replaced (the old one is in the Trash)"
+}
+
+// handlePDFRemove moves an entry's PDF aside, to the Trash after pdfUndoKeep
+// (POST /api/pdfremove/<key>); the answer has the undo's id.
+func (w *TWebUI) handlePDFRemove(rw http.ResponseWriter, r *http.Request) {
+	key := strings.TrimPrefix(r.URL.Path, "/"+w.token+"/api/pdfremove/")
+	if r.Method != http.MethodPost || key == "" || strings.ContainsAny(key, "/\\") || strings.HasPrefix(key, ".") {
+		http.Error(rw, "not allowed", http.StatusMethodNotAllowed)
+		return
 	}
-	fmt.Fprintf(os.Stderr, "%s  PDF %s for %s (%d KB, dropped in the web UI)\n", time.Now().Format(time.DateTime), what, key, len(data)/1024)
-	writeJSON(rw, map[string]any{"ok": true, "message": fmt.Sprintf("PDF %s: %s.pdf (%d KB).", what, key, len(data)/1024)})
+	path := entryPDFPath(key)
+	if _, err := os.Stat(path); err != nil {
+		http.Error(rw, key+" has no PDF", http.StatusNotFound)
+		return
+	}
+	stashed, err := stashPDF(path)
+	if err != nil {
+		http.Error(rw, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	setLibraryPDF(key, false)
+	fmt.Fprintf(os.Stderr, "%s  PDF of %s removed in the web UI (to the Trash in %s)\n", time.Now().Format(time.DateTime), key, pdfUndoKeep)
+	writeJSON(rw, map[string]any{"ok": true, "undo": newPDFUndo(key, stashed, false), "message": "PDF of " + key + " removed."})
+}
+
+// handlePDFUndo undoes a drop or a removal (POST /api/pdfundo/<id>).
+func (w *TWebUI) handlePDFUndo(rw http.ResponseWriter, r *http.Request) {
+	id := strings.TrimPrefix(r.URL.Path, "/"+w.token+"/api/pdfundo/")
+	if r.Method != http.MethodPost {
+		http.Error(rw, "not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	pdfUndosMu.Lock()
+	u := pdfUndos[id]
+	delete(pdfUndos, id)
+	pdfUndosMu.Unlock()
+	if u == nil {
+		http.Error(rw, "too late to undo", http.StatusGone)
+		return
+	}
+	path := entryPDFPath(u.key)
+	if u.added {
+		if _, err := os.Stat(path); err == nil && !moveFileToTrash(path) {
+			http.Error(rw, "the dropped PDF could not be moved to the Trash", http.StatusInternalServerError)
+			return
+		}
+	}
+	has := false
+	if u.stashed != "" {
+		if err := os.Rename(u.stashed, path); err != nil {
+			http.Error(rw, "the old PDF could not be put back: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		has = true
+	}
+	setLibraryPDF(u.key, has)
+	fmt.Fprintf(os.Stderr, "%s  PDF change of %s undone in the web UI\n", time.Now().Format(time.DateTime), u.key)
+	writeJSON(rw, map[string]any{"ok": true, "key": u.key, "message": "Undone."})
 }
 
 // ---- an author ----
