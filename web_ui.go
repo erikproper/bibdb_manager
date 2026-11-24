@@ -17,16 +17,19 @@ package main
 // (without the output mappings).
 
 import (
+	"bytes"
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"html/template"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -86,6 +89,7 @@ func (w *TWebUI) start() {
 	mux.HandleFunc(prefix+"/api/selstates", w.handleSelStates)
 	mux.HandleFunc(prefix+"/api/select/", w.handleSelect)
 	mux.HandleFunc(prefix+"/pdf/", w.handlePDF)
+	mux.HandleFunc(prefix+"/api/pdfup/", w.handlePDFUpload)
 	// Any other address (e.g. the bare http://localhost:<port>/): say how to get
 	// in, without giving the token away.
 	mux.HandleFunc("/", func(rw http.ResponseWriter, r *http.Request) {
@@ -540,6 +544,84 @@ func (w *TWebUI) handlePDF(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rw.WriteHeader(http.StatusNoContent)
+}
+
+// maxPDFUpload bounds a PDF dropped on an entry.
+const maxPDFUpload = 300 << 20
+
+// handlePDFUpload stores a PDF dropped on an entry in the web UI (Erik,
+// 2026-11-24) as <base>.files/<key>.pdf (POST /api/pdfup/<key>, the file as the
+// body). Only a PDF (it starts with %PDF-); an entry that has a PDF already is
+// refused (409) unless replace=1, and then its old PDF goes to the Trash.
+func (w *TWebUI) handlePDFUpload(rw http.ResponseWriter, r *http.Request) {
+	key := strings.TrimPrefix(r.URL.Path, "/"+w.token+"/api/pdfup/")
+	if r.Method != http.MethodPost || key == "" || strings.ContainsAny(key, "/\\") || strings.HasPrefix(key, ".") {
+		http.Error(rw, "not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	ro, err := openReadOnly()
+	if err != nil {
+		http.Error(rw, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	var canonical string
+	if ro.QueryRow(`SELECT key FROM key_oldies WHERE alias = ?`, key).Scan(&canonical) == nil {
+		key = canonical
+	}
+	var n int
+	ro.QueryRow(`SELECT COUNT(*) FROM bib_entries WHERE entry_key = ? AND field = 'entrytype'`, key).Scan(&n) //nolint:errcheck
+	ro.Close()
+	if n == 0 {
+		http.Error(rw, "no such entry: "+key, http.StatusNotFound)
+		return
+	}
+	data, err := io.ReadAll(http.MaxBytesReader(rw, r.Body, maxPDFUpload))
+	if err != nil {
+		http.Error(rw, "the file could not be read (larger than 300 MB?)", http.StatusRequestEntityTooLarge)
+		return
+	}
+	if !bytes.HasPrefix(data, []byte("%PDF-")) {
+		http.Error(rw, "this is not a PDF file", http.StatusUnsupportedMediaType)
+		return
+	}
+	path := entryPDFPath(key)
+	_, existsErr := os.Stat(path)
+	exists := existsErr == nil
+	if exists && r.URL.Query().Get("replace") != "1" {
+		http.Error(rw, key+" has a PDF already", http.StatusConflict)
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		http.Error(rw, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	tmp := path + ".upload"
+	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+		http.Error(rw, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if exists && !moveFileToTrash(path) {
+		os.Remove(tmp) //nolint:errcheck
+		http.Error(rw, "the old PDF could not be moved to the Trash", http.StatusInternalServerError)
+		return
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		http.Error(rw, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	// The loaded library's list of PDFs, when it is free (else the next load reads it).
+	if libraryLock.TryLock() {
+		if Library.PDFFiles != nil {
+			Library.PDFFiles[key] = true
+		}
+		libraryLock.Unlock()
+	}
+	what := "added"
+	if exists {
+		what = "replaced (the old one is in the Trash)"
+	}
+	fmt.Fprintf(os.Stderr, "%s  PDF %s for %s (%d KB, dropped in the web UI)\n", time.Now().Format(time.DateTime), what, key, len(data)/1024)
+	writeJSON(rw, map[string]any{"ok": true, "message": fmt.Sprintf("PDF %s: %s.pdf (%d KB).", what, key, len(data)/1024)})
 }
 
 // ---- an author ----

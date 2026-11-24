@@ -138,6 +138,8 @@ table.grid th { position: sticky; top: 0; background: var(--card); z-index: 1; c
 table.grid th.drop { box-shadow: inset 3px 0 0 var(--primary); }
 table.grid th .grip { position: absolute; top: 0; right: -3px; width: 7px; height: 100%; cursor: col-resize; z-index: 2; }
 table.grid tbody tr:hover { background: var(--hover); }
+table.grid tbody tr.dropping { outline: 2px dashed var(--primary); outline-offset: -2px; background: var(--hover); }
+#mbody.dropping { outline: 2px dashed var(--primary); outline-offset: -6px; }
 table.grid tbody tr, #mbody table.list tr[data-key] { cursor: pointer; }
 #mbody table.list tr[data-key]:hover { background: var(--hover); }
 table.grid td.inh { color: var(--muted); font-style: italic; }
@@ -255,6 +257,28 @@ function every(name, ms, fn) { // fn runs every ms while the tab is shown
   timers[name] = setInterval(() => { if (current === name && !stopped) fn(); }, ms);
 }
 
+// ---- PDFs dropped on an entry (a row, an entry's pop-up, an author's list) ----
+function draggingFiles(e) { return e.dataTransfer && [...e.dataTransfer.types].includes("Files"); }
+// uploadPDF stores file as the entry's PDF; asks before replacing one. True when stored.
+async function uploadPDF(key, file) {
+  if (!file || !(file.type === "application/pdf" || /\.pdf$/i.test(file.name))) { alert("Only a PDF file can be dropped on an entry."); return false; }
+  for (let replace = false; ; replace = true) {
+    try {
+      const r = await fetch(BASE + "/api/pdfup/" + encodeURIComponent(key) + (replace ? "?replace=1" : ""), { method: "POST",
+        headers: { "Content-Type": "application/pdf" }, body: file });
+      if (r.status === 409 && !replace) {
+        if (!confirm(key + " has a PDF already. Replace it with " + file.name + "? (The old one goes to the Trash.)")) return false;
+        continue;
+      }
+      if (!r.ok) { alert("Not stored: " + await r.text()); return false; }
+      return true;
+    } catch (e) { lost(e); alert(String(e.message || e)); return false; }
+  }
+}
+// Dropping a file anywhere else must not open it in the browser (leaving the page).
+window.addEventListener("dragover", (e) => { if (draggingFiles(e)) e.preventDefault(); });
+window.addEventListener("drop", (e) => { if (draggingFiles(e)) e.preventDefault(); });
+
 // ---- the busy light: red while data is being changed or brought up to date ----
 let seenIndex = -1;
 async function pollState() {
@@ -341,6 +365,25 @@ class SearchView {
     el.q.addEventListener("keydown", (e) => { if (e.key === "Enter") { clearTimeout(typing); this.query = el.q.value.trim(); this.reload(); } });
     // A click anywhere on a row opens the entry, but on its buttons and tick (they act
     // themselves) and when it ends selecting text.
+    // A PDF dropped on a row becomes that entry's PDF.
+    let over = null;
+    el.grid.addEventListener("dragover", (e) => {
+      const tr = e.target.closest("tbody tr[data-key]");
+      if (!tr || !draggingFiles(e)) return;
+      e.preventDefault(); e.dataTransfer.dropEffect = "copy";
+      if (over !== tr) { if (over) over.classList.remove("dropping"); over = tr; tr.classList.add("dropping"); }
+    });
+    el.grid.addEventListener("dragleave", (e) => { if (over && !over.contains(e.relatedTarget)) { over.classList.remove("dropping"); over = null; } });
+    el.grid.addEventListener("drop", async (e) => {
+      const tr = e.target.closest("tbody tr[data-key]");
+      if (over) { over.classList.remove("dropping"); over = null; }
+      if (!tr || !draggingFiles(e)) return;
+      e.preventDefault();
+      if (await uploadPDF(tr.dataset.key, e.dataTransfer.files[0])) {
+        const row = this.rows.find((r) => r.k === tr.dataset.key);
+        if (row) { row.pdf = true; const top = el.gridbox.scrollTop; this.renderRows(0); el.gridbox.scrollTop = top; }
+      }
+    });
     el.grid.addEventListener("click", (e) => {
       const tr = e.target.closest("tbody tr[data-key]");
       if (!tr || e.target.closest(".tick, button, a") || String(window.getSelection())) return;
@@ -939,6 +982,22 @@ $("mbody").addEventListener("change", (e) => {
   const count = $("mbody").querySelector(".rolecount");
   if (count) count.textContent = n;
 });
+// A PDF dropped on an entry's pop-up, or on a row of an author's list.
+$("mbody").addEventListener("dragover", (e) => {
+  if (!draggingFiles(e)) return;
+  const top = stack[stack.length - 1];
+  if (e.target.closest("table.list tr[data-key]") || (top && top.kind === "entry")) { e.preventDefault(); $("mbody").classList.add("dropping"); }
+});
+$("mbody").addEventListener("dragleave", (e) => { if (!$("mbody").contains(e.relatedTarget)) $("mbody").classList.remove("dropping"); });
+$("mbody").addEventListener("drop", async (e) => {
+  $("mbody").classList.remove("dropping");
+  if (!draggingFiles(e)) return;
+  const row = e.target.closest("table.list tr[data-key]"), top = stack[stack.length - 1];
+  const key = row ? row.dataset.key : (top && top.kind === "entry" ? top.id : "");
+  if (!key) return;
+  e.preventDefault();
+  if (await uploadPDF(key, e.dataTransfer.files[0])) show(top); // read the pop-up again: its PDF button
+});
 $("mback").onclick = () => { if (stack.length > 1) { stack.pop(); show(stack[stack.length - 1]); } };
 $("overlay").addEventListener("mousedown", (e) => { if (e.target === $("overlay")) closePopup(); });
 document.addEventListener("keydown", (e) => { if (e.key === "Escape" && $("overlay").classList.contains("open")) closePopup(); });
@@ -1025,7 +1084,7 @@ else showTab(location.hash.slice(1) || "search");
 
 {{define "entry"}}
 <div class="line"><button class="plain" data-edit="{{.Key}}" title="Edit this entry in an edit tab">Edit</button></div>
-{{if .Reference}}<div class="card ref">{{.Reference}}</div>{{end}}
+{{if .Reference}}<div class="card ref">{{.Reference}}</div>{{else}}<p class="muted">The reference (HTML) shows once the library is loaded or the running job is done (the busy light is then green); open the entry again then.</p>{{end}}
 <div class="line"><span class="label">Groups</span>{{range .Groups}}<span class="chip">{{.}}</span>{{else}}<span class="muted">none</span>{{end}}</div>
 {{if .HasPDF}}<div class="line"><span class="label">PDF</span><button class="pdf" data-pdf="{{.Key}}" title="Open the PDF with macOS"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M8 13h8M8 17h5"/></svg>Open the PDF</button><span class="muted"></span></div>{{end}}
 <div class="card bib">
