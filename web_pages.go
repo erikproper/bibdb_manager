@@ -77,7 +77,6 @@ button.plain { background: transparent; color: var(--primary); border: 1px solid
 .line .label { color: var(--muted); min-width: 4.5em; }
 button.pdf { display: inline-flex; align-items: center; gap: 6px; background: transparent; color: var(--primary);
              border: 1px solid var(--border); border-radius: 8px; padding: 4px 10px; cursor: pointer; font-size: 14px; }
-a.open { text-decoration: none; font-weight: 600; padding: 0 4px; }
 
 /* Search */
 .searchbar { flex: none; display: flex; gap: 12px; align-items: center; margin-bottom: 8px; }
@@ -112,11 +111,11 @@ table.grid th { position: sticky; top: 0; background: var(--card); z-index: 1; c
 table.grid th.drop { box-shadow: inset 3px 0 0 var(--primary); }
 table.grid th .grip { position: absolute; top: 0; right: -3px; width: 7px; height: 100%; cursor: col-resize; z-index: 2; }
 table.grid tbody tr:hover { background: var(--hover); }
-table.grid tbody tr, #mbody table.list tr:has(a.open) { cursor: pointer; }
-#mbody table.list tr:has(a.open):hover { background: var(--hover); }
+table.grid tbody tr, #mbody table.list tr[data-key] { cursor: pointer; }
+#mbody table.list tr[data-key]:hover { background: var(--hover); }
 table.grid td.inh { color: var(--muted); font-style: italic; }
 table.grid td.op { padding: 2px 4px; text-align: left; }
-table.grid td.op button.rowpdf { margin-left: 4px; padding: 0 4px; vertical-align: middle; }
+table.grid td.op button.rowpdf { margin-left: 0; padding: 0 4px; vertical-align: middle; }
 table.grid td.op button.rowpdf svg { vertical-align: -2px; }
 table.grid td.op button { background: transparent; border: 1px solid var(--border); border-radius: 6px; color: var(--primary);
                           cursor: pointer; padding: 0 6px; font-size: 13px; line-height: 18px; }
@@ -281,7 +280,7 @@ class SearchView {
                 selinfo: q("selinfo"), selmsg: q("selmsg"), selname: q("selname") };
     this.rows = []; this.total = 0; this.gen = 0; this.busy = false; this.query = ""; this.groups = new Set();
     this.only = false; this.started = false; this.seenLayout = -1;
-    this.opW = sel ? 92 : 64;
+    this.opW = sel ? 88 : 40; // the first column: (tick and) PDF button
     const el = this.el;
     el.gridbox.addEventListener("scroll", () => {
       if (this.rows.length < this.total && el.gridbox.scrollTop + el.gridbox.clientHeight > el.gridbox.scrollHeight - 600) this.fetchRows(false);
@@ -409,7 +408,6 @@ class SearchView {
     for (let n = from; n < this.rows.length; n++) {
       const r = this.rows[n];
       html.push('<tr data-key="' + esc(r.k) + '"><td class="op">' + (this.sel ? this.tickHTML(r.t) : "") +
-        '<button data-entry="' + esc(r.k) + '" title="Open ' + esc(r.k) + '">›</button>' +
         (r.pdf ? '<button class="rowpdf" data-pdf="' + esc(r.k) + '" title="Open the PDF">' + PDFICON + "</button><span></span>" : "") + "</td>");
       for (const c of layout.cols) {
         const v = r.cells[c] || "";
@@ -593,17 +591,17 @@ async function show(item) {
 // In an author's pop-up opened from a Select tab: a tick before each entry, for
 // that tab's selection.
 async function showListTicks(selID) {
-  const links = [...$("mbody").querySelectorAll("table.list a.open[data-entry]")];
+  const links = [...$("mbody").querySelectorAll("table.list tr[data-key]")];
   if (!links.length) return;
   let states;
-  try { states = await get("/api/selstates?sel=" + selID + "&keys=" + encodeURIComponent(links.map((a) => a.dataset.entry).join(",")), "json"); }
+  try { states = await get("/api/selstates?sel=" + selID + "&keys=" + encodeURIComponent(links.map((tr) => tr.dataset.key).join(",")), "json"); }
   catch (e) { return; }
   const view = views["sel-" + selID];
   const label = view ? document.querySelector('.tabs button[data-tab="sel-' + selID + '"]').dataset.label : "";
   const head = $("mbody").querySelectorAll(".card h2");
   if (head.length > 1 && label) head[1].insertAdjacentHTML("beforeend", ' <span class="muted">— ticks: Select: ' + esc(label) + "</span>");
-  for (const a of links) {
-    const key = a.dataset.entry, tr = a.closest("tr");
+  for (const tr of links) {
+    const key = tr.dataset.key;
     tr.insertAdjacentHTML("afterbegin", '<td style="width:28px"><span class="selpick" data-sel="' + esc(selID) + '" data-key="' + esc(key) + '">' + SearchView.prototype.tickHTML(states[key] || 0) + "</span></td>");
     const pick = tr.firstElementChild.firstElementChild;
     pick.onclick = () => selPick(pick);
@@ -652,10 +650,9 @@ $("mclose").onclick = closePopup;
 // In a pop-up's list of entries (an author's), a click on a row opens the entry,
 // but on its links and tick, and when it ends selecting text.
 $("mbody").addEventListener("click", (e) => {
-  const tr = e.target.closest("table.list tr");
-  const open = tr && tr.querySelector("a.open[data-entry]");
-  if (!open || e.target.closest("a, button, .selpick") || String(window.getSelection())) return;
-  openEntry(open.dataset.entry);
+  const tr = e.target.closest("table.list tr[data-key]");
+  if (!tr || e.target.closest("a, button, .selpick") || String(window.getSelection())) return;
+  openEntry(tr.dataset.key);
 });
 $("mback").onclick = () => { if (stack.length > 1) { stack.pop(); show(stack[stack.length - 1]); } };
 $("overlay").addEventListener("mousedown", (e) => { if (e.target === $("overlay")) closePopup(); });
@@ -764,7 +761,7 @@ else showTab(location.hash.slice(1) || "search");
 <div class="card">
   <h2>Entries ({{len .Results}})</h2>
   <table class="list">
-    {{range .Results}}<tr><td class="year">{{.Year}}</td><td class="ref">{{if .HTML}}{{.HTML}}{{else}}{{if .Title}}{{.Title}}{{else}}<span class="key">{{.Key}}</span>{{end}}{{if .Authors}} — {{template "people" .Authors}}{{end}}{{end}} <a class="open" href="#" data-entry="{{.Key}}" title="{{.Key}}">›</a></td></tr>{{end}}
+    {{range .Results}}<tr data-key="{{.Key}}" title="{{.Key}}"><td class="year">{{.Year}}</td><td class="ref">{{if .HTML}}{{.HTML}}{{else}}{{if .Title}}{{.Title}}{{else}}<span class="key">{{.Key}}</span>{{end}}{{if .Authors}} — {{template "people" .Authors}}{{end}}{{end}}</td></tr>{{end}}
   </table>
 </div>
 {{end}}

@@ -451,7 +451,7 @@ func (w *TWebUI) handleEntry(rw http.ResponseWriter, r *http.Request) {
 	_, pdfErr := os.Stat(entryPDFPath(key))
 	var reference template.HTML
 	if refs, ok := renderReferences([]string{key}); ok {
-		reference = refs[key]
+		reference = linkReferenceNames(ro, key, refs[key])
 	}
 	w.render(rw, "entry", map[string]any{
 		"GroupsField": strings.Join(groups, ", "),
@@ -566,6 +566,11 @@ func (w *TWebUI) handleAuthor(rw http.ResponseWriter, r *http.Request) {
 		return list[i].Title < list[j].Title
 	})
 	addReferences(list)
+	for i := range list {
+		if list[i].HTML != "" {
+			list[i].HTML = linkReferenceNames(ro, list[i].Key, list[i].HTML)
+		}
+	}
 	data := map[string]any{"ID": id, "Name": name, "ORCIDs": orcids, "Forms": forms, "Results": list}
 	if dblpKey.Valid && dblpKey.String != "" {
 		data["DBLP"] = strings.TrimPrefix(dblpKey.String, "homepages/")
@@ -598,6 +603,52 @@ func renderReferences(keys []string) (map[string]template.HTML, bool) {
 		}
 	}
 	return out, true
+}
+
+// linkReferenceNames makes the authors' and editors' names in an entry's HTML
+// reference links to their pop-ups (Erik, 2026-11-24), as in the BibTeX part:
+// each contributor's name, in "First Last" order as the reference shows it,
+// in role order; the crossref parent's editors ("In: …") likewise. A name not
+// found as rendered stays plain.
+func linkReferenceNames(ro *sql.DB, key string, ref template.HTML) template.HTML {
+	html := string(ref)
+	at := 0
+	link := func(entry, role string) {
+		for _, person := range webContributors(ro, entry, role) {
+			shown := texToHTML(normalNameOrder(strings.TrimSpace(person.Name)))
+			if shown == "" {
+				continue
+			}
+			// The rendering may write a letter such as á as &#225;.
+			var entities strings.Builder
+			for _, r := range shown {
+				if r < 128 {
+					entities.WriteRune(r)
+				} else {
+					fmt.Fprintf(&entities, "&#%d;", r)
+				}
+			}
+			for _, form := range []string{shown, entities.String()} {
+				j := strings.Index(html[at:], form)
+				if j < 0 {
+					continue
+				}
+				j += at
+				a := fmt.Sprintf(`<a href="#" data-author="%s" data-name="%s">%s</a>`,
+					template.HTMLEscapeString(person.ID), template.HTMLEscapeString(person.Name), form)
+				html = html[:j] + a + html[j+len(form):]
+				at = j + len(a)
+				break
+			}
+		}
+	}
+	link(key, "author")
+	link(key, "editor")
+	var parent string
+	if ro.QueryRow(`SELECT value FROM bib_entries WHERE entry_key = ? AND field = 'crossref'`, key).Scan(&parent) == nil {
+		link(parent, "editor")
+	}
+	return template.HTML(html) //nolint:gosec // our own rendering, names escaped as rendered
 }
 
 // addReferences fills in the HTML references of a list, when available.
