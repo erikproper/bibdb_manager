@@ -23,9 +23,11 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -105,6 +107,9 @@ func handleServiceCommands() bool {
 		return true
 	case cmdOpenUI:
 		openWebUI()
+		return true
+	case cmdSelect:
+		doSelect()
 		return true
 	}
 	if os.Getenv(envServiceJob) != "" {
@@ -307,9 +312,79 @@ func openWebUI() {
 		endRun(1)
 	}
 	address := strings.TrimSpace(f.D)
-	if err := exec.Command("open", address).Run(); err != nil {
+	if reuseBrowserTabAt(address, "") {
+		return
+	}
+	if err := openInBrowser(address); err != nil {
 		messagef("Open %s in a browser (%s).\n", address, err)
 	}
+}
+
+// reuseBrowserTabAt brings a tab already showing the web UI to the front (Erik,
+// 2026-11-24; macOS): one of Safari or Google Chrome (when running, and when
+// web_browser is set, only that one) with a tab on the
+// same localhost port. A tab of the same service keeps its state; one of an
+// earlier service (another key) is sent to the new address. A hash ("#sel-…")
+// is set on the tab either way (the page then switches tabs). False when there
+// is no such tab, or macOS does not allow it (Automation permission): the
+// caller then opens a new one.
+func reuseBrowserTabAt(address, hash string) bool {
+	u, err := url.Parse(address)
+	if err != nil || runtime.GOOS != "darwin" {
+		return false
+	}
+	prefix := u.Scheme + "://" + u.Host + "/"
+	q := func(s string) string { return strings.ReplaceAll(strings.ReplaceAll(s, `\`, `\\`), `"`, `\"`) }
+	// One script per browser: a script naming a browser that is not installed
+	// does not compile.
+	for _, script := range []string{`
+if application "Safari" is running then
+	tell application "Safari"
+		repeat with w in windows
+			repeat with t in tabs of w
+				if URL of t starts with "PREFIX" then
+					if URL of t does not start with "ADDRESS" or "HASH" is not "" then set URL of t to "ADDRESS" & "HASH"
+					set current tab of w to t
+					set index of w to 1
+					activate
+					return "found"
+				end if
+			end repeat
+		end repeat
+	end tell
+end if
+return ""`, `
+if application "Google Chrome" is running then
+	tell application "Google Chrome"
+		repeat with w in windows
+			set i to 0
+			repeat with t in tabs of w
+				set i to i + 1
+				if URL of t starts with "PREFIX" then
+					if URL of t does not start with "ADDRESS" or "HASH" is not "" then set URL of t to "ADDRESS" & "HASH"
+					set active tab index of w to i
+					set index of w to 1
+					activate
+					return "found"
+				end if
+			end repeat
+		end repeat
+	end tell
+end if
+return ""`} {
+		browser := "Google Chrome"
+		if strings.Contains(script, `"Safari"`) {
+			browser = "Safari"
+		}
+		if webBrowser != "" && !strings.EqualFold(webBrowserName(), browser) {
+			continue // web_browser names another browser
+		}
+		script = strings.NewReplacer("PREFIX", q(prefix), "ADDRESS", q(address), "HASH", q(hash)).Replace(script)
+		if out, err := exec.Command("osascript", "-e", script).Output(); err == nil && strings.TrimSpace(string(out)) == "found" {
+			return true
+		}
+	}
+	return false
 }
 
 func serviceStatus() {
@@ -464,6 +539,15 @@ func (s *TService) serve(conn net.Conn) {
 	case "ui":
 		out.send(serviceFrame{T: "out", D: s.web.URL() + "\n"}) //nolint:errcheck
 		out.send(serviceFrame{T: "exit"})                       //nolint:errcheck
+	case "select":
+		var files []TSelectFile
+		if json.Unmarshal([]byte(first.D), &files) != nil || len(files) == 0 {
+			out.send(serviceFrame{T: "err", D: "No files to select from.\n"}) //nolint:errcheck
+			return
+		}
+		id := openSelectSessions(files)
+		out.send(serviceFrame{T: "out", D: s.web.URL() + "#sel-" + id + "\n"}) //nolint:errcheck
+		out.send(serviceFrame{T: "exit"})                                      //nolint:errcheck
 	case "stop":
 		s.mu.Lock()
 		running := s.busy

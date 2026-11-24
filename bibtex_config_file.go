@@ -60,6 +60,15 @@ type TBibTeXFolders struct {
 	// keeps in backup_folder; older ones are removed (pruneLibraryBackups).
 	// Absent: 4 (as ~/BiBTeX/clean.backups did). 0 or less: keep all.
 	NrOfBackups *int `json:"nr_of_backups,omitempty"`
+	// FieldURLs makes a field's value a link in the web UI (Erik, 2026-11-24):
+	// field name → URL, "$" standing for the value, e.g. "repositum":
+	// "https://doi.org/$". Added to (and may override) the built-in ones for doi
+	// and dblp (webFieldURLs).
+	FieldURLs map[string]string `json:"field_urls,omitempty"`
+	// WebBrowser opens the web UI (-ui) instead of the default browser: on macOS
+	// an application name ("Firefox"), otherwise a command ("firefox"); see
+	// openInBrowser.
+	WebBrowser string `json:"web_browser,omitempty"`
 
 	// Old keys (before 30.11): read once, when the new ones are absent, and
 	// dropped from the file.
@@ -96,6 +105,8 @@ var (
 	serviceIdleMinutes = 0                  // set by loadBibTeXFolders; see service.go
 	nrOfBackups        = defaultNrOfBackups // set by loadBibTeXFolders; see pruneLibraryBackups
 	servicePort        = 0                  // set by loadBibTeXFolders; see web_ui.go
+	fieldURLs          map[string]string    // set by loadBibTeXFolders; see webFieldLink
+	webBrowser         = ""                 // set by loadBibTeXFolders; see openInBrowser
 	displayFile        = ""                 // set by loadBibTeXFolders; see displayContent
 	displayCommand     = ""                 // set by loadBibTeXFolders; see displayContent
 	displayReopen      = true               // set by loadBibTeXFolders; see displayContent
@@ -244,6 +255,8 @@ func loadBibTeXFolders(settingsPath string) {
 	dblpURL = f.DblpURL
 	serviceIdleMinutes = f.ServiceIdleMinutes
 	servicePort = f.ServicePort
+	fieldURLs = f.FieldURLs
+	webBrowser = f.WebBrowser
 	nrOfBackups = defaultNrOfBackups
 	if f.NrOfBackups != nil {
 		nrOfBackups = *f.NrOfBackups

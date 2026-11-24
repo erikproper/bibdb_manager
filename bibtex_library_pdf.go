@@ -171,8 +171,8 @@ func pdfFileInfo(path string) string {
 
 // openBothPDFs opens two PDF files in the system default viewer.
 func openBothPDFs(path1, path2 string) {
-	exec.Command("open", path1).Start() //nolint:errcheck
-	exec.Command("open", path2).Start() //nolint:errcheck
+	openWithOS(path1) //nolint:errcheck
+	openWithOS(path2) //nolint:errcheck
 }
 
 // syncLocalPDFs synchronises global PDFs with the local .files/ folder for pdf_files="local".
@@ -421,16 +421,7 @@ func (l *TBibTeXLibrary) ScanOrphanPDFs() {
 // If a file with the same name already exists in Trash, a timestamp suffix is added.
 // Returns false if the move fails.
 func trashPDF(path string) bool {
-	trashDir := os.Getenv("HOME") + "/.Trash/"
-	base := filepath.Base(path)
-	dest := trashDir + base
-	if FileExists(dest) {
-		ts := time.Now().Format("20060102-150405")
-		ext := filepath.Ext(base)
-		stem := strings.TrimSuffix(base, ext)
-		dest = trashDir + stem + "-" + ts + ext
-	}
-	return os.Rename(path, dest) == nil
+	return moveFileToTrash(path)
 }
 
 // handleBrokenPDF prompts the user for what to do with a suspect PDF.
@@ -447,7 +438,7 @@ func (l *TBibTeXLibrary) handleBrokenPDF(key, path, reason string) bool {
 
 		switch answer {
 		case "o":
-			exec.Command("open", path).Start() //nolint:errcheck
+			openWithOS(path) //nolint:errcheck
 		case "t":
 			if !trashPDF(path) {
 				l.Warning("Could not move %s to Trash.", path)

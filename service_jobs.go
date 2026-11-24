@@ -115,11 +115,14 @@ func resetLibraryRunState() {
 }
 
 // databaseFingerprint describes the database files: the working copy (and its
-// WAL), the shared copy and its stamp. Equal fingerprints: nothing wrote them.
+// WAL, when not empty), the shared copy and its stamp. Equal fingerprints:
+// nothing wrote them.
 func databaseFingerprint() string {
 	var b strings.Builder
 	for _, path := range []string{dbPath(), dbPath() + "-wal", dbHomePath(), libraryStampPath()} {
-		if info, err := os.Stat(path); err == nil {
+		// An empty WAL is no change: a read-only connection (the web UI's) creates
+		// one when there is none.
+		if info, err := os.Stat(path); err == nil && !(strings.HasSuffix(path, "-wal") && info.Size() == 0) {
 			fmt.Fprintf(&b, "%d/%d;", info.Size(), info.ModTime().UnixNano())
 		} else {
 			b.WriteString("-;")

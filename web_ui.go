@@ -1,7 +1,10 @@
 package main
 
-// The web UI (plan step 22.3a): read-only pages served by the service on
-// localhost — status, statistics, search, an entry, its PDF opened with macOS.
+// The web UI (plan steps 22.3a–b), served by the service on localhost. One
+// page with virtual tabs (Status, Search, Statistics, Log) that keep their state
+// when switching between them, and pop-ups for an entry and an author. The page
+// fetches its parts: HTML fragments (status, statistics, an entry, an author)
+// and JSON (the Search table's rows, the log's new lines).
 //
 // Safety: the server listens on 127.0.0.1 only; every path starts with a random
 // token made when the service starts (any web page in the browser can send
@@ -17,14 +20,15 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"html/template"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -62,13 +66,18 @@ func (w *TWebUI) URL() string { return fmt.Sprintf("http://localhost:%d/%s/", w.
 func (w *TWebUI) start() {
 	mux := http.NewServeMux()
 	prefix := "/" + w.token
-	mux.HandleFunc(prefix+"/", w.handleStatus)
-	mux.HandleFunc(prefix+"/stats", w.handleStats)
-	mux.HandleFunc(prefix+"/search", w.handleSearch)
-	mux.HandleFunc(prefix+"/entry/", w.handleEntry)
+	mux.HandleFunc(prefix+"/", w.handleShell)
+	mux.HandleFunc(prefix+"/frag/status", w.handleStatus)
+	mux.HandleFunc(prefix+"/frag/stats", w.handleStats)
+	mux.HandleFunc(prefix+"/frag/entry/", w.handleEntry)
+	mux.HandleFunc(prefix+"/frag/author/", w.handleAuthor)
+	mux.HandleFunc(prefix+"/api/entries", w.handleEntries)
+	mux.HandleFunc(prefix+"/api/log", w.handleLog)
+	mux.HandleFunc(prefix+"/api/stop", w.handleStop)
+	mux.HandleFunc(prefix+"/api/prefs", w.handlePrefs)
+	mux.HandleFunc(prefix+"/api/selects", w.handleSelects)
+	mux.HandleFunc(prefix+"/api/select/", w.handleSelect)
 	mux.HandleFunc(prefix+"/pdf/", w.handlePDF)
-	mux.HandleFunc(prefix+"/author/", w.handleAuthor)
-	mux.HandleFunc(prefix+"/log", w.handleLog)
 	// Any other address (e.g. the bare http://localhost:<port>/): say how to get
 	// in, without giving the token away.
 	mux.HandleFunc("/", func(rw http.ResponseWriter, r *http.Request) {
@@ -100,6 +109,13 @@ command line with <code>bib.check -ui</code>; <code>bib.check -status</code> sho
 	fmt.Fprintf(os.Stderr, "%s  web UI on port %d\n", time.Now().Format(time.DateTime), w.port)
 	w.server = server
 	go server.Serve(listener) //nolint:errcheck
+	// Keep the Search index up to date between jobs, so a search seldom waits.
+	go func() {
+		for !w.service.stopping.Load() {
+			refreshWebIndex(w.busy())
+			time.Sleep(10 * time.Second)
+		}
+	}()
 }
 
 // stop closes the web server (and so its port).
@@ -129,24 +145,43 @@ func openReadOnly() (*sql.DB, error) {
 	return sql.Open(sqliteDatabaseDriver, "file:"+dbPath()+"?mode=ro")
 }
 
-// render fills the page layout with one page's content.
-func (w *TWebUI) render(rw http.ResponseWriter, page string, data map[string]any) {
+// render writes a template: the page itself ("shell"), or a fragment of it.
+func (w *TWebUI) render(rw http.ResponseWriter, name string, data map[string]any) {
 	data["Base"] = "/" + w.token
 	data["Library"] = bibTeXBaseName
-	data["Page"] = page
 	rw.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := w.pages.ExecuteTemplate(rw, "layout", data); err != nil {
+	rw.Header().Set("Cache-Control", "no-store")
+	if err := w.pages.ExecuteTemplate(rw, name, data); err != nil {
 		fmt.Fprintf(os.Stderr, "web UI: %s\n", err)
 	}
+}
+
+// writeJSON answers with v as JSON.
+func writeJSON(rw http.ResponseWriter, v any) {
+	rw.Header().Set("Content-Type", "application/json")
+	rw.Header().Set("Cache-Control", "no-store")
+	json.NewEncoder(rw).Encode(v) //nolint:errcheck
+}
+
+// busy tells whether a job runs (the Search index is then not rebuilt).
+func (w *TWebUI) busy() bool {
+	w.service.mu.Lock()
+	defer w.service.mu.Unlock()
+	return w.service.busy
+}
+
+// handleShell serves the page with the tabs; the rest is fetched by it.
+func (w *TWebUI) handleShell(rw http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/"+w.token+"/" {
+		http.NotFound(rw, r)
+		return
+	}
+	w.render(rw, "shell", map[string]any{"Version": AppVersion})
 }
 
 // ---- status ----
 
 func (w *TWebUI) handleStatus(rw http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/"+w.token+"/" {
-		http.NotFound(rw, r)
-		return
-	}
 	s := w.service
 	s.mu.Lock()
 	data := map[string]any{
@@ -165,6 +200,63 @@ func (w *TWebUI) handleStatus(rw http.ResponseWriter, r *http.Request) {
 	}
 	data["Unpushed"] = readLibraryUnpushed() != nil
 	w.render(rw, "status", data)
+}
+
+// handleStop stops the service (POST only), as -stop does: a running job is
+// stopped, what is not pushed yet is pushed. The answer comes before that.
+func (w *TWebUI) handleStop(rw http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(rw, "not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	fmt.Fprintf(os.Stderr, "%s  stop asked in the web UI\n", time.Now().Format(time.DateTime))
+	rw.WriteHeader(http.StatusAccepted)
+	go w.service.stop(logSink{})
+}
+
+// ---- preferences ----
+
+// webPrefsPath is the web UI's preferences file (Erik, 2026-11-24): the Search
+// columns, their widths and order, the sorting. One file in the local DB folder,
+// for every library there, as the maps (*.csv) there are.
+func webPrefsPath() string { return localDBFolder + "web_ui.json" }
+
+var webPrefsMu sync.Mutex
+
+// handlePrefs answers the preferences (GET; {} when there are none) or replaces
+// them (POST, a JSON object of at most 64 KB). The page owns their content.
+func (w *TWebUI) handlePrefs(rw http.ResponseWriter, r *http.Request) {
+	webPrefsMu.Lock()
+	defer webPrefsMu.Unlock()
+	switch r.Method {
+	case http.MethodGet:
+		data, err := os.ReadFile(webPrefsPath())
+		if err != nil || !json.Valid(data) {
+			data = []byte("{}")
+		}
+		rw.Header().Set("Content-Type", "application/json")
+		rw.Header().Set("Cache-Control", "no-store")
+		rw.Write(data) //nolint:errcheck
+	case http.MethodPost:
+		var prefs map[string]json.RawMessage
+		if err := json.NewDecoder(http.MaxBytesReader(rw, r.Body, 64<<10)).Decode(&prefs); err != nil {
+			http.Error(rw, "not a JSON object", http.StatusBadRequest)
+			return
+		}
+		data, _ := json.MarshalIndent(prefs, "", "  ")
+		tmp := webPrefsPath() + ".tmp"
+		if err := os.WriteFile(tmp, append(data, '\n'), 0o644); err != nil {
+			http.Error(rw, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if err := os.Rename(tmp, webPrefsPath()); err != nil {
+			http.Error(rw, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		rw.WriteHeader(http.StatusNoContent)
+	default:
+		http.Error(rw, "not allowed", http.StatusMethodNotAllowed)
+	}
 }
 
 // ---- statistics ----
@@ -211,71 +303,38 @@ type TWebEntryRow struct {
 	HTML                   template.HTML // the reference as the homepage fragments render it ("": not available)
 }
 
-func (w *TWebUI) handleSearch(rw http.ResponseWriter, r *http.Request) {
-	q := strings.TrimSpace(r.URL.Query().Get("q"))
-	data := map[string]any{"Query": q}
-	if q == "" {
-		w.render(rw, "search", data)
-		return
+// handleEntries answers a page of the Search table (JSON): q filters (every
+// word must occur), sort names the column ordered on ("": newest first), desc
+// reverses it, cols names the columns, from and n the rows. fields=1 adds the
+// columns that can be chosen.
+func (w *TWebUI) handleEntries(rw http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	from, _ := strconv.Atoi(q.Get("from"))
+	n, _ := strconv.Atoi(q.Get("n"))
+	if n <= 0 || n > 1000 {
+		n = 200
 	}
-	ro, err := openReadOnly()
+	var cols []string
+	if c := q.Get("cols"); c != "" {
+		cols = strings.Split(c, ",")
+	}
+	var groups []string
+	if g := q.Get("groups"); g != "" {
+		groups = strings.Split(g, "\n")
+	}
+	var sel *TSelectSession
+	if id := q.Get("sel"); id != "" {
+		if sel = selectSession(id); sel == nil {
+			http.Error(rw, "this Select tab is closed", http.StatusNotFound)
+			return
+		}
+	}
+	page, err := webIndexPage(q.Get("q"), groups, sel, q.Get("only") == "1", q.Get("sort"), q.Get("desc") == "1", cols, from, n, q.Get("fields") == "1")
 	if err != nil {
 		http.Error(rw, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	defer ro.Close()
-
-	// A key, an old key or a preferred alias goes straight to the entry.
-	key := q
-	var alias string
-	if ro.QueryRow(`SELECT key FROM key_oldies WHERE alias = ?`, q).Scan(&alias) == nil {
-		key = alias
-	} else if ro.QueryRow(`SELECT entry_key FROM bib_entries WHERE field = 'preferredalias' AND value = ?`, q).Scan(&alias) == nil {
-		key = alias
-	}
-	var found string
-	if ro.QueryRow(`SELECT entry_key FROM bib_entries WHERE entry_key = ? LIMIT 1`, key).Scan(&found) == nil {
-		http.Redirect(rw, r, "/"+w.token+"/entry/"+url.PathEscape(found), http.StatusSeeOther)
-		return
-	}
-
-	// Otherwise: title, DOI or author name containing the text.
-	like := "%" + q + "%"
-	rows, err := ro.Query(`
-		SELECT DISTINCT entry_key FROM bib_entries WHERE field IN ('title', 'doi') AND value LIKE ?
-		UNION
-		SELECT DISTINCT r.entry_key FROM contributor_roles r JOIN contributors c ON c.id = r.contributor_id
-		 WHERE c.name LIKE ?
-		LIMIT 201`, like, like)
-	if err != nil {
-		http.Error(rw, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	var keys []string
-	for rows.Next() {
-		var k string
-		if rows.Scan(&k) == nil {
-			keys = append(keys, k)
-		}
-	}
-	rows.Close()
-	if len(keys) > 200 {
-		data["More"] = true
-		keys = keys[:200]
-	}
-	list := make([]TWebEntryRow, 0, len(keys))
-	for _, k := range keys {
-		list = append(list, webEntryRow(ro, k))
-	}
-	sort.Slice(list, func(i, j int) bool {
-		if list[i].Year != list[j].Year {
-			return list[i].Year > list[j].Year
-		}
-		return list[i].Title < list[j].Title
-	})
-	addReferences(list)
-	data["Results"] = list
-	w.render(rw, "search", data)
+	writeJSON(rw, page)
 }
 
 // webEntryRow reads the few fields a list shows.
@@ -328,10 +387,12 @@ func webContributors(ro *sql.DB, key, role string) []TWebPerson {
 
 // ---- an entry ----
 
-type webField struct{ Name, Value, Link string }
+// webField is a field on the entry pop-up: a link out (Link), or to another
+// entry's pop-up (Entry).
+type webField struct{ Name, Value, Link, Entry string }
 
 func (w *TWebUI) handleEntry(rw http.ResponseWriter, r *http.Request) {
-	key := strings.TrimPrefix(r.URL.Path, "/"+w.token+"/entry/")
+	key := strings.TrimPrefix(r.URL.Path, "/"+w.token+"/frag/entry/")
 	ro, err := openReadOnly()
 	if err != nil {
 		http.Error(rw, err.Error(), http.StatusInternalServerError)
@@ -358,17 +419,10 @@ func (w *TWebUI) handleEntry(rw http.ResponseWriter, r *http.Request) {
 			continue // from the contributors, below
 		}
 		field := webField{Name: f, Value: v}
-		switch f {
-		case "crossref":
-			field.Link = "/" + w.token + "/entry/" + url.PathEscape(v)
-		case "doi":
-			field.Link = "https://doi.org/" + v
-		case "url":
-			if strings.HasPrefix(v, "http") {
-				field.Link = v
-			}
-		case "dblp":
-			field.Link = "https://dblp.org/rec/" + v
+		if f == "crossref" {
+			field.Entry = v
+		} else {
+			field.Link = webFieldLink(f, v)
 		}
 		fields = append(fields, field)
 	}
@@ -393,16 +447,39 @@ func (w *TWebUI) handleEntry(rw http.ResponseWriter, r *http.Request) {
 		reference = refs[key]
 	}
 	w.render(rw, "entry", map[string]any{
-		"Reference": reference,
-		"Key":       key,
-		"Type":      entryType,
-		"Authors":   webContributors(ro, key, "author"),
-		"Editors":   webContributors(ro, key, "editor"),
-		"Fields":    fields,
-		"Groups":    groups,
-		"HasPDF":    pdfErr == nil,
-		"Opened":    r.URL.Query().Get("opened") != "",
+		"GroupsField": strings.Join(groups, ", "),
+		"Reference":   reference,
+		"Key":         key,
+		"Type":        entryType,
+		"Authors":     webContributors(ro, key, "author"),
+		"Editors":     webContributors(ro, key, "editor"),
+		"Fields":      fields,
+		"Groups":      groups,
+		"HasPDF":      pdfErr == nil,
 	})
+}
+
+// webFieldURLs are the built-in field links; the settings' field_urls add to them.
+var webFieldURLs = map[string]string{"doi": "https://doi.org/$", "dblp": "https://dblp.org/rec/$"}
+
+// webFieldLink is the link a field's value stands for: the value itself for a
+// URL field holding a web address, else the field's URL pattern ("$": the
+// value, path-escaped but for its slashes) from the settings or built in; ""
+// when there is none.
+func webFieldLink(field, value string) string {
+	if strings.HasPrefix(value, "http://") || strings.HasPrefix(value, "https://") {
+		if field == "url" || strings.HasPrefix(field, "url") {
+			return value
+		}
+	}
+	pattern, ok := fieldURLs[field]
+	if !ok {
+		pattern = webFieldURLs[field]
+	}
+	if pattern == "" || value == "" {
+		return ""
+	}
+	return strings.ReplaceAll(pattern, "$", strings.ReplaceAll(url.PathEscape(value), "%2F", "/"))
 }
 
 // entryPDFPath is where an entry's PDF lives: <base>.files/<key>.pdf.
@@ -410,7 +487,7 @@ func entryPDFPath(key string) string {
 	return bibTeXFolder + bibTeXBaseName + ".files/" + key + ".pdf"
 }
 
-// handlePDF opens an entry's PDF with macOS (POST only: a page cannot open it
+// handlePDF opens an entry's PDF with the OS's viewer (POST only: a page cannot open it
 // by merely being loaded or prefetched).
 func (w *TWebUI) handlePDF(rw http.ResponseWriter, r *http.Request) {
 	key := strings.TrimPrefix(r.URL.Path, "/"+w.token+"/pdf/")
@@ -423,11 +500,11 @@ func (w *TWebUI) handlePDF(rw http.ResponseWriter, r *http.Request) {
 		http.NotFound(rw, r)
 		return
 	}
-	if err := exec.Command("open", path).Run(); err != nil {
+	if err := openWithOS(path); err != nil {
 		http.Error(rw, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	http.Redirect(rw, r, "/"+w.token+"/entry/"+url.PathEscape(key)+"?opened=1", http.StatusSeeOther)
+	rw.WriteHeader(http.StatusNoContent)
 }
 
 // ---- an author ----
@@ -435,7 +512,7 @@ func (w *TWebUI) handlePDF(rw http.ResponseWriter, r *http.Request) {
 // handleAuthor shows what the library knows about a contributor: name, ORCIDs,
 // DBLP person key, the name forms, and the entries (newest first).
 func (w *TWebUI) handleAuthor(rw http.ResponseWriter, r *http.Request) {
-	id := strings.TrimPrefix(r.URL.Path, "/"+w.token+"/author/")
+	id := strings.TrimPrefix(r.URL.Path, "/"+w.token+"/frag/author/")
 	ro, err := openReadOnly()
 	if err != nil {
 		http.Error(rw, err.Error(), http.StatusInternalServerError)
@@ -444,8 +521,7 @@ func (w *TWebUI) handleAuthor(rw http.ResponseWriter, r *http.Request) {
 	defer ro.Close()
 	var canonical string
 	if ro.QueryRow(`SELECT canonical_id FROM contributor_id_oldies WHERE absorbed_id = ?`, id).Scan(&canonical) == nil {
-		http.Redirect(rw, r, "/"+w.token+"/author/"+url.PathEscape(canonical), http.StatusSeeOther)
-		return
+		id = canonical
 	}
 	var name string
 	var orcid, dblpKey sql.NullString
@@ -537,6 +613,7 @@ func addReferences(list []TWebEntryRow) {
 // of jobs run from the command line.
 type TWebLog struct {
 	mu      sync.Mutex
+	ended   int // the number of lines ended so far (the kept ones are the last)
 	lines   []string
 	current strings.Builder // the line being written ("\r" starts it afresh)
 }
@@ -556,6 +633,7 @@ func (l *TWebLog) write(s string) {
 			l.current.Reset()
 		case '\n':
 			l.lines = append(l.lines, l.current.String())
+			l.ended++
 			l.current.Reset()
 			if len(l.lines) > webLogLines {
 				l.lines = l.lines[len(l.lines)-webLogLines:]
@@ -566,10 +644,16 @@ func (l *TWebLog) write(s string) {
 	}
 }
 
-func (l *TWebLog) text() string {
+// since returns the lines ended after the first from (as far as kept), the
+// number ended so far, and the line being written.
+func (l *TWebLog) since(from int) ([]string, int, string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return strings.Join(append(append([]string{}, l.lines...), l.current.String()), "\n")
+	first := l.ended - len(l.lines) // the number of the first kept line
+	if from < first || from > l.ended {
+		from = first
+	}
+	return append([]string{}, l.lines[from-first:]...), l.ended, l.current.String()
 }
 
 // teeServiceStderr sends what the service writes to stderr (its log file) to
@@ -596,6 +680,9 @@ func teeServiceStderr() {
 	}()
 }
 
+// handleLog answers the log lines after from (JSON).
 func (w *TWebUI) handleLog(rw http.ResponseWriter, r *http.Request) {
-	w.render(rw, "log", map[string]any{"Log": webLog.text()})
+	from, _ := strconv.Atoi(r.URL.Query().Get("from"))
+	lines, ended, current := webLog.since(from)
+	writeJSON(rw, map[string]any{"lines": lines, "next": ended, "current": current})
 }

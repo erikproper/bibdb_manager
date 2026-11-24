@@ -26,7 +26,6 @@ package main
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 )
 
@@ -63,7 +62,7 @@ func launchDisplayCommand() {
 	if displayCommand == "" {
 		return
 	}
-	cmd := exec.Command("sh", "-c", displayCommand)
+	cmd := shellCommand(displayCommand)
 	if err := cmd.Start(); err != nil {
 		messagef("Warning: could not run display_command %q: %s\n", displayCommand, err)
 		return
