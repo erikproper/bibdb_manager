@@ -205,9 +205,15 @@ func (s *TSocketIO) endInput()            { s.closeOnce.Do(func() { close(s.line
 // toWebLog adds a job's output to the log page; the service's own jobs write to
 // the service log, which reaches it already.
 func (s *TSocketIO) toWebLog(m string) {
-	if _, own := s.out.(logSink); !own {
-		webLog.write(m)
+	if _, own := s.out.(logSink); own {
+		return
 	}
+	if t, tee := s.out.(teeSink); tee {
+		if _, own := t.a.(logSink); own {
+			return
+		}
+	}
+	webLog.write(m)
 }
 
 // frameSink takes the frames of a job's output: a command line's socket, or

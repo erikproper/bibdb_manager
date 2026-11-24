@@ -469,6 +469,18 @@ func init() {
 			},
 		},
 		{
+			name:     "edit_entry",
+			kind:     commandWrite,
+			selected: func() bool { return cmdEditEntry },
+			run: func(args []string) {
+				if len(args) != 2 {
+					messageln("Usage: -edit_entry <key> <json>")
+					endRun(1)
+				}
+				doEditEntry(args)
+			},
+		},
+		{
 			name:     "add_to_group",
 			kind:     commandWrite,
 			selected: func() bool { return cmdAddToGroup },

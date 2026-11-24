@@ -521,6 +521,18 @@ func (w *TWebUI) handleSelect(rw http.ResponseWriter, r *http.Request) {
 // background (output to the service log and the Log tab; no person to answer
 // questions). done gets its exit code. An error: another job runs.
 func (s *TService) runWebJob(args []string, dir string, done func(int)) error {
+	return s.runWebJobs([][]string{args}, dir, nil, func(codes []int) { done(codes[0]) })
+}
+
+// runWebJobs runs commands one after the other as jobs in one go (no other job
+// in between), in dir, in the background; their output also goes to out (when
+// not nil). done gets their exit codes; a command that fails ends the run (the
+// codes stop there).
+func (s *TService) runWebJobs(cmds [][]string, dir string, out frameSink, done func([]int)) error {
+	if len(cmds) == 0 {
+		done(nil)
+		return nil
+	}
 	s.mu.Lock()
 	if s.busy || s.stopping.Load() {
 		running := strings.Join(s.jobArgs, " ")
@@ -530,39 +542,82 @@ func (s *TService) runWebJob(args []string, dir string, done func(int)) error {
 		}
 		return fmt.Errorf("the service is busy (%s); try again when it is done", running)
 	}
-	s.busy, s.ownJob, s.jobStop, s.jobArgs, s.jobFrom = true, false, nil, args, time.Now()
+	s.busy, s.ownJob, s.jobStop, s.jobArgs, s.jobFrom = true, false, nil, cmds[0], time.Now()
 	s.mu.Unlock()
+	var sink frameSink = logSink{}
+	if out != nil {
+		sink = teeSink{logSink{}, out}
+	}
 	go func() {
-		fmt.Fprintf(os.Stderr, "%s  job (web UI): %s (in %s)\n", time.Now().Format(time.DateTime), strings.Join(args, " "), dir)
-		req := serviceFrame{T: "run", Args: append([]string{"-base", libraryBase()}, args...), Version: AppVersion,
-			Base: libraryBase(), Cwd: dir}
-		sio := &TSocketIO{out: logSink{}, lines: make(chan string)}
-		sio.endInput()
-		code := 2
-		if positional, ok := parseJobArguments(req.Args); ok {
+		var codes []int
+		for _, args := range cmds {
 			s.mu.Lock()
-			s.jobStop = sio.interrupt
+			s.jobArgs = args
 			s.mu.Unlock()
-			deferServicePush = true
-			cwd, _ := os.Getwd()
-			if err := os.Chdir(dir); err == nil {
-				code = s.runJobInService(req, positional, sio)
-				os.Chdir(cwd) //nolint:errcheck
-			} else {
-				fmt.Fprintf(os.Stderr, "%s  cannot use the folder %s: %s\n", time.Now().Format(time.DateTime), dir, err)
+			fmt.Fprintf(os.Stderr, "%s  job (web UI): %s (in %s)\n", time.Now().Format(time.DateTime), strings.Join(args, " "), dir)
+			req := serviceFrame{T: "run", Args: append([]string{"-base", libraryBase()}, args...), Version: AppVersion,
+				Base: libraryBase(), Cwd: dir}
+			sio := &TSocketIO{out: sink, lines: make(chan string)}
+			sio.endInput()
+			code := 2
+			if positional, ok := parseJobArguments(req.Args); ok {
+				s.mu.Lock()
+				s.jobStop = sio.interrupt
+				s.mu.Unlock()
+				deferServicePush = true
+				cwd, _ := os.Getwd()
+				if err := os.Chdir(dir); err == nil {
+					code = s.runJobInService(req, positional, sio)
+					os.Chdir(cwd) //nolint:errcheck
+				} else {
+					fmt.Fprintf(os.Stderr, "%s  cannot use the folder %s: %s\n", time.Now().Format(time.DateTime), dir, err)
+				}
+			}
+			sio.finished.Store(true)
+			fmt.Fprintf(os.Stderr, "%s  job (web UI) ended with code %d\n", time.Now().Format(time.DateTime), code)
+			codes = append(codes, code)
+			if code != 0 {
+				break
 			}
 		}
-		sio.finished.Store(true)
 		if readLibraryUnpushed() != nil {
 			s.schedulePush()
 		}
 		s.mu.Lock()
 		s.busy, s.jobStop, s.lastActive = false, nil, time.Now()
 		s.mu.Unlock()
-		fmt.Fprintf(os.Stderr, "%s  job (web UI) ended with code %d\n", time.Now().Format(time.DateTime), code)
-		done(code)
+		done(codes)
 	}()
 	return nil
+}
+
+// teeSink sends a job's output to two sinks.
+type teeSink struct{ a, b frameSink }
+
+func (t teeSink) send(f serviceFrame) error {
+	t.a.send(f) //nolint:errcheck
+	return t.b.send(f)
+}
+
+// collectSink keeps a job's messages (for a reply to the page).
+type collectSink struct {
+	mu sync.Mutex
+	b  strings.Builder
+}
+
+func (c *collectSink) send(f serviceFrame) error {
+	if f.T == "out" || f.T == "err" || f.T == "info" {
+		c.mu.Lock()
+		c.b.WriteString(f.D)
+		c.mu.Unlock()
+	}
+	return nil
+}
+
+func (c *collectSink) text() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return reANSIEscape.ReplaceAllString(c.b.String(), "")
 }
 
 // version counts the session's changes (and saves, which drop the kept ones).

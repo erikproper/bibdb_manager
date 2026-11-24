@@ -76,6 +76,8 @@ func (w *TWebUI) start() {
 	mux.HandleFunc(prefix+"/api/log", w.handleLog)
 	mux.HandleFunc(prefix+"/api/stop", w.handleStop)
 	mux.HandleFunc(prefix+"/api/prefs", w.handlePrefs)
+	mux.HandleFunc(prefix+"/frag/edit/", w.handleEditFrag)
+	mux.HandleFunc(prefix+"/api/edit/", w.handleEditSave)
 	mux.HandleFunc(prefix+"/api/selects", w.handleSelects)
 	mux.HandleFunc(prefix+"/api/selstate", w.handleSelState)
 	mux.HandleFunc(prefix+"/api/selstates", w.handleSelStates)
@@ -304,6 +306,7 @@ type TWebEntryRow struct {
 	Key, Type, Year, Title string
 	Authors                []TWebPerson
 	HTML                   template.HTML // the reference as the homepage fragments render it ("": not available)
+	Roles                  string        // on an author's list: "author", "editor" or both (space-separated)
 }
 
 // handleEntries answers a page of the Search table (JSON): q filters (every
@@ -556,9 +559,28 @@ func (w *TWebUI) handleAuthor(rw http.ResponseWriter, r *http.Request) {
 	}
 	forms := strings1(`SELECT name FROM contributor_names WHERE id = ? AND name != ? ORDER BY name`, id, name)
 	keys := strings1(`SELECT DISTINCT entry_key FROM contributor_roles WHERE contributor_id = ?`, id)
+	roles := map[string][]string{}
+	if rRows, err := ro.Query(`SELECT DISTINCT entry_key, role FROM contributor_roles WHERE contributor_id = ? ORDER BY role`, id); err == nil {
+		for rRows.Next() {
+			var k, role string
+			if rRows.Scan(&k, &role) == nil {
+				roles[k] = append(roles[k], role)
+			}
+		}
+		rRows.Close()
+	}
 	list := make([]TWebEntryRow, 0, len(keys))
+	authored, edited := 0, 0
 	for _, k := range keys {
-		list = append(list, webEntryRow(ro, k))
+		row := webEntryRow(ro, k)
+		row.Roles = strings.Join(roles[k], " ")
+		if strings.Contains(row.Roles, "author") {
+			authored++
+		}
+		if strings.Contains(row.Roles, "editor") {
+			edited++
+		}
+		list = append(list, row)
 	}
 	sort.Slice(list, func(i, j int) bool {
 		if list[i].Year != list[j].Year {
@@ -572,7 +594,8 @@ func (w *TWebUI) handleAuthor(rw http.ResponseWriter, r *http.Request) {
 			list[i].HTML = linkReferenceNames(ro, list[i].Key, list[i].HTML)
 		}
 	}
-	data := map[string]any{"ID": id, "Name": name, "ORCIDs": orcids, "Forms": forms, "Results": list}
+	data := map[string]any{"ID": id, "Name": name, "ORCIDs": orcids, "Forms": forms, "Results": list,
+		"Authored": authored, "Edited": edited}
 	if dblpKey.Valid && dblpKey.String != "" {
 		data["DBLP"] = strings.TrimPrefix(dblpKey.String, "homepages/")
 	}

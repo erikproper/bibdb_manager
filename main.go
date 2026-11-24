@@ -16,9 +16,10 @@
 package main
 
 import (
-	"errors"
 	"bufio"
 	"database/sql"
+	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -54,23 +55,23 @@ var (
 	Reporting TInteraction
 )
 
-const AppVersion = "30.90"
+const AppVersion = "30.93"
 
 // Run-state flags consumed by the write tail in main.
 var (
-	skipBibDbRefresh      bool
-	skipBibValidation     bool
-	skipStartupChecks     bool // set by -import so the import runs before consistency checks
-	forceWrite            bool
-	cmdNoGarbageCleaning  bool
-	cmdTrustHints              bool   // -trust_hints: auto-accept key-hint matches in harvest
-	cmdCollectKeys             bool   // -collect_keys: add source keys to hints DB when unambiguous
+	skipBibDbRefresh           bool
+	skipBibValidation          bool
+	skipStartupChecks          bool // set by -import so the import runs before consistency checks
+	forceWrite                 bool
+	cmdNoGarbageCleaning       bool
+	cmdTrustHints              bool           // -trust_hints: auto-accept key-hint matches in harvest
+	cmdCollectKeys             bool           // -collect_keys: add source keys to hints DB when unambiguous
 	cmdHarvestGroup            string         // -group: add all resolved harvest entries to this group
 	cmdHarvestTransferKeysPath string         // resolved .keys path for harvest_transfer target; "" = disabled
 	cmdHarvestWeaveEntries     []TBibTeXEntry // ignored entries accumulated during this harvest run; flushed to follow .sync DB
-	cmdFix                     bool // -fix: apply full per-entry checks when combined with -sync or -harvest
-	cmdPull                    bool // -pull: with -sync, skip up-sync (phase 1); only write bib output from DB
-	cmdMatchedOrcidDataOnly    bool // -matched_orcid_data_only: skip ORCID challenges in step 3
+	cmdFix                     bool           // -fix: apply full per-entry checks when combined with -sync or -harvest
+	cmdPull                    bool           // -pull: with -sync, skip up-sync (phase 1); only write bib output from DB
+	cmdMatchedOrcidDataOnly    bool           // -matched_orcid_data_only: skip ORCID challenges in step 3
 )
 
 // stderrPrintf writes to stderr only when running in a TTY session.
@@ -332,12 +333,12 @@ bibParseLoop:
 // sessionStart* capture library metrics at the beginning of a write session so
 // that reportHomework() can print deltas at the end.
 var (
-	sessionStartEntryCount        int
-	sessionStartDblpKeyCount      int
-	sessionStartFieldMapCount     int
-	sessionStartUnresolvedGroups  int
-	sessionStartDblpCandidates    int
-	sessionManualDblpAssignments  int // gross count of manually entered DBLP keys this session
+	sessionStartEntryCount       int
+	sessionStartDblpKeyCount     int
+	sessionStartFieldMapCount    int
+	sessionStartUnresolvedGroups int
+	sessionStartDblpCandidates   int
+	sessionManualDblpAssignments int // gross count of manually entered DBLP keys this session
 )
 
 func countDblpKeyedEntries() int {
@@ -1312,7 +1313,7 @@ func reportORCIDSideAutoResolves() {
 		return
 	}
 	logPath := libraryBase() + tablesFolderSuffix + "/orcid_side_auto_resolves.log"
-	os.MkdirAll(libraryBase()+tablesFolderSuffix, 0o755)                 //nolint:errcheck
+	os.MkdirAll(libraryBase()+tablesFolderSuffix, 0o755) //nolint:errcheck
 	// Appended, with the date: each run's answers stay, for an audit (30.39; the
 	// file was overwritten, so the Campbell merge of 2026-11-22 left no trace).
 	if f, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644); err == nil {
@@ -1330,7 +1331,7 @@ func doTriageContributorAliases() {
 
 	type aliasPair struct {
 		alias, id string
-		count      int
+		count     int
 	}
 	rows, err := db.Query(`
 		SELECT ecn.name_used, ecn.contributor_id, COUNT(*) AS cnt
@@ -2082,27 +2083,89 @@ func doSetField(args []string) {
 			messagef("set_field: entry not found: %s\n", args[0])
 			return
 		}
-		field := args[1]
-		entry := loadEntryFromDb(key)
-		if len(args) >= 3 && args[2] != "" {
-			Library.setEntryField(entry, field, args[2])
-			// A value set by hand wins (Erik, 2026-11-23): a superseded value
-			// recorded for this field (e.g. by a merge) whose winner differs would
-			// otherwise map the new value back on output.
-			winners := map[string]bool{}
-			for _, winner := range Library.EntryFieldSourceToTarget[key][field] {
-				winners[winner] = true
-			}
-			for winner := range winners {
-				if winner != args[2] {
-					Library.UpdateEntryFieldAlias(key, field, winner, args[2])
-				}
-			}
-		} else {
-			Library.deleteEntryField(entry, field)
+		value := ""
+		if len(args) >= 3 {
+			value = args[2]
 		}
+		setFieldByHand(key, args[1], value)
 		bibEntriesModified = true
 	}
+}
+
+// setFieldByHand sets (value "": removes) a field as -set_field does.
+func setFieldByHand(key, field, value string) {
+	entry := loadEntryFromDb(key)
+	if value == "" {
+		Library.deleteEntryField(entry, field)
+		return
+	}
+	Library.setEntryField(entry, field, value)
+	// A value set by hand wins (Erik, 2026-11-23): a superseded value recorded
+	// for this field (e.g. by a merge) whose winner differs would otherwise map
+	// the new value back on output.
+	winners := map[string]bool{}
+	for _, winner := range Library.EntryFieldSourceToTarget[key][field] {
+		winners[winner] = true
+	}
+	for winner := range winners {
+		if winner != value {
+			Library.UpdateEntryFieldAlias(key, field, winner, value)
+		}
+	}
+}
+
+// TEntryEdit is what -edit_entry applies (the web UI's Save, 22.3c): fields to
+// set ("" removes one; "entrytype" for the type), groups to join and leave.
+type TEntryEdit struct {
+	Set   map[string]string `json:"set"`
+	Join  []string          `json:"join"`
+	Leave []string          `json:"leave"`
+}
+
+// doEditEntry is -edit_entry <key> <json>: an entry's changes in one write
+// session, as -set_field, -add_to_group and -remove_from_group each would.
+func doEditEntry(args []string) {
+	var edit TEntryEdit
+	if err := json.Unmarshal([]byte(args[1]), &edit); err != nil {
+		messagef("edit_entry: not a valid edit: %s\n", err)
+		endRun(1)
+	}
+	if !openLibraryToUpdate() {
+		return
+	}
+	key := resolveUserKey(args[0])
+	if !Library.EntryExists(key) {
+		messagef("edit_entry: entry not found: %s\n", args[0])
+		return
+	}
+	fields := make([]string, 0, len(edit.Set))
+	for f := range edit.Set {
+		fields = append(fields, f)
+	}
+	sort.Strings(fields)
+	if v, ok := edit.Set["entrytype"]; ok && v != "" { // the type first: it decides what fits
+		setFieldByHand(key, "entrytype", v)
+	}
+	for _, f := range fields {
+		if f != "entrytype" {
+			setFieldByHand(key, f, edit.Set[f])
+		}
+	}
+	for _, g := range edit.Leave {
+		if err := removeBibGroupEntry(g, key); err != nil {
+			messagef("Could not remove %s from group %s: %s\n", key, g, err)
+			continue
+		}
+		Library.GroupEntries.DeleteValueFromStringSetMap(g, key)
+	}
+	for _, g := range edit.Join {
+		if err := addBibGroupEntry(g, key); err != nil {
+			messagef("Could not add %s to group %s: %s\n", key, g, err)
+			continue
+		}
+		Library.GroupEntries.AddValueToStringSetMap(g, key)
+	}
+	bibEntriesModified = true
 }
 
 func doRemoveFromGroup(args []string) {
@@ -2432,7 +2495,6 @@ func doUpsertDblpEntries() {
 	if openLibraryToUpdate() {
 		Library.ReadKeyNonDoublesFile()
 
-
 		// Collect bookish and non-bookish keys separately so bookish entries are
 		// processed first — proceedings/books establish venue field mappings that
 		// inpapers/incollections then inherit, preventing double-counting artifacts
@@ -2618,7 +2680,6 @@ func doUpsertDblpFor(args []string) {
 	}
 }
 
-
 func doUpsertDblpEntryFromDblpKeys(args []string) {
 	if openLibraryToUpdate() {
 		Library.ReadKeyNonDoublesFile()
@@ -2635,7 +2696,6 @@ func doUpsertDblpEntryFromDblpKeys(args []string) {
 		}
 	}
 }
-
 
 // resolveNameToORCID looks up the DBLP persons index for canonicalName, scans
 // for a homepages/ key, and returns the first ORCID found in that entry.
@@ -3081,7 +3141,6 @@ func runScript() bool {
 	Library.ApplyScript(scriptPath)
 	return true
 }
-
 
 func doAddKeyMapping(args []string) {
 	if openLibraryToUpdate() {
@@ -4045,51 +4104,52 @@ func doAssignOrcid(args []string) {
 
 // Command flags, at package level so the command table (commands.go) can use them.
 var (
-	cmdSync               bool
-	cmdGetPdfs            bool
-	cmdFindEntries        bool
-	cmdAuditMappings      bool
-	cmdEntryKey           bool
-	cmdEntryKeyAlias      bool
-	cmdShowEntry          bool
-	cmdFixEntries         bool
-	cmdFixDuplicates        bool // -fix_duplicates: fix entries in unresolved title groups
-	cmdFixCandidates        bool // -fix_candidates: link unmatched entries to DBLP
-	cmdTriageAuthorMappings    bool // -triage_author_mappings: triage author/editor superseded_field_values
+	cmdSync                     bool
+	cmdGetPdfs                  bool
+	cmdFindEntries              bool
+	cmdAuditMappings            bool
+	cmdEntryKey                 bool
+	cmdEntryKeyAlias            bool
+	cmdShowEntry                bool
+	cmdFixEntries               bool
+	cmdFixDuplicates            bool // -fix_duplicates: fix entries in unresolved title groups
+	cmdFixCandidates            bool // -fix_candidates: link unmatched entries to DBLP
+	cmdTriageAuthorMappings     bool // -triage_author_mappings: triage author/editor superseded_field_values
 	cmdTriageContributorAliases bool // -triage_contributor_aliases: generalise or keep entry-specific contributor aliases
 	cmdDisambiguateContributors bool // -disambiguate_contributors: resolve ambiguous contributor-name assignments
 	cmdUpgradeWatchActions      bool // -upgrade_watch_actions: rewrite watch file to contributor format
 	cmdAssignOrcid              bool // -assign_orcid: assign an ORCID to a contributor
 	cmdEnrichContributorData    bool // -enrich_contributor_data: run full contributor enrichment pipeline
 	cmdHomework                 bool // -homework: run all pending homework in priority order
-	cmdMergeContributors     bool // -merge_contributors: merge two contributors into one
-	cmdMergeOrcidDuplicates  bool // -merge_orcid_duplicates: merge contributors sharing an ORCID, or by ORCID's duplicates
-	cmdAddDblpEntry   bool
-	cmdAddDblpEntries bool
-	cmdWatch             bool
-	cmdAddGroup              bool // -add_group: create a new BibDesk static group (with optional initial entries)
-	cmdAddKeyMapping         bool
-	cmdMergeEntries       bool
-	cmdAddNameMapping     bool
-	cmdCorrectName        bool
-	cmdAddDoiAlias        bool
-	cmdSetPreferredAlias  bool
-	cmdSplitPosition      bool
-	logFilePath           string
-	cmdNewKey             bool
-	cmdDeleteEntry        bool
-	cmdMap                bool
-	cmdUseAliases         bool
-	cmdAddToGroup         bool
-	cmdRemoveFromGroup    bool
-	cmdSetGroups          bool
-	cmdSetField           bool
-	cmdRenderAsBibTeX     bool
-	cmdRenderGroup        bool
-	cmdListGroupAliases   bool
-	cmdRenderAsTex        bool
-	cmdRenderAsHTML       bool
-	cmdRenderAsText       bool
+	cmdMergeContributors        bool // -merge_contributors: merge two contributors into one
+	cmdMergeOrcidDuplicates     bool // -merge_orcid_duplicates: merge contributors sharing an ORCID, or by ORCID's duplicates
+	cmdAddDblpEntry             bool
+	cmdAddDblpEntries           bool
+	cmdWatch                    bool
+	cmdAddGroup                 bool // -add_group: create a new BibDesk static group (with optional initial entries)
+	cmdAddKeyMapping            bool
+	cmdMergeEntries             bool
+	cmdAddNameMapping           bool
+	cmdCorrectName              bool
+	cmdAddDoiAlias              bool
+	cmdSetPreferredAlias        bool
+	cmdSplitPosition            bool
+	logFilePath                 string
+	cmdNewKey                   bool
+	cmdDeleteEntry              bool
+	cmdMap                      bool
+	cmdUseAliases               bool
+	cmdAddToGroup               bool
+	cmdRemoveFromGroup          bool
+	cmdSetGroups                bool
+	cmdSetField                 bool
+	cmdEditEntry                bool
+	cmdRenderAsBibTeX           bool
+	cmdRenderGroup              bool
+	cmdListGroupAliases         bool
+	cmdRenderAsTex              bool
+	cmdRenderAsHTML             bool
+	cmdRenderAsText             bool
 	cmdCheckPdfs                bool
 	cmdAlignBooktitleCountries  bool
 	cmdUpdateOrcidCache         bool
@@ -4097,8 +4157,8 @@ var (
 	cmdPushDblp                 bool
 	cmdRestoreDblp              bool
 	cmdUpdateDblp               bool
-	cmdRestoreKeyHints      bool
-	restoreKeyHintsPath     string
+	cmdRestoreKeyHints          bool
+	restoreKeyHintsPath         string
 	cmdDeleteGarbage            bool
 	cmdRestoreFromDump          bool
 	cmdRestoreBackupName        string // -restore <name>: restore named backup to home DB
@@ -4172,7 +4232,6 @@ func main() {
 	flag.BoolVar(&cmdVersion, "version", false, "print version and exit")
 	flag.BoolVar(&cmdVersion, "v", false, "print version and exit")
 
-
 	flag.BoolVar(&cmdSync, "sync", false, "sync library to bib file(s) via exchange config; optional arg narrows to one file")
 	flag.BoolVar(&cmdPull, "pull", false, "with -sync: skip up-sync (phase 1) and re-import; only write bib output from DB")
 	flag.BoolVar(&cmdGetPdfs, "get_pdfs", false, "download missing PDFs into the files folder")
@@ -4215,6 +4274,7 @@ func main() {
 	flag.BoolVar(&cmdAddToGroup, "add_to_group", false, "add an entry to a group: -add_to_group <key> <group>")
 	flag.BoolVar(&cmdRemoveFromGroup, "remove_from_group", false, "remove an entry from a group")
 	flag.BoolVar(&cmdSetGroups, "set_groups", false, "set group membership: -set_groups <key> [+] <group>...")
+	flag.BoolVar(&cmdEditEntry, "edit_entry", false, "internal (web UI): apply an entry's changes in one go: -edit_entry <key> <json {set, join, leave}>")
 	flag.BoolVar(&cmdSetField, "set_field", false, "set a field on an entry: -set_field <key> <field> [<value>] (omit value to clear)")
 	flag.BoolVar(&cmdRenderGroup, "render_group", false, "render all entries in a group to pubs/citations folders")
 	flag.BoolVar(&cmdListGroupAliases, "list_group_aliases", false, "list canonical|alias pairs for all entries in a group")
@@ -4224,7 +4284,7 @@ func main() {
 	flag.BoolVar(&cmdRenderAsHTML, "render_as_html", false, "render entry as HTML bibliography reference")
 	flag.BoolVar(&cmdRenderAsText, "render_as_text", false, "render entry as plain-text bibliography reference")
 	flag.BoolVar(&cmdCheckPdfs, "check_pdfs", false, "check PDF health, orphan files, and duplicates in the files folder")
-flag.BoolVar(&cmdAlignBooktitleCountries, "align_booktitle_countries", false, "detect and fix unbraced country names in booktitle fields")
+	flag.BoolVar(&cmdAlignBooktitleCountries, "align_booktitle_countries", false, "detect and fix unbraced country names in booktitle fields")
 	flag.BoolVar(&cmdUpdateOrcidCache, "update_orcid", false, "refresh the ORCID disk cache for all known contributors (oldest-first, q+Enter to stop)")
 	flag.BoolVar(&cmdLoadDblpXml, "load_dblp_xml", false, "load a DBLP .xml.gz export into the local DBLP store")
 	flag.BoolVar(&cmdPushDblp, "push_dblp", false, "copy the local DBLP store to DBLP/ in the shared DB folder (Nextcloud)")

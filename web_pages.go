@@ -17,12 +17,12 @@ const webPages = `
 :root {
   --bg: #fafafa; --card: #ffffff; --text: #212121; --muted: #727272;
   --primary: #03a9f4; --primary-text: #ffffff; --border: #e0e0e0; --hover: #f0f7fc;
-  --ok: #43a047; --warn: #ffa600; --busy: #039be5; --danger: #db4437; --chosen: #01579b;
+  --ok: #43a047; --warn: #ffa600; --busy: #039be5; --danger: #db4437; --chosen: #01579b; --edit: #e65100; --editbg: #fff3e0;
   --shadow: 0 2px 2px rgba(0,0,0,.14), 0 1px 5px rgba(0,0,0,.12);
 }
 @media (prefers-color-scheme: dark) {
   :root { --bg: #111111; --card: #1c1c1c; --text: #e1e1e1; --muted: #9b9b9b; --hover: #1f2a33;
-          --primary: #0288d1; --border: #2f2f2f; --shadow: 0 2px 2px rgba(0,0,0,.5); }
+          --primary: #0288d1; --border: #2f2f2f; --shadow: 0 2px 2px rgba(0,0,0,.5); --editbg: #2a1c10; --edit: #ffb74d; }
 }
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
@@ -96,6 +96,21 @@ button.toggle { border: 1px solid var(--border); background: var(--card); color:
 button.toggle.on { background: var(--chosen); border-color: var(--chosen); color: #fff; }
 .tick { display: inline-block; width: 16px; height: 16px; border: 1.5px solid var(--muted); border-radius: 4px;
         vertical-align: middle; cursor: pointer; margin-right: 4px; text-align: center; line-height: 13px; font-size: 12px; color: transparent; }
+.rolepick { font-size: 13px; font-weight: 400; margin-left: 14px; color: var(--muted); cursor: pointer; }
+.tabs button.edittab { color: #ffe0b2; }
+.tabs button.edittab.active { background: var(--editbg); color: var(--edit); }
+.editbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; padding: 8px 12px;
+           border-radius: 10px; background: var(--editbg); border-left: 4px solid var(--edit); }
+.editbar .edmsg { color: var(--muted); }
+table.edit { width: 100%; border-collapse: collapse; }
+table.edit td { padding: 4px 6px; vertical-align: top; border-bottom: 1px solid var(--border); }
+table.edit td.field { width: 150px; color: var(--muted); font-family: ui-monospace, Menlo, monospace; font-size: 13px; padding-top: 9px; }
+table.edit tr.removed { display: none; }
+table.edit tr.changed td.field { color: var(--edit); font-weight: 600; }
+table.edit textarea, table.edit select { width: 100%; font: 13px/1.4 ui-monospace, Menlo, monospace; padding: 5px 7px; resize: vertical;
+           border: 1px solid var(--border); border-radius: 6px; background: var(--card); color: var(--text); }
+table.edit .out { font-size: 12px; color: var(--muted); margin-top: 2px; }
+pre.edout { white-space: pre-wrap; font: 12px/1.4 ui-monospace, Menlo, monospace; margin: 8px 0 0; color: var(--muted); }
 .selpick { display: inline-flex; align-items: center; gap: 2px; margin-right: 14px; cursor: pointer; font-size: 14px; }
 .tick.on { background: #fbc02d; border-color: #f9a825; color: #000; }
 .tick.kept { background: var(--primary); border-color: var(--primary); color: #fff; }
@@ -568,6 +583,126 @@ window.addEventListener("hashchange", async () => {
   if (name && name !== current) showTab(name);
 });
 
+// ---- edit tabs (22.3c): an entry's form; Save runs bib.field (-set_field) per change ----
+class EditView {
+  constructor(panel, key) { this.panel = panel; this.key = key; this.orig = null; this.load(); }
+  async load(message) {
+    try { this.panel.innerHTML = await get("/frag/edit/" + encodeURIComponent(this.key)); }
+    catch (e) { lost(e); this.panel.innerHTML = '<p class="muted">' + esc(e.message || e) + "</p>"; return; }
+    const q = (c) => this.panel.querySelector("." + c);
+    this.orig = JSON.parse(q("edstate").dataset.state);
+    const alias = this.orig.fields.preferredalias; // the tab is named by the alias, when there is one
+    const tab = document.querySelector('.tabs button[data-tab="' + CSS.escape("edit-" + this.key) + '"]');
+    if (tab && alias) tab.innerHTML = "Edit: " + esc(alias) + '<span class="tabx" title="Close this tab">×</span>';
+    if (message) this.say(message.text, message.output);
+    q("edsave").onclick = () => this.save();
+    q("edrevert").onclick = () => { if (!this.dirty() || confirm("Undo your changes to " + this.key + "?")) this.load(); };
+    q("edclose").onclick = () => this.close();
+    this.panel.addEventListener("input", () => this.mark());
+    this.panel.addEventListener("change", () => this.mark());
+    this.panel.querySelectorAll(".edremove").forEach((b) => b.onclick = () => { b.closest("tr").classList.add("removed"); this.mark(); });
+    q("edadd").onchange = () => {
+      const f = q("edadd").value; if (!f) return;
+      q("edadd").querySelector('option[value="' + CSS.escape(f) + '"], option:checked').remove();
+      q("edadd").value = "";
+      const tr = document.createElement("tr");
+      tr.dataset.field = f;
+      tr.innerHTML = '<td class="field">' + esc(f) + '</td><td><textarea class="edval" rows="1"></textarea></td><td style="width:32px"><button class="plain edremove" title="Remove this field">×</button></td>';
+      tr.querySelector(".edremove").onclick = () => { tr.remove(); this.mark(); };
+      this.panel.querySelector("table.edit").appendChild(tr);
+      tr.querySelector("textarea").focus();
+    };
+    const addGroup = (g) => {
+      g = g.trim(); if (!g || this.groups().includes(g)) return;
+      const c = document.createElement("span");
+      c.className = "groupchip"; c.dataset.group = g;
+      c.innerHTML = esc(g) + '<button title="Remove from this group">×</button>';
+      q("edgroups").appendChild(c); this.mark();
+    };
+    q("edgroups").addEventListener("click", (e) => { const b = e.target.closest("button"); if (b) { b.closest(".groupchip").remove(); this.mark(); } });
+    q("edgroupadd").onchange = () => { addGroup(q("edgroupadd").value); q("edgroupadd").value = ""; };
+    q("edgroupnew").onkeydown = (e) => { if (e.key === "Enter") { addGroup(q("edgroupnew").value); q("edgroupnew").value = ""; } };
+    this.mark();
+  }
+  groups() { return [...this.panel.querySelectorAll(".edgroups .groupchip")].map((c) => c.dataset.group).sort(); }
+  collect() {
+    const st = { type: this.panel.querySelector(".edtype").value, fields: {}, groups: this.groups() };
+    for (const tr of this.panel.querySelectorAll("table.edit tr[data-field]")) {
+      if (tr.classList.contains("removed")) continue;
+      const v = tr.querySelector("textarea").value.trim();
+      if (v !== "") st.fields[tr.dataset.field] = v;
+    }
+    return st;
+  }
+  dirty() {
+    if (!this.orig) return false;
+    const now = this.collect(), o = this.orig;
+    if (now.type !== o.type || now.groups.join("\n") !== [...o.groups].sort().join("\n")) return true;
+    const keys = new Set([...Object.keys(now.fields), ...Object.keys(o.fields)]);
+    for (const k of keys) if ((now.fields[k] || "") !== (o.fields[k] || "")) return true;
+    return false;
+  }
+  mark() { // a changed field in orange; the count in the bar
+    if (!this.orig) return;
+    for (const tr of this.panel.querySelectorAll("table.edit tr[data-field]")) {
+      const v = tr.querySelector("textarea").value.trim();
+      tr.classList.toggle("changed", tr.classList.contains("removed") || v !== (this.orig.fields[tr.dataset.field] || ""));
+    }
+    if (this.dirty()) this.say("Changes not saved.");
+    else if (this.panel.querySelector(".edmsg").dataset.sticky !== "1") this.say("");
+  }
+  say(text, output) {
+    const m = this.panel.querySelector(".edmsg");
+    m.textContent = text || "";
+    m.dataset.sticky = output !== undefined ? "1" : "";
+    let pre = this.panel.querySelector("pre.edout");
+    if (output) {
+      if (!pre) { pre = document.createElement("pre"); pre.className = "edout"; this.panel.querySelector(".editbar").appendChild(pre); }
+      pre.textContent = output;
+    } else if (pre) pre.remove();
+  }
+  async save() {
+    if (!this.dirty()) { this.say("Nothing changed."); return; }
+    this.say("Saving…");
+    try {
+      const r = await fetch(BASE + "/api/edit/" + encodeURIComponent(this.key), { method: "POST",
+        headers: { "Content-Type": "application/json" }, body: JSON.stringify({ orig: this.orig, new: this.collect() }) });
+      if (!r.ok) { this.say(await r.text()); return; }
+      const d = await r.json();
+      await this.load({ text: d.message, output: d.output || "" });
+    } catch (e) { lost(e); this.say(String(e.message || e)); }
+  }
+  close() {
+    if (this.dirty() && !confirm("Close the edit tab of " + this.key + " without saving your changes?")) return;
+    const name = "edit-" + this.key;
+    const b = document.querySelector('.tabs button[data-tab="' + CSS.escape(name) + '"]');
+    if (b) b.remove();
+    this.panel.remove();
+    delete views[name];
+    if (current === name) showTab("search");
+  }
+  closeSelect() { this.close(); } // the × on the tab
+}
+function openEdit(key) {
+  const name = "edit-" + key;
+  if (!views[name]) {
+    const b = document.createElement("button");
+    b.dataset.tab = name;
+    b.className = "edittab";
+    b.title = "Edit " + key;
+    b.innerHTML = "Edit: " + esc(key) + '<span class="tabx" title="Close this tab">×</span>';
+    $("tabs").insertBefore(b, document.querySelector('.tabs button[data-tab="stats"]'));
+    const panel = document.createElement("section");
+    panel.className = "panel";
+    panel.id = "panel-" + name;
+    panel.hidden = true;
+    document.querySelector("main").appendChild(panel);
+    views[name] = new EditView(panel, key);
+  }
+  closePopup();
+  showTab(name);
+}
+
 // ---- pop-ups: an entry, an author; Back goes to the previous one ----
 let stack = [];
 function popup(title, html, push) {
@@ -654,16 +789,30 @@ $("mbody").addEventListener("click", (e) => {
   if (!tr || e.target.closest("a, button, .selpick") || String(window.getSelection())) return;
   openEntry(tr.dataset.key);
 });
+// An author's list: the authored / edited ticks show the entries in a ticked role.
+$("mbody").addEventListener("change", (e) => {
+  if (!e.target.classList.contains("rolefilter")) return;
+  const on = [...$("mbody").querySelectorAll(".rolefilter")].filter((b) => b.checked).map((b) => b.value);
+  let n = 0;
+  for (const tr of $("mbody").querySelectorAll("table.list tr[data-roles]")) {
+    const show = tr.dataset.roles.split(" ").some((r) => on.includes(r));
+    tr.hidden = !show;
+    if (show) n++;
+  }
+  const count = $("mbody").querySelector(".rolecount");
+  if (count) count.textContent = n;
+});
 $("mback").onclick = () => { if (stack.length > 1) { stack.pop(); show(stack[stack.length - 1]); } };
 $("overlay").addEventListener("mousedown", (e) => { if (e.target === $("overlay")) closePopup(); });
 document.addEventListener("keydown", (e) => { if (e.key === "Escape" && $("overlay").classList.contains("open")) closePopup(); });
 
 // ---- clicks inside fragments ----
 document.addEventListener("click", async (e) => {
-  const el = e.target.closest("[data-entry],[data-author],[data-pdf],#stop");
+  const el = e.target.closest("[data-entry],[data-author],[data-pdf],[data-edit],#stop");
   if (!el) return;
   e.preventDefault();
-  if (el.dataset.entry) openEntry(el.dataset.entry);
+  if (el.dataset.edit) openEdit(el.dataset.edit);
+  else if (el.dataset.entry) openEntry(el.dataset.entry);
   else if (el.dataset.author) open1("author", el.dataset.author, el.dataset.name || el.dataset.author);
   else if (el.dataset.pdf) {
     try { const r = await fetch(BASE + "/pdf/" + encodeURIComponent(el.dataset.pdf), { method: "POST" });
@@ -694,6 +843,7 @@ await refreshSelects();
 // #<tab>/entry:<key> and #<tab>/author:<id>: that tab with the pop-up over it.
 const deep = location.hash.match(/^#(?:([^/]*)\/)?(entry|author):(.+)$/);
 if (deep) { showTab(deep[1] || "search"); const id = decodeURIComponent(deep[3]); open1(deep[2], id, id); }
+else if (location.hash.startsWith("#edit-")) { const key = decodeURIComponent(location.hash.slice(6)); showTab("search"); openEdit(key); }
 else showTab(location.hash.slice(1) || "search");
 })();
 </script>
@@ -735,6 +885,7 @@ else showTab(location.hash.slice(1) || "search");
 {{define "peopletext"}}{{range $i, $p := .}}{{if $i}}, {{end}}<a href="#" data-author="{{$p.ID}}" data-name="{{tex $p.Name}}">{{tex $p.Name}}</a>{{end}}{{end}}
 
 {{define "entry"}}
+<div class="line"><button class="plain" data-edit="{{.Key}}" title="Edit this entry in an edit tab">Edit</button></div>
 {{if .Reference}}<div class="card ref">{{.Reference}}</div>{{end}}
 <div class="line"><span class="label">Groups</span>{{range .Groups}}<span class="chip">{{.}}</span>{{else}}<span class="muted">none</span>{{end}}</div>
 {{if .HasPDF}}<div class="line"><span class="label">PDF</span><button class="pdf" data-pdf="{{.Key}}" title="Open the PDF with macOS"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M8 13h8M8 17h5"/></svg>Open the PDF</button><span class="muted"></span></div>{{end}}
@@ -750,6 +901,30 @@ else showTab(location.hash.slice(1) || "search");
 </div>
 {{end}}
 
+{{define "edit"}}
+<div class="editbar"><b>Editing</b> <span class="key">{{.Key}}</span>{{if .Alias}}<span class="muted">({{.Alias}})</span>{{end}}
+  <button class="action edsave">Save</button><button class="plain edrevert">Revert</button><button class="plain edclose">Close</button>
+  <span class="edmsg"></span></div>
+<div class="edstate" hidden data-state="{{.State}}"></div>
+{{if .Reference}}<div class="card ref">{{.Reference}}</div>{{end}}
+<div class="card">
+  <table class="edit">
+    <tr><td class="field">entry type</td><td><select class="edtype">{{range .Types}}<option{{if eq . $.Type}} selected{{end}}>{{.}}</option>{{end}}</select></td><td></td></tr>
+    {{range .Fields}}<tr data-field="{{.Name}}"><td class="field" title="{{if .Required}}required for this type{{end}}">{{.Name}}{{if .Required}} *{{end}}</td>
+      <td><textarea class="edval" rows="{{if .Long}}2{{else}}1{{end}}">{{.Value}}</textarea>{{if .Output}}<div class="out">output: {{.Output}}</div>{{end}}</td>
+      <td style="width:32px"><button class="plain edremove" title="Remove this field">×</button></td></tr>
+    {{end}}
+  </table>
+  <div class="line" style="margin-top:10px"><select class="edadd"><option value="">Add a field…</option>{{range .Addable}}<option>{{.}}</option>{{end}}</select>
+    <span class="muted">* required for the type. A changed field is shown in orange; Save runs bib.field for each.</span></div>
+</div>
+<div class="card"><h2>Groups</h2>
+  <div class="edgroups" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">{{range .Groups}}<span class="groupchip" data-group="{{.}}">{{.}}<button title="Remove from this group">×</button></span>{{end}}</div>
+  <div class="line"><select class="edgroupadd"><option value="">Add to a group…</option>{{range .AllGroups}}<option>{{.}}</option>{{end}}</select>
+    <input class="edgroupnew" placeholder="or a new group" style="font-size:13px;padding:4px 8px;border:1px solid var(--border);border-radius:8px;background:var(--card);color:var(--text)"></div>
+</div>
+{{end}}
+
 {{define "author"}}
 <div class="card">
   <h2>{{tex .Name}} <span class="muted key">{{.ID}}</span></h2>
@@ -760,9 +935,11 @@ else showTab(location.hash.slice(1) || "search");
   </table>
 </div>
 <div class="card">
-  <h2>Entries ({{len .Results}})</h2>
+  <h2>Entries (<span class="rolecount">{{len .Results}}</span>)
+    <label class="rolepick"><input type="checkbox" class="rolefilter" value="author" checked> authored ({{.Authored}})</label>
+    <label class="rolepick"><input type="checkbox" class="rolefilter" value="editor" checked> edited ({{.Edited}})</label></h2>
   <table class="list">
-    {{range .Results}}<tr data-key="{{.Key}}" title="{{.Key}}"><td class="year">{{.Year}}</td><td class="ref">{{if .HTML}}{{.HTML}}{{else}}{{if .Title}}{{tex .Title}}{{else}}<span class="key">{{.Key}}</span>{{end}}{{if .Authors}} — {{template "peopletext" .Authors}}{{end}}{{end}}</td></tr>{{end}}
+    {{range .Results}}<tr data-key="{{.Key}}" data-roles="{{.Roles}}" title="{{.Key}}"><td class="year">{{.Year}}</td><td class="ref">{{if .HTML}}{{.HTML}}{{else}}{{if .Title}}{{tex .Title}}{{else}}<span class="key">{{.Key}}</span>{{end}}{{if .Authors}} — {{template "peopletext" .Authors}}{{end}}{{end}}</td></tr>{{end}}
   </table>
 </div>
 {{end}}
