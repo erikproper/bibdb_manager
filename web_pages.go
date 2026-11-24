@@ -17,7 +17,11 @@ const webPages = `
 :root {
   --bg: #fafafa; --card: #ffffff; --text: #212121; --muted: #727272;
   --primary: #03a9f4; --primary-text: #ffffff; --border: #e0e0e0; --hover: #f0f7fc;
-  --ok: #43a047; --warn: #ffa600; --busy: #039be5; --danger: #db4437; --chosen: #01579b; --edit: #e65100; --editbg: #fff3e0;
+  /* Colours, one meaning each (Erik, 2026-11-24): blue (--primary, --chosen) the interface
+     itself and active filters; green (--ok) fine / in place; amber (--warn) pending, not
+     final yet; red (--danger) busy changing data, or a dangerous action; orange (--edit)
+     editing. */
+  --ok: #43a047; --warn: #ffa600; --busy: #db4437; --danger: #db4437; --chosen: #01579b; --edit: #e65100; --editbg: #fff3e0;
   --shadow: 0 2px 2px rgba(0,0,0,.14), 0 1px 5px rgba(0,0,0,.12);
 }
 @media (prefers-color-scheme: dark) {
@@ -34,6 +38,10 @@ header { background: var(--primary); color: var(--primary-text); padding: 0 16px
          display: flex; align-items: last baseline; gap: 24px; height: 56px; } /* tabs at the bottom, the title on their baseline */
 header .title { font-size: 20px; font-weight: 400; white-space: nowrap; }
 header .conn { align-self: center; margin-left: auto; font-size: 13px; }
+header .led { align-self: center; width: 12px; height: 12px; border-radius: 50%; flex: none; background: var(--ok);
+              box-shadow: 0 0 0 2px rgba(255,255,255,.6); }
+header .led.busy { background: var(--danger); animation: ledpulse 1s ease-in-out infinite alternate; }
+@keyframes ledpulse { from { opacity: 1; } to { opacity: .45; } }
 .tabs { display: flex; gap: 4px; min-width: 0; overflow-x: auto; scrollbar-width: none; }
 .tabs button { background: transparent; color: var(--primary-text); border: 0; border-radius: 8px 8px 0 0;
                padding: 8px 18px; font-size: 14px; cursor: pointer; opacity: .85; white-space: nowrap; flex: none; }
@@ -112,8 +120,8 @@ table.edit textarea, table.edit select { width: 100%; font: 13px/1.4 ui-monospac
 table.edit .out { font-size: 12px; color: var(--muted); margin-top: 2px; }
 pre.edout { white-space: pre-wrap; font: 12px/1.4 ui-monospace, Menlo, monospace; margin: 8px 0 0; color: var(--muted); }
 .selpick { display: inline-flex; align-items: center; gap: 2px; margin-right: 14px; cursor: pointer; font-size: 14px; }
-.tick.on { background: #fbc02d; border-color: #f9a825; color: #000; }
-.tick.kept { background: var(--primary); border-color: var(--primary); color: #fff; }
+.tick.on { background: var(--ok); border-color: var(--ok); color: #fff; }        /* selected: in place */
+.tick.kept { background: var(--warn); border-color: var(--warn); color: #000; }   /* unselected, old local key kept until Save: pending */
 .groupchip button { background: transparent; border: 0; color: #fff; cursor: pointer; font-size: 14px; padding: 0 4px; line-height: 1; }
 .searchinfo > *:not(.hint) { white-space: nowrap; flex: none; }
 .searchinfo { flex: none; display: flex; gap: 12px; align-items: center; margin-bottom: 8px; font-size: 13px; }
@@ -166,6 +174,7 @@ pre.log { flex: 1; min-height: 0; overflow: auto; margin: 0; white-space: pre-wr
     <button data-tab="log">Log</button>
   </nav>
   <span class="conn" id="conn"></span>
+  <span class="led" id="led" title=""></span>
 </header>
 <div id="banner"></div>
 <main>
@@ -240,6 +249,22 @@ function every(name, ms, fn) { // fn runs every ms while the tab is shown
   clearInterval(timers[name]);
   timers[name] = setInterval(() => { if (current === name && !stopped) fn(); }, ms);
 }
+
+// ---- the busy light: red while data is being changed or brought up to date ----
+let seenIndex = -1;
+async function pollState() {
+  let st;
+  try { st = await get("/api/state", "json"); } catch (e) { lost(e); $("led").className = "led"; $("led").style.background = "var(--muted)"; $("led").title = "no connection"; return; }
+  $("led").style.background = "";
+  const what = st.busy ? "Running: " + (st.job || "a job") : st.unloaded ? "Loading the library" : st.indexing ? "Bringing the lists up to date" : "";
+  $("led").className = what ? "led busy" : "led";
+  $("led").title = what || ("Idle, up to date" + (st.unpushed ? " (changes not pushed yet)" : ""));
+  if (seenIndex >= 0 && st.index !== seenIndex) { // a new index: refresh the tables shown
+    for (const v of Object.values(views)) if (v instanceof SearchView && v.started) v.refreshRows();
+  }
+  seenIndex = st.index;
+}
+setInterval(() => { if (!stopped) pollState(); }, 2000);
 
 // ---- status ----
 async function loadStatus() { try { $("status").innerHTML = await get("/frag/status"); } catch (e) { lost(e); } }
@@ -333,7 +358,7 @@ class SearchView {
     cg.innerHTML = '<col style="width:' + this.opW + 'px">' + layout.cols.map((c) => '<col style="width:' + width(c) + 'px">').join("");
     // The first column: in a Select tab "Selection" (sorts on it), else unnamed (sorts on having a PDF).
     const first = this.sel ? "sel" : "pdf";
-    tr.innerHTML = '<th title="' + (this.sel ? "Sort on being selected" : "Sort on having a PDF") + '">' + (this.sel ? "Selection" : "") +
+    tr.innerHTML = '<th title="' + (this.sel ? "Sort on being selected" : "Sort on having a PDF") + '">' + (this.sel ? "select" : "") +
       (this.sortKey() === first ? ((this.selSort ? this.selDesc : layout.desc) ? " ▼" : " ▲") : "") + "</th>";
     tr.firstChild.onclick = () => this.sortOn(first);
     layout.cols.forEach((c, i) => {
@@ -464,6 +489,28 @@ class SearchView {
     finally { if (my === this.gen) this.busy = false; }
   }
   reload() { this.header(); this.el.gridbox.scrollTop = 0; this.fetchRows(true); }
+  // refreshRows fetches the rows shown again (a new index), keeping the scroll position.
+  async refreshRows() {
+    const top = this.el.gridbox.scrollTop, n = Math.max(this.rows.length, PAGE);
+    const my = ++this.gen;
+    const p = new URLSearchParams({ q: this.query, groups: [...this.groups].join("\n"), sort: this.sortKey(),
+      desc: (this.selSort ? this.selDesc : layout.desc) ? "1" : "0", cols: layout.cols.join(","), from: 0, n: Math.min(n, 5000) });
+    if (this.sel) { p.set("sel", this.sel.id); if (this.only) p.set("only", "1"); }
+    try {
+      const d = await get("/api/entries?" + p, "json");
+      if (my !== this.gen) return;
+      this.total = d.total;
+      if (d.groups) this.showGroups(d.groups);
+      this.rows = (d.rows || []).map((r) => {
+        const cells = {}, inh = {};
+        layout.cols.forEach((c, i) => { cells[c] = r.c[i]; });
+        for (const i of r.i || []) inh[layout.cols[i]] = true;
+        return { k: r.k, cells, inh, pdf: !!r.p, t: r.t || 0 };
+      });
+      this.renderRows(0);
+      this.el.gridbox.scrollTop = top;
+    } catch (e) { lost(e); }
+  }
 
   // ---- Select tabs ----
   setInfo(info) {

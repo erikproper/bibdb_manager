@@ -74,6 +74,7 @@ func (w *TWebUI) start() {
 	mux.HandleFunc(prefix+"/frag/author/", w.handleAuthor)
 	mux.HandleFunc(prefix+"/api/entries", w.handleEntries)
 	mux.HandleFunc(prefix+"/api/log", w.handleLog)
+	mux.HandleFunc(prefix+"/api/state", w.handleState)
 	mux.HandleFunc(prefix+"/api/stop", w.handleStop)
 	mux.HandleFunc(prefix+"/api/prefs", w.handlePrefs)
 	mux.HandleFunc(prefix+"/frag/edit/", w.handleEditFrag)
@@ -175,6 +176,25 @@ func (w *TWebUI) busy() bool {
 	w.service.mu.Lock()
 	defer w.service.mu.Unlock()
 	return w.service.busy
+}
+
+// handleState answers what the busy light in the top bar shows (JSON): a job
+// running (which), the library or the search index being brought up to date,
+// changes not pushed yet; and the index version (the page refreshes its tables
+// when it changes).
+func (w *TWebUI) handleState(rw http.ResponseWriter, r *http.Request) {
+	s := w.service
+	s.mu.Lock()
+	busy, job := s.busy, strings.Join(s.jobArgs, " ")
+	s.mu.Unlock()
+	writeJSON(rw, map[string]any{
+		"busy":     busy,
+		"job":      strings.TrimPrefix(strings.TrimPrefix(job, "-base "+libraryBase()), " "),
+		"indexing": webIndexBuilding.Load() || (!busy && webIndexStale()),
+		"index":    webIndexVersion.Load(),
+		"unloaded": serviceLibraryLevel == libraryNotLoaded,
+		"unpushed": readLibraryUnpushed() != nil,
+	})
 }
 
 // handleShell serves the page with the tabs; the rest is fetched by it.
@@ -320,7 +340,7 @@ func (w *TWebUI) handleEntries(rw http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	from, _ := strconv.Atoi(q.Get("from"))
 	n, _ := strconv.Atoi(q.Get("n"))
-	if n <= 0 || n > 1000 {
+	if n <= 0 || n > 5000 {
 		n = 200
 	}
 	var cols []string

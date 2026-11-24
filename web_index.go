@@ -69,6 +69,8 @@ func webIndexFor(onlyIfMissing bool) (*TWebIndex, error) {
 	if cur != nil && (onlyIfMissing || cur.fingerprint == fp) {
 		return cur, nil
 	}
+	webIndexBuilding.Store(true)
+	defer webIndexBuilding.Store(false)
 	x := &TWebIndex{}
 	if err := x.build(fp); err != nil {
 		return cur, err
@@ -77,7 +79,22 @@ func webIndexFor(onlyIfMissing bool) (*TWebIndex, error) {
 		return cur, nil
 	}
 	webIndexCurrent.Store(x)
+	webIndexVersion.Add(1)
 	return x, nil
+}
+
+// For the page's busy light: an index being built, and a count of the
+// indexes swapped in (the page refreshes its tables when it changes).
+var (
+	webIndexBuilding atomic.Bool
+	webIndexVersion  atomic.Int64
+)
+
+// webIndexStale tells whether the database changed since the current index
+// was built (its lists do not show that yet).
+func webIndexStale() bool {
+	cur := webIndexCurrent.Load()
+	return cur != nil && cur.fingerprint != databaseFingerprint()
 }
 
 // refreshWebIndex rebuilds the index when it is out of date and no job runs
