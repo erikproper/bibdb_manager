@@ -303,6 +303,16 @@ func (s *TService) runJobInService(req serviceFrame, positional []string, sio *T
 		// have left the loaded library and the database apart: load afresh. So
 		// when the working database was moved aside. Otherwise the library is
 		// brought up to date with what the job wrote (db_write_hook.go).
+		// A job that ended through endRun with its write session open (a refusal, a
+		// quit) closes the session as a job that ends normally would: its writes are
+		// kept and pushed shortly. Left open, the next job took it for a crash and
+		// asked whether to keep "the changes of that run" (Erik, 2026-11-24).
+		if ended && !jobAbandonedDatabase && dbWriteSessionActive && db != nil {
+			if activeTx != nil {
+				rollbackBibTransaction()
+			}
+			closeWorkingDatabaseLocally()
+		}
 		writes := takeDbWrites()
 		switch {
 		case serviceLibraryLevel == libraryNotLoaded:

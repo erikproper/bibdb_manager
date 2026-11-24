@@ -55,7 +55,7 @@ var (
 	Reporting TInteraction
 )
 
-const AppVersion = "30.99"
+const AppVersion = "30.102"
 
 // Run-state flags consumed by the write tail in main.
 var (
@@ -3374,7 +3374,7 @@ func doRenameContributor(args []string) {
 	bibQueryRow(`SELECT id FROM contributors WHERE name = ? AND id != ?`, newName, id).Scan(&other) //nolint:errcheck
 	if other != "" {
 		messagef("rename_contributor: %q is the name of contributor %s; merge them instead (-merge_contributors).\n", newName, other)
-		endRun(1)
+		return
 	}
 	if err := bibExec(`UPDATE contributors SET name = ? WHERE id = ?`, newName, id); err != nil {
 		Library.Error("contributors rename failed: %s", err)

@@ -363,9 +363,16 @@ func (w *TWebUI) handleEditAuthorSave(rw http.ResponseWriter, r *http.Request) {
 		http.Error(rw, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	var current string
+	var current, other string
 	found := ro.QueryRow(`SELECT name FROM contributors WHERE id = ?`, id).Scan(&current) == nil
+	if name := strings.TrimSpace(req.Name); name != "" && name != current {
+		ro.QueryRow(`SELECT id FROM contributors WHERE name = ? AND id != ?`, name, id).Scan(&other) //nolint:errcheck
+	}
 	ro.Close()
+	if other != "" {
+		http.Error(rw, fmt.Sprintf("%q is the name of another author (%s). To make them one, merge them: bib.check -merge_contributors %s %s", strings.TrimSpace(req.Name), other, id, other), http.StatusConflict)
+		return
+	}
 	if !found {
 		http.NotFound(rw, r)
 		return

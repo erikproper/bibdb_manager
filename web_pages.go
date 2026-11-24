@@ -13,6 +13,7 @@ const webPages = `
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{{.Library}} — bibdb</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%2303a9f4'/%3E%3Cpath d='M5 9.5c3.5-1.8 7.5-1.6 10.4 1.2v14c-2.9-2.6-6.9-2.8-10.4-1.2z' fill='%23fff'/%3E%3Cpath d='M27 9.5c-3.5-1.8-7.5-1.6-10.4 1.2v14c2.9-2.6 6.9-2.8 10.4-1.2z' fill='%23fff'/%3E%3Cpath d='M8 13.5h4.5M8 16.5h4.5M8 19.5h4.5M19.5 13.5H24M19.5 16.5H24M19.5 19.5H24' stroke='%2303a9f4' stroke-width='1.2' stroke-linecap='round'/%3E%3C/svg%3E">
 <style>
 :root {
   --bg: #fafafa; --card: #ffffff; --text: #212121; --muted: #727272;
@@ -102,6 +103,7 @@ select.groupadd { font-size: 13px; padding: 3px 6px; border: 1px solid var(--bor
 button.toggle { border: 1px solid var(--border); background: var(--card); color: var(--text); border-radius: 14px;
                 padding: 2px 10px; font-size: 13px; cursor: pointer; white-space: nowrap; }
 button.toggle.on { background: var(--chosen); border-color: var(--chosen); color: #fff; }
+button.toggle.on.stale { background: var(--warn); border-color: var(--warn); color: #000; } /* pending: the list is behind */
 .tick { display: inline-block; width: 16px; height: 16px; border: 1.5px solid var(--muted); border-radius: 4px;
         vertical-align: middle; cursor: pointer; margin-right: 4px; text-align: center; line-height: 13px; font-size: 12px; color: transparent; }
 .rolepick { font-size: 13px; font-weight: 400; margin-left: 14px; color: var(--muted); cursor: pointer; }
@@ -189,7 +191,7 @@ pre.log { flex: 1; min-height: 0; overflow: auto; margin: 0; white-space: pre-wr
   <div class="selbar" hidden><b class="selname"></b><span class="selinfo muted"></span>
     <button class="action selsave">Save</button><button class="action selsync">Sync</button><button class="plain selclose">Close</button>
     <span class="selmsg"></span></div>
-  <div class="searchinfo"><span class="count muted"></span><button class="toggle selonly" hidden title="Show only the selected entries (yellow and blue)">Selection</button>
+  <div class="searchinfo"><span class="count muted"></span><button class="toggle selonly" hidden title="Show only the selected entries (green and amber)">Selection</button>
     <select class="groupadd" title="Limit the list to the entries in a group"></select><span class="groupchips" style="display:inline-flex;gap:6px"></span>
     <button class="plain choosecols">Columns…</button><button class="plain resetcols">Default layout</button>
     <span class="muted hint">Click a header to sort, drag it to move, drag its edge to resize. Grey: taken from the crossref parent.</span></div>
@@ -340,7 +342,13 @@ class SearchView {
     q("choosecols").onclick = () => this.chooseColumns();
     if (sel) {
       el.selbar.hidden = false; el.selonly.hidden = false;
-      el.selonly.onclick = () => { this.only = !this.only; el.selonly.classList.toggle("on", this.only); this.reload(); };
+      // The Selection filter; amber once a tick changed while it is on (the list shows the
+      // selection as it was): a click then brings the list to the selection as it is now.
+      el.selonly.onclick = () => {
+        if (this.only && this.onlyStale) this.markOnlyStale(false);
+        else { this.only = !this.only; el.selonly.classList.toggle("on", this.only); this.markOnlyStale(false); }
+        this.reload();
+      };
       el.grid.addEventListener("click", (e) => { const t = e.target.closest(".tick"); if (t) { e.stopPropagation(); this.toggle(t); } });
       q("selsave").onclick = () => this.selAction("save");
       q("selsync").onclick = () => this.selAction("sync");
@@ -491,6 +499,7 @@ class SearchView {
   reload() { this.header(); this.el.gridbox.scrollTop = 0; this.fetchRows(true); }
   // refreshRows fetches the rows shown again (a new index), keeping the scroll position.
   async refreshRows() {
+    if (this.only && this.onlyStale) return; // the Selection button (amber) brings it up to date
     const top = this.el.gridbox.scrollTop, n = Math.max(this.rows.length, PAGE);
     const my = ++this.gen;
     const p = new URLSearchParams({ q: this.query, groups: [...this.groups].join("\n"), sort: this.sortKey(),
@@ -529,7 +538,14 @@ class SearchView {
     if (!r.ok) throw new Error(await r.text());
     return r.status === 204 ? null : r.json();
   }
+  markOnlyStale(stale) {
+    this.onlyStale = stale;
+    this.el.selonly.classList.toggle("stale", stale);
+    this.el.selonly.title = stale ? "The list shows the selection as it was; click to show it as it is now"
+                                  : "Show only the selected entries (green and amber)";
+  }
   setTick(key, state) { // a tick changed elsewhere (an entry's pop-up)
+    if (this.only) this.markOnlyStale(true);
     const row = this.rows.find((r) => r.k === key);
     if (row) row.t = state;
     const tr = this.el.grid.querySelector('tr[data-key="' + CSS.escape(key) + '"] .tick');
@@ -542,6 +558,7 @@ class SearchView {
       const row = this.rows.find((r) => r.k === tr.dataset.key);
       if (row) row.t = d.state;
       tick.outerHTML = this.tickHTML(d.state);
+      if (this.only) this.markOnlyStale(true);
       this.setInfo(d.info);
       if (d.error) alert(d.error);
     } catch (e) { lost(e); alert(e.message || e); }
