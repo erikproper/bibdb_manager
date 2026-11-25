@@ -1,6 +1,6 @@
 /*
  *
- * Module:    bibtex_check
+ * Module:    bibdb_manager
  * Component:
  * - bibtex_library
  *   - bibtex_library_db
@@ -1005,7 +1005,7 @@ func upsertNameMapping(alias, name string) {
 			*collectSkippedNameMappings = append(*collectSkippedNameMappings, fmt.Sprintf("%q -> %q", alias, name))
 			return
 		}
-		dbInteraction.Warning("Skipping name mapping %q -> %q: looks like a garbled/ambiguous name (heuristic check); use -add_name_mapping to force it", alias, name)
+		dbInteraction.Warning("Skipping name mapping %q -> %q: looks like a garbled/ambiguous name (heuristic check); add it in the web UI (Tables, Name mappings) to force it", alias, name)
 		return
 	}
 	id, ok := Library.NameToContributorID[name]
@@ -2375,7 +2375,7 @@ func repairDblpData() {
 			dbInteraction.Progress("  Repair DBLP data: removed %d redundant ghost entry(ies)", len(safe))
 		}
 		for _, g := range unsafe {
-			dbInteraction.Warning("  Ghost dblp entry %s (dblp=%s) has no live sibling — not deleting; repair with -add_dblp_entry %s",
+			dbInteraction.Warning("  Ghost dblp entry %s (dblp=%s) has no live sibling — not deleting; repair: Lookup (web UI: Actions, DBLP) %s",
 				g.key, g.dblpKey, g.dblpKey)
 		}
 	}

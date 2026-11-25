@@ -1,6 +1,6 @@
 /*
  *
- * Module:    bibtex_check
+ * Module:    bibdb_manager
  * Component:
  * - bibtex_library
  *   - bibtex_library_harvest
@@ -409,21 +409,6 @@ func addToHarvestWeave(e TBibTeXEntry) {
 	}
 }
 
-// addToHarvestGroup adds finalKey to cmdHarvestGroup when the flag is set.
-func addToHarvestGroup(l *TBibTeXLibrary, finalKey string) {
-	if cmdHarvestGroup == "" || finalKey == "" {
-		return
-	}
-	if members := l.GroupEntries[cmdHarvestGroup]; !members.Contains(finalKey) {
-		l.GroupEntries.AddValueToStringSetMap(cmdHarvestGroup, finalKey)
-		if err := bibExec(`INSERT INTO bib_groups (group_name, entry_key) VALUES (?, ?) ON CONFLICT DO NOTHING;`, cmdHarvestGroup, finalKey); err != nil {
-			l.Warning("Group add failed (%s → %q): %s", finalKey, cmdHarvestGroup, err)
-		} else {
-			l.Progress("Added %s to group %q", finalKey, cmdHarvestGroup)
-		}
-	}
-}
-
 // maybeCollectKeyHint adds sourceKey → finalKey to the hints DB when the
 // mapping is unambiguous (not already pointing elsewhere).
 func maybeCollectKeyHint(l *TBibTeXLibrary, sourceKey, finalKey string) {
@@ -796,7 +781,6 @@ func (l *TBibTeXLibrary) runHarvestEntry(e TBibTeXEntry, syncState *TSyncState) 
 		maybeCollectKeyHint(l, e.Key, finalKey)
 		l.maybeHarvestPDF(e, finalKey)
 		l.maybeHarvestGroups(e, finalKey, syncState)
-		addToHarvestGroup(l, finalKey)
 		transferHarvestKey(e.Key, finalKey)
 		recordStatus(finalKey)
 		// "Automatic, no user interaction" no longer holds unconditionally — mergeAndCheck
@@ -821,7 +805,6 @@ func (l *TBibTeXLibrary) runHarvestEntry(e TBibTeXEntry, syncState *TSyncState) 
 				maybeCollectKeyHint(l, e.Key, finalKey)
 				l.maybeHarvestPDF(e, finalKey)
 				l.maybeHarvestGroups(e, finalKey, syncState)
-				addToHarvestGroup(l, finalKey)
 				transferHarvestKey(e.Key, finalKey)
 				recordStatus(finalKey)
 				// The DBLP key match itself needs no confirmation, but mergeAndCheck
@@ -844,7 +827,6 @@ func (l *TBibTeXLibrary) runHarvestEntry(e TBibTeXEntry, syncState *TSyncState) 
 			maybeCollectKeyHint(l, e.Key, finalKey)
 			l.maybeHarvestPDF(e, finalKey)
 			l.maybeHarvestGroups(e, finalKey, syncState)
-			addToHarvestGroup(l, finalKey)
 			transferHarvestKey(e.Key, finalKey)
 			recordStatus(finalKey)
 			done("merged into", finalKey, "title match")
@@ -876,7 +858,6 @@ func (l *TBibTeXLibrary) runHarvestEntry(e TBibTeXEntry, syncState *TSyncState) 
 			finalKey = l.MapEntryKey(finalKey)
 			maybeCollectKeyHint(l, e.Key, finalKey)
 			l.maybeHarvestPDF(e, finalKey)
-			addToHarvestGroup(l, finalKey)
 			transferHarvestKey(e.Key, finalKey)
 			recordStatus(finalKey)
 			return finish(finalKey)
@@ -911,7 +892,6 @@ func (l *TBibTeXLibrary) runHarvestEntry(e TBibTeXEntry, syncState *TSyncState) 
 				fixEntry(finalKey)
 				maybeCollectKeyHint(l, e.Key, finalKey)
 				l.maybeHarvestPDF(e, finalKey)
-				addToHarvestGroup(l, finalKey)
 				transferHarvestKey(e.Key, finalKey)
 				recordStatus(finalKey)
 				return finish(finalKey)
@@ -940,7 +920,6 @@ func (l *TBibTeXLibrary) runHarvestEntry(e TBibTeXEntry, syncState *TSyncState) 
 			maybeCollectKeyHint(l, e.Key, finalKey)
 			l.maybeHarvestPDF(e, finalKey)
 			l.maybeHarvestGroups(e, finalKey, syncState)
-			addToHarvestGroup(l, finalKey)
 			transferHarvestKey(e.Key, finalKey)
 			recordStatus(finalKey)
 			return finish(finalKey)
@@ -963,7 +942,6 @@ func (l *TBibTeXLibrary) runHarvestEntry(e TBibTeXEntry, syncState *TSyncState) 
 		fixEntry(finalKey)
 		maybeCollectKeyHint(l, e.Key, finalKey)
 		l.maybeHarvestPDF(e, finalKey)
-		addToHarvestGroup(l, finalKey)
 		transferHarvestKey(e.Key, finalKey)
 		recordStatus(finalKey)
 		return finish(finalKey)

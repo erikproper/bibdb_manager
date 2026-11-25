@@ -1,6 +1,6 @@
 /*
  *
- * Module:    bibtex_check
+ * Module:    bibdb_manager
  * Component:
  * - commands
  *
@@ -182,14 +182,6 @@ func init() {
 			selected: func() bool { return cmdDisambiguateContributors },
 			run: func(args []string) {
 				doDisambiguateContributors()
-			},
-		},
-		{
-			name:     "upgrade_watch_actions",
-			kind:     commandWrite,
-			selected: func() bool { return cmdUpgradeWatchActions },
-			run: func(args []string) {
-				doUpgradeWatchActions()
 			},
 		},
 		{
@@ -665,19 +657,6 @@ func init() {
 				skipStartupChecks = true
 				if openLibraryToUpdate() {
 					ImportTables(importSpec, &Library)
-				}
-			},
-		},
-		{
-			name:     "import_all_csv",
-			kind:     commandWrite,
-			selected: func() bool { return cmdImportAllCSV },
-			run: func(args []string) {
-				// Does not require ValidBibDb: mapping tables are imported independently of bib entries.
-				if prepareWorkingDatabase() {
-					if ImportAllCSVExchangeFiles() {
-						dbInteraction.Progress("All CSV exchange files imported successfully.")
-					}
 				}
 			},
 		},

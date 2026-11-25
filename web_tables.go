@@ -404,7 +404,7 @@ func doTableEdit(args []string) {
 				bibQueryRow(`SELECT id FROM contributors WHERE name = ? AND id != ?`, form, cid).Scan(&other) //nolint:errcheck
 			}
 			if other != "" {
-				messagef("%q is a name of another author (%s); to make them one: -merge_contributors %s %s\n", form, other, other, cid)
+				messagef("%q is a name of another author (%s); to make them one: Mark for merge, %s and %s\n", form, other, other, cid)
 				return false
 			}
 			upsertContributorNameToDB(cid, form)

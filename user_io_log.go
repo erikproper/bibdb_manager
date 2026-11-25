@@ -34,7 +34,7 @@ func newLoggingIO(inner TUserIO, path string) (*TLoggingIO, error) {
 	if err != nil {
 		return nil, err
 	}
-	fmt.Fprintf(f, "\n# %s  bibtex_check %s  %s\n", time.Now().Format("2006-01-02 15:04:05"), AppVersion, strings.Join(logArgs, " ")) //nolint:errcheck
+	fmt.Fprintf(f, "\n# %s  bibdb_manager %s  %s\n", time.Now().Format("2006-01-02 15:04:05"), AppVersion, strings.Join(logArgs, " ")) //nolint:errcheck
 	l := &TLoggingIO{inner: inner, file: f, input: make(chan string)}
 	go func() {
 		for s := range inner.Input() {

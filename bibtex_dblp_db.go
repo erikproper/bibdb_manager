@@ -1,6 +1,6 @@
 /*
  *
- * Module:    bibtex_check
+ * Module:    bibdb_manager
  * Component:
  * - bibtex_dblp
  *   - bibtex_dblp_db
@@ -166,7 +166,7 @@ func dblpStmt(name string) *sql.Stmt {
 		if !FileExists(dblpDBPath()) {
 			if !dblpReader.missing {
 				dblpReader.missing = true
-				messagef("Warning: no DBLP database at %s; run -update_dblp to build it.\n", dblpDBPath())
+				messagef("Warning: no DBLP database at %s; Update cache (web UI: Actions, DBLP) builds it.\n", dblpDBPath())
 			}
 			return nil
 		}

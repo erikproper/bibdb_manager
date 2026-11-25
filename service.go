@@ -1,6 +1,6 @@
 package main
 
-// The service (plan step 22.2a). "bibtex_check -start" starts a background
+// The service (plan step 22.2a). "bibdb_manager -start" starts a background
 // process for one library ("-serve"), listening on a Unix socket in the local DB
 // folder. Any other command, given while the service runs, is handed to it: the
 // command line becomes a thin client that relays its arguments, its working
@@ -37,9 +37,9 @@ import (
 
 const (
 	// envServiceJob marks a child process run by the service as a job.
-	envServiceJob = "BIBTEX_CHECK_SERVICE_JOB"
+	envServiceJob = "BIBDB_MANAGER_SERVICE_JOB"
 	// envInteractive tells a job whether a person is at the command line (1/0).
-	envInteractive = "BIBTEX_CHECK_INTERACTIVE"
+	envInteractive = "BIBDB_MANAGER_INTERACTIVE"
 
 	serviceSocketExtension = ".socket"
 	serviceLogExtension    = ".service.log"
@@ -133,6 +133,7 @@ func handleServiceCommands() bool {
 	if os.Getenv(envServiceJob) != "" {
 		return false // this is the service's job itself
 	}
+	refuseMovedOptions()
 	conn := dialService()
 	if conn == nil {
 		// Questions are answered in the web UI (ARCHITECTURE.md §15.5): a command that
@@ -165,7 +166,7 @@ func handleServiceCommands() bool {
 // question, at the terminal), and some that never ask.
 func runsWithoutService() bool {
 	if cmdRestoreFromDump || cmdRestoreBackupName != "" || cmdRestoreKeyHints || cmdRestoreDblp || cmdPushDblp ||
-		cmdLoadDblpXml || cmdDeleteGarbage || cmdImport != "" || cmdImportAllCSV || cmdImportBib ||
+		cmdLoadDblpXml || cmdDeleteGarbage || cmdImport != "" || cmdImportBib ||
 		cmdNewKey || cmdPush || cmdLoadLibrary {
 		return true
 	}

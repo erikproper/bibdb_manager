@@ -203,7 +203,7 @@ func (l *TBibTeXLibrary) warnMappingProblems() {
 			parts = append(parts, fmt.Sprintf("%d %s", p.n, p.what))
 		}
 	}
-	l.Warning("field_mappings: %d row(s) never apply or are undone (%s); details with -audit_mappings",
+	l.Warning("field_mappings: %d row(s) never apply or are undone (%s); details: Audit mappings (web UI: Actions, Other)",
 		audit.problems(), strings.Join(parts, ", "))
 }
 
@@ -235,7 +235,7 @@ func doAuditMappings() {
 	logPath := libraryBase() + tablesFolderSuffix + "/mapping_audit.log"
 	os.MkdirAll(libraryBase()+tablesFolderSuffix, 0o755) //nolint:errcheck
 	var out strings.Builder
-	fmt.Fprintf(&out, "# %s  bibtex_check %s  field_mappings: %d rows, %d script rule(s) checked\n",
+	fmt.Fprintf(&out, "# %s  bibdb_manager %s  field_mappings: %d rows, %d script rule(s) checked\n",
 		time.Now().Format("2006-01-02 15:04:05"), AppVersion, rowCount, ruleCount)
 	for _, g := range groups {
 		fmt.Fprintf(&out, "\n## %s: %d\n", g.title, len(g.lines))

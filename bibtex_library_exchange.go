@@ -1,6 +1,6 @@
 /*
  *
- * Module:    bibtex_check
+ * Module:    bibdb_manager
  * Component:
  * - bibtex_library
  *   - bibtex_library_exchange
@@ -658,27 +658,6 @@ func ExportShortenMappings() {
 	writeCSVExport(path, rows, 3)
 }
 
-func importShortenMappingsFromCSV(replace bool) {
-	path := localDBFolder + ShortenMappingsFilePath
-	upsert := `INSERT INTO shorten_mappings (field, original, shortened) VALUES (?, ?, ?)
-	             ON CONFLICT(field, original) DO UPDATE SET shortened = excluded.shortened`
-	// shorten_mappings.csv uses '#' comment lines and blank section separators — skip them.
-	skip := func(f []string) bool {
-		return len(f) == 0 || strings.TrimSpace(f[0]) == "" || strings.HasPrefix(strings.TrimSpace(f[0]), "#")
-	}
-	validate := func(f []string) bool { return len(f) >= 3 && f[0] != "" && f[1] != "" }
-	var clearFn func()
-	if replace {
-		clearFn = func() { db.Exec(`DELETE FROM shorten_mappings`) }
-	}
-	n, ok := importTwoPhaseFiltered(path, skip, validate, clearFn, func(tx *sql.Tx, f []string) {
-		tx.Exec(upsert, strings.TrimSpace(f[0]), strings.TrimSpace(f[1]), strings.TrimSpace(f[2]))
-	})
-	if ok {
-		importReport(map[bool]string{true: "Imported", false: "Added"}[replace], path, n)
-	}
-}
-
 // ── state_names ──────────────────────────────────────────────────────────────
 // CSV format: canonical;alias  (elements[0]=canonical, elements[1]=alias)
 
@@ -883,53 +862,6 @@ func importEntryMetadataFromJSON(replace bool) {
 	}
 	verb := map[bool]string{true: "Imported", false: "Added"}[replace]
 	dbInteraction.Progress("%s %d entry_metadata rows from %s", verb, rowCount, path)
-}
-
-// ── bulk import (for migrate.sh) ─────────────────────────────────────────────
-
-// ImportAllCSVExchangeFiles imports all mapping CSVs found in the exchange folder
-// into the DB. Each file is imported with replace=true (authoritative import).
-// Used by migrate.sh as the one-time migration step from CSV-primary to DB-primary.
-// Returns true if all present files imported successfully; false if any failed.
-func ImportAllCSVExchangeFiles() bool {
-	type importFn struct {
-		name string
-		path string
-		fn   func(bool)
-	}
-	tables := []importFn{
-		{"key_hints", tablesFilePath(KeyHintsFilePath), importKeyHintsFromCSV},
-		{"key_oldies", tablesFilePath(KeyOldiesFilePath), importKeyOldiesFromCSV},
-		{"non_double_entries", tablesFilePath(KeyNonDoublesFilePath), importKeyNonDoublesFromCSV},
-		{"field_mappings", tablesFilePath(FieldMappingsFilePath), importFieldMappingsFromCSV},
-		{"superseded_field_values", tablesFilePath(SupersededFieldValuesFilePath), importSupersededFieldValuesFromCSV},
-		{"dblp_parent", tablesFilePath(DblpParentFilePath), importDblpParentFromCSV},
-		{"dblp_waived", tablesFilePath(DblpWaivedFilePath), importDblpWaivedFromCSV},
-		{"entry_flags", tablesFilePath(EntryFlagsFilePath), importEntryFlagsFromCSV},
-		{"urls_ignore", tablesFilePath(URLsIgnoreFilePath), importURLsIgnoreFromCSV},
-		{"state_names", tablesFilePath(StateNamesFilePath), importStateNamesFromCSV},
-		{"state_countries", tablesFilePath(StateCountriesFilePath), importStateCountriesFromCSV},
-		{"country_names", tablesFilePath(CountryNamesFilePath), importCountryNamesFromCSV},
-		{"booktitle_country_names", tablesFilePath(BooktitleCountryNamesFilePath), importBooktitleCountryNamesFromCSV},
-	}
-	ok := true
-	for _, t := range tables {
-		if _, statErr := os.Stat(t.path); statErr != nil {
-			continue // file absent — skip silently
-		}
-		dbInteraction.Progress("Importing %s from %s", t.name, t.path)
-		t.fn(true)
-	}
-	// shorten_mappings lives in localDBFolder, not exchange folder
-	if _, err := os.Stat(localDBFolder + ShortenMappingsFilePath); err == nil {
-		dbInteraction.Progress("Importing shorten_mappings from %s", localDBFolder+ShortenMappingsFilePath)
-		importShortenMappingsFromCSV(true)
-	}
-	if _, err := os.Stat(tablesFilePath(EntryMetadataFilePath)); err == nil {
-		dbInteraction.Progress("Importing entry_metadata from %s", tablesFilePath(EntryMetadataFilePath))
-		importEntryMetadataCSV()
-	}
-	return ok
 }
 
 // ── writeCSVExport ───────────────────────────────────────────────────────────

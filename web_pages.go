@@ -70,7 +70,7 @@ td.num { text-align: right; font-variant-numeric: tabular-nums; }
 td.field { color: var(--muted); width: 160px; white-space: nowrap; }
 td.year { width: 4em; color: var(--muted); }
 a { color: var(--primary); }
-input[type=search] { width: 100%; padding: 10px 12px; font-size: 16px; border: 1px solid var(--border);
+input[type=search] { width: 100%; padding: 10px 12px; font: inherit; border: 1px solid var(--border); /* the page's font */
                      border-radius: 8px; background: var(--card); color: var(--text); }
 button.action { background: var(--primary); color: var(--primary-text); border: 0; border-radius: 8px;
                 padding: 8px 16px; font-size: 14px; cursor: pointer; }
@@ -93,7 +93,7 @@ button.pdf { display: inline-flex; align-items: center; gap: 6px; background: tr
              border: 1px solid var(--border); border-radius: 8px; padding: 4px 10px; cursor: pointer; font-size: 14px; }
 
 /* Search */
-.searchbar { flex: none; display: flex; gap: 12px; align-items: center; margin-bottom: 8px; }
+.searchbar { flex: none; display: flex; gap: 12px; align-items: center; margin-bottom: 14px; }
 .searchbar input { flex: 1; }
 select.groupadd { font-size: 13px; padding: 3px 6px; border: 1px solid var(--border); border-radius: 8px;
                   background: var(--card); color: var(--primary); max-width: 220px; }
@@ -105,7 +105,7 @@ select.groupadd { font-size: 13px; padding: 3px 6px; border: 1px solid var(--bor
 .tabs button.seltab { font-style: italic; }
 .actbtns { flex: 1; display: flex; flex-wrap: wrap; gap: 8px; min-width: 0; } /* they wrap beside their label */
 .tablehelp { margin: 4px 0 10px; padding: 8px 12px; border-left: 3px solid var(--chosen); background: var(--card); border-radius: 4px; font-size: 13.5px; line-height: 1.45; }
-.selbar { flex: none; display: flex; gap: 10px; align-items: center; margin-bottom: 8px; font-size: 13px; flex-wrap: wrap; }
+.selbar { flex: none; display: flex; gap: 10px; align-items: center; margin-bottom: 14px; /* as below the filter */ font-size: 13px; flex-wrap: wrap; }
 .selbar button.action, .editbar button.action { padding: 4px 12px; font-size: 13px; } /* the size of the other small buttons */
 .selbar .selmsg { color: var(--muted); }
 button.toggle { border: 1px solid var(--border); background: var(--card); color: var(--text); border-radius: 14px;
@@ -233,7 +233,7 @@ table.compare td.kept { box-shadow: inset 2px 0 0 var(--ok); }
     <button data-tab="log">Log<span class="led" id="led" title=""></span></button>
   </nav>
   <span class="conn" id="conn"></span>
-  <span class="ver" title="bibtex_check version">{{.Version}}</span>
+  <span class="ver" title="bibdb_manager version">{{.Version}}</span>
 </header>
 <div id="banner"></div>
 <main>

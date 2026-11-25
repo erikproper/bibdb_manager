@@ -1,6 +1,6 @@
 /*
  *
- * Module:    bibtex_check
+ * Module:    bibdb_manager
  * Component:
  * - bibtex_library
  *   - bibtex_library_db
@@ -35,6 +35,7 @@ package main
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"regexp"
@@ -60,6 +61,8 @@ type TLibraryStamp struct {
 	PushedAt   string `json:"pushed_at"` // RFC 3339
 	Machine    string `json:"machine"`
 	Size       int64  `json:"size"` // of $base.sqlite3
+	// MinVersion is the lowest program version that may use the copy (version_guard.go).
+	MinVersion string `json:"min_version,omitempty"`
 }
 
 // TLibraryUnpushed marks local changes that are not (yet) in the shared DB folder.
@@ -238,6 +241,7 @@ func pushLibraryDatabase(gen int64, withDump bool) error {
 		PushedAt:   time.Now().Format(time.RFC3339),
 		Machine:    machine,
 		Size:       info.Size(),
+		MinVersion: requiredVersionOf(working),
 	}); err != nil {
 		return err
 	}
@@ -269,6 +273,10 @@ func restoreLibraryDatabase(stamp *TLibraryStamp) error {
 	if err := checkDbFile(tmp); err != nil {
 		removeDblpDBFiles(tmp)
 		return fmt.Errorf("the copy in %s is damaged: %w", sharedDBFolder, err)
+	}
+	if why := tooOldFor(requiredVersionOf(tmp)); why != "" {
+		removeDblpDBFiles(tmp)
+		return errTooOld{why}
 	}
 	gen, err := dbFilePushGeneration(tmp)
 	if err != nil {
@@ -318,6 +326,10 @@ func localEntryCount() int {
 // stamped copy: it decides between the local database and the home copy. Returns
 // false when the run cannot go on.
 func alignWithLibraryStamp(stamp *TLibraryStamp, hInfo os.FileInfo) bool {
+	if why := tooOldFor(stamp.MinVersion); why != "" {
+		reportTooOld(why) // also with changes of its own: they must not go over a newer copy
+		return false
+	}
 	working := dbPath()
 	hasLocal := localEntryCount() > 0
 	var localGen int64
@@ -393,6 +405,12 @@ func alignWithLibraryStamp(stamp *TLibraryStamp, hInfo os.FileInfo) bool {
 			db = nil
 		}
 		if err := restoreLibraryDatabase(stamp); err != nil {
+			var tooOld errTooOld
+			if errors.As(err, &tooOld) {
+				reportTooOld(tooOld.why)
+				reopenDb(working)
+				return false
+			}
 			dbInteraction.Warning("Could not use the Nextcloud copy: %s. The local database is left as it was; try again once Nextcloud has finished syncing.", err)
 			// The rest of main still runs (without a write session) and needs a
 			// connection.

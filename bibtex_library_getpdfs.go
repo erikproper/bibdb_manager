@@ -1,6 +1,6 @@
 /*
  *
- * Module:    bibtex_check
+ * Module:    bibdb_manager
  * Component:
  * - bibtex_library
  *   - bibtex_library_getpdfs
@@ -33,9 +33,9 @@ import (
 )
 
 // bibCheckHTTPUserAgent is sent with every outbound HTTP request.
-const bibCheckHTTPUserAgent = "Mozilla/5.0 (compatible; bibtex_check)"
+const bibCheckHTTPUserAgent = "Mozilla/5.0 (compatible; bibdb_manager)"
 
-// newBibCheckHTTPClient returns an http.Client configured for bibtex_check
+// newBibCheckHTTPClient returns an http.Client configured for bibdb_manager
 // network requests: 30-second timeout, up to 5 redirects.
 func newBibCheckHTTPClient() *http.Client {
 	return &http.Client{

@@ -1,6 +1,6 @@
 /*
  *
- * Module:    bibtex_check
+ * Module:    bibdb_manager
  * Component:
  * - bibtex_library
  *   - bibtex_library_tables
@@ -120,7 +120,7 @@ func init() {
 		{"entry_metadata", EntryMetadataFilePath,
 			exportEntryMetadataCSV, importEntryMetadataCSV, nil},
 		// shorten_mappings lives in localDBFolder — not in the per-library .tables/ dir.
-		// It is imported directly via ImportAllCSVExchangeFiles; no registry entry needed.
+		// It is edited in the web UI (Tables, Shortened values); no registry entry.
 		{"urls_ignore", URLsIgnoreFilePath,
 			ExportURLsIgnore, func() { importURLsIgnoreFromCSV(true) }, nil},
 		{"ignore_titles", IgnoreTitlesFilePath,

@@ -1,6 +1,6 @@
 /*
  *
- * Module:    bibtex_check
+ * Module:    bibdb_manager
  * Component:
  * - bibtex_library
  *   - bibtex_library_db
@@ -87,6 +87,7 @@ func connectToDatabase() {
 	if err != nil {
 		dbInteraction.Progress("Could not open sqlite database %s: %s", dbName, err.Error())
 	}
+	refuseIfTooOld()
 	if !configureDatabasePragmas() && dbIsolationActive() {
 		dbInteraction.Progress("Working database stale or corrupt — will refresh from home database")
 		return
@@ -308,6 +309,7 @@ func reopenDb(path string) {
 	if err != nil {
 		dbInteraction.Progress("Could not open sqlite database %s: %s", path, err)
 	}
+	refuseIfTooOld()
 	configureDatabasePragmas()
 	ensureTableDatesTableExists()
 	ensureContributorsTableExists()
@@ -351,7 +353,7 @@ func reopenDb(path string) {
 // pages are included in the backup. Shows a spinner while waiting.
 func beginSafeParse() bool {
 	ts := time.Now().Format("20060102_150405")
-	safeParseTemp = fmt.Sprintf("%s/bibtex_check_%s_%s%s",
+	safeParseTemp = fmt.Sprintf("%s/bibdb_manager_%s_%s%s",
 		os.TempDir(), bibTeXBaseName, ts, cacheFileExtension)
 
 	safeParseOriginalCount = countDistinctBibEntries()

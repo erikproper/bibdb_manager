@@ -1,6 +1,6 @@
 /*
  *
- * Module:    bibtex_check
+ * Module:    bibdb_manager
  * Component:
  * - bibtex_library
  *   - bibtex_library_checks
@@ -2129,7 +2129,7 @@ func (l *TBibTeXLibrary) CheckDuplicateDBLPKeys() {
 				// publication (its entry_lineage / source_field_signatures rows
 				// would be the sole remaining evidence it ever existed). Surface
 				// it instead so it can be repaired, e.g. via -add_dblp_entry.
-				l.Warning("DBLP key %s has %d incomplete stub entry(ies) (%s) and no live entry — not deleting; repair with -add_dblp_entry %s",
+				l.Warning("DBLP key %s has %d incomplete stub entry(ies) (%s) and no live entry — not deleting; repair: Lookup (web UI: Actions, DBLP) %s",
 					dblpKey, len(ghosts), strings.Join(ghosts, ", "), dblpKey)
 			}
 		}

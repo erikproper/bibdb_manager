@@ -370,7 +370,7 @@ func (w *TWebUI) handleEditAuthorSave(rw http.ResponseWriter, r *http.Request) {
 	}
 	ro.Close()
 	if other != "" {
-		http.Error(rw, fmt.Sprintf("%q is the name of another author (%s). To make them one, merge them: bib.check -merge_contributors %s %s", strings.TrimSpace(req.Name), other, id, other), http.StatusConflict)
+		http.Error(rw, fmt.Sprintf("%q is the name of another author (%s). To make them one, merge them: Mark for merge, %s and %s", strings.TrimSpace(req.Name), other, id, other), http.StatusConflict)
 		return
 	}
 	if !found {

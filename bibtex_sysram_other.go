@@ -2,7 +2,7 @@
 
 /*
  *
- * Module:    bibtex_check
+ * Module:    bibdb_manager
  * Component:
  * - bibtex_sysram
  *   - bibtex_sysram_other

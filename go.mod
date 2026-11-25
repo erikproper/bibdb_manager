@@ -1,4 +1,4 @@
-module example/user/bibtex_check
+module example/user/bibdb_manager
 
 go 1.25.0
 

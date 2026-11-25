@@ -1,6 +1,6 @@
 /*
  *
- * Module:    bibtex_check
+ * Module:    bibdb_manager
  * Component:
  * - main
  *
@@ -55,7 +55,7 @@ var (
 	Reporting TInteraction
 )
 
-const AppVersion = "30.159"
+const AppVersion = "30.162"
 
 // Run-state flags consumed by the write tail in main.
 var (
@@ -66,7 +66,6 @@ var (
 	cmdNoGarbageCleaning       bool
 	cmdTrustHints              bool           // -trust_hints: auto-accept key-hint matches in harvest
 	cmdCollectKeys             bool           // -collect_keys: add source keys to hints DB when unambiguous
-	cmdHarvestGroup            string         // -group: add all resolved harvest entries to this group
 	cmdHarvestTransferKeysPath string         // resolved .keys path for harvest_transfer target; "" = disabled
 	cmdHarvestWeaveEntries     []TBibTeXEntry // ignored entries accumulated during this harvest run; flushed to follow .sync DB
 	cmdFix                     bool           // -fix: apply full per-entry checks when combined with -sync or -harvest
@@ -1305,7 +1304,7 @@ func reportSkippedNameMappings(lines []string) {
 		fmt.Fprintf(f, "# %s\n%s\n", time.Now().Format("2006-01-02 15:04:05"), strings.Join(lines, "\n"))
 		f.Close()
 	}
-	Library.Progress("ORCID name forms skipped as garbled (lists, titles): %d (see orcid_skipped_names.log; -add_name_mapping forces one).", len(lines))
+	Library.Progress("ORCID name forms skipped as garbled (lists, titles): %d (see orcid_skipped_names.log; Tables, Name mappings in the web UI takes one anyway).", len(lines))
 }
 
 // reportORCIDSideAutoResolves reports the name questions autoResolveByORCIDSide
@@ -3378,7 +3377,7 @@ func doRenameContributor(args []string) {
 	var other string
 	bibQueryRow(`SELECT id FROM contributors WHERE name = ? AND id != ?`, newName, id).Scan(&other) //nolint:errcheck
 	if other != "" {
-		messagef("rename_contributor: %q is the name of contributor %s; merge them instead (-merge_contributors).\n", newName, other)
+		messagef("rename_contributor: %q is the name of contributor %s; merge them instead (Mark for merge).\n", newName, other)
 		return
 	}
 	if err := bibExec(`UPDATE contributors SET name = ? WHERE id = ?`, newName, id); err != nil {
@@ -3944,7 +3943,7 @@ func doEnrichOrcidProfilesCore() {
 	}
 	ticker.Done()
 	if matchedOnly && skipped > 0 {
-		Library.Progress("ORCID profile enrichment: %d new alias(es) added; %d challenge(s) skipped (run without -matched_orcid_data_only to process them).", newAliases, skipped)
+		Library.Progress("ORCID profile enrichment: %d new alias(es) added; %d challenge(s) skipped (Enrich contributors asks about them).", newAliases, skipped)
 	} else {
 		Library.Progress("ORCID profile enrichment: %d new alias(es) added.", newAliases)
 	}
@@ -3956,148 +3955,6 @@ func doEnrichOrcidProfiles() {
 		return
 	}
 	doEnrichOrcidProfilesCore()
-}
-
-// doUpgradeWatchActions rewrites the watch file, replacing name/orcid entries with
-// contributor "EP_XXXX" where the contributor is known. Ambiguous names are resolved
-// interactively. Duplicate entries for the same contributor are collapsed to one.
-func doUpgradeWatchActions() {
-	if !openLibraryToUpdate() {
-		return
-	}
-	pm, _ := loadDblpPersonMaps()
-	filePath := libraryBase() + scriptsFolderSuffix + "/watch"
-	entries := ReadWatchFile(filePath)
-	if len(entries) == 0 {
-		Library.Progress("Watch file empty or absent: %s", filePath)
-		return
-	}
-
-	var upgraded []TWatchEntry
-	seenIDs := map[string]bool{}
-	changed := false
-
-	for _, e := range entries {
-		switch e.EntryType {
-		case "contributor":
-			id := e.Value
-			// Resolve stale IDs — follow any absorbed-ID chain to the current canonical.
-			if canonical := Library.ResolveContributorID(id); canonical != id {
-				if _, stillExists := Library.ContributorByID[canonical]; stillExists {
-					Library.Progress("Watch: resolved stale contributor %q → %s", id, canonical)
-					e = TWatchEntry{EntryType: "contributor", Value: canonical, Comment: e.Comment, Tag: e.Tag}
-					id = canonical
-					changed = true
-				} else {
-					Library.Warning("Watch: contributor %q (chain → %s) no longer exists — keeping entry", id, canonical)
-				}
-			} else if _, exists := Library.ContributorByID[id]; !exists {
-				Library.Warning("Watch: contributor %q not found and has no oldie record — keeping entry", id)
-			}
-			if seenIDs[id] {
-				Library.Progress("Watch: removed duplicate contributor %q", id)
-				changed = true
-				continue
-			}
-			seenIDs[id] = true
-			// Fill comment if missing or stale.
-			if contrib, ok := Library.ContributorByID[id]; ok && contrib.Name != "" && e.Comment != contrib.Name {
-				e.Comment = contrib.Name
-				changed = true
-			}
-			upgraded = append(upgraded, e)
-
-		case "name":
-			// Normalize HTML entities before lookup; the name may have been written
-			// with &atilde; etc. from a raw DBLP/ORCID source.
-			if clean := applyHtmlCharMap(e.Value); clean != e.Value {
-				Library.Progress("Watch: normalized HTML in name %q → %q", e.Value, clean)
-				e = TWatchEntry{EntryType: "name", Value: clean, Comment: e.Comment, Tag: e.Tag}
-				changed = true
-			}
-			id, known := Library.NameToContributorID[e.Value]
-			if !known {
-				// Check for ambiguity.
-				if ids, ambig := Library.AmbiguousNameToContributorIDs[e.Value]; ambig {
-					about := TQuestion{Text: "Which contributor?"}
-					var keys []string
-					for i, cid := range ids {
-						k := strconv.Itoa(i + 1)
-						keys = append(keys, k)
-						about.Options = append(about.Options, TQuestionOption{Key: k, Label: contributorLabel(cid, false)})
-					}
-					about.Options = append(about.Options, TQuestionOption{Key: "0", Label: "keep as name entry"})
-					choice := Library.WarningQuestionOrderedAbout(about, "Which contributor?", append(keys, "0"), "Watch: the name %q is ambiguous", e.Value)
-					n := 0
-					fmt.Sscan(choice, &n)
-					if n >= 1 && n <= len(ids) {
-						id = ids[n-1]
-						known = true
-					}
-				}
-			}
-			if !known {
-				upgraded = append(upgraded, e)
-				continue
-			}
-			if seenIDs[id] {
-				Library.Progress("Watch: removed duplicate name %q (same contributor as earlier entry)", e.Value)
-				changed = true
-				continue
-			}
-			seenIDs[id] = true
-			comment := e.Value
-			if contrib, ok := Library.ContributorByID[id]; ok && contrib.Name != "" {
-				comment = contrib.Name
-			}
-			upgraded = append(upgraded, TWatchEntry{EntryType: "contributor", Value: id, Comment: comment})
-			Library.Progress("Watch: upgraded name %q → contributor %s", e.Value, id)
-			changed = true
-
-		case "orcid":
-			id := Library.ORCIDToContributorID[e.Value]
-			if id == "" {
-				if dblpKey := pm.orcidToKey[e.Value]; dblpKey != "" {
-					id = Library.DblpKeyToContributorID[dblpKey]
-					if id == "" {
-						// DblpKey not yet set in DB — try resolving via canonical name.
-						if canonical := pm.keyToCanonical[dblpKey]; canonical != "" {
-							id = Library.NameToContributorID[canonical]
-						}
-					}
-				}
-			}
-			if id == "" {
-				upgraded = append(upgraded, e)
-				continue
-			}
-			if seenIDs[id] {
-				Library.Progress("Watch: removed duplicate orcid %q (same contributor as earlier entry)", e.Value)
-				changed = true
-				continue
-			}
-			seenIDs[id] = true
-			comment := e.Comment
-			if comment == "" {
-				if contrib, ok := Library.ContributorByID[id]; ok && contrib.Name != "" {
-					comment = contrib.Name
-				}
-			}
-			upgraded = append(upgraded, TWatchEntry{EntryType: "contributor", Value: id, Comment: comment})
-			Library.Progress("Watch: upgraded orcid %q → contributor %s", e.Value, id)
-			changed = true
-
-		default:
-			upgraded = append(upgraded, e)
-		}
-	}
-
-	if changed {
-		WriteWatchFile(filePath, upgraded)
-		Library.Progress("Watch file updated: %s", filePath)
-	} else {
-		Library.Progress("Watch file already up to date.")
-	}
 }
 
 func doAssignOrcid(args []string) {
@@ -4156,7 +4013,6 @@ var (
 	cmdTriageAuthorMappings     bool // -triage_author_mappings: triage author/editor superseded_field_values
 	cmdTriageContributorAliases bool // -triage_contributor_aliases: generalise or keep entry-specific contributor aliases
 	cmdDisambiguateContributors bool // -disambiguate_contributors: resolve ambiguous contributor-name assignments
-	cmdUpgradeWatchActions      bool // -upgrade_watch_actions: rewrite watch file to contributor format
 	cmdAssignOrcid              bool // -assign_orcid: assign an ORCID to a contributor
 	cmdEnrichContributorData    bool // -enrich_contributor_data: run full contributor enrichment pipeline
 	cmdMergeContributors        bool // -merge_contributors: merge two contributors into one
@@ -4210,8 +4066,7 @@ var (
 
 	cmdSetSyncStatus string // -set_sync_status <status> <source_key> <stem>: set/clear a sync status flag
 
-	cmdImportAllCSV bool // legacy migration helper; kept for migrate.sh compat
-	cmdImportBib    bool
+	cmdImportBib bool
 
 	cmdHarvest bool // -harvest: harvest entries from a bib file (path from args) or stdin
 )
@@ -4258,7 +4113,6 @@ func main() {
 	flag.BoolVar(&cmdCollectKeys, "collect_keys", false, "harvest: add source entry keys to the hints DB when unambiguous")
 	flag.StringVar(&logFilePath, "log", "", "also write the run's output, questions and answers to this file (appended): -log <file>")
 	flag.StringVar(&logFilePath, "l", "", "short for -log")
-	flag.StringVar(&cmdHarvestGroup, "group", "", "harvest: add all resolved entries to this group")
 
 	flag.BoolVar(&cmdStartService, "start", false, "start the service for this library in the background (commands then run through it) and open its web UI (-ui=false: not)")
 	flag.BoolVar(&cmdStopService, "stop", false, "stop the service gracefully (a running job is stopped as with Ctrl-C)")
@@ -4284,12 +4138,10 @@ func main() {
 	flag.BoolVar(&cmdEntryKeyAlias, "entry_key_alias", false, "get preferred alias for a key")
 	flag.BoolVar(&cmdShowEntry, "show_entry", false, "print full entry content")
 	flag.BoolVar(&cmdFixEntries, "fix_entries", false, "fix/check specific entries")
-	flag.BoolVar(&cmdFixEntries, "fix_entry", false, "alias for -fix_entries")
 	flag.BoolVar(&cmdFixDuplicates, "fix_duplicates", false, "interactively resolve title-duplicate pairs in the library")
 	flag.BoolVar(&cmdTriageAuthorMappings, "triage_author_mappings", false, "triage author/editor entries in superseded_field_values")
 	flag.BoolVar(&cmdTriageContributorAliases, "triage_contributor_aliases", false, "generalise or keep entry-specific contributor aliases")
 	flag.BoolVar(&cmdDisambiguateContributors, "disambiguate_contributors", false, "resolve ambiguous contributor-name assignments in entry_contributor_names")
-	flag.BoolVar(&cmdUpgradeWatchActions, "upgrade_watch_actions", false, "rewrite watch file replacing name/orcid entries with contributor EP_XXXX")
 	flag.BoolVar(&cmdAssignOrcid, "assign_orcid", false, "assign an ORCID to a contributor: -assign_orcid <name-or-EP-id> <orcid>")
 	flag.BoolVar(&cmdEnrichContributorData, "enrich_contributor_data", false, "run full contributor enrichment pipeline: absorb DBLP names+ORCIDs, enrich from ORCID profiles, merge ORCID duplicates")
 	flag.BoolVar(&cmdMatchedOrcidDataOnly, "matched_orcid_data_only", false, "with -enrich_contributor_data: skip ORCID challenges in step 3, leaving them as homework")
@@ -4299,11 +4151,9 @@ func main() {
 	flag.BoolVar(&cmdFixCandidates, "fix_candidates", false, "interactively link library entries without a DBLP key to DBLP records")
 	flag.BoolVar(&cmdFix, "fix", false, "apply full per-entry checks when combined with -sync or -harvest")
 	flag.BoolVar(&cmdAddDblpEntry, "add_dblp_entry", false, "upsert DBLP data for one or more given entries (library or DBLP keys)")
-	flag.BoolVar(&cmdAddDblpEntry, "add_dblp_entries", false, "alias for -add_dblp_entry")
 	flag.BoolVar(&cmdWatch, "watch", false, "check watched persons/ORCIDs for missing publications")
 	flag.BoolVar(&cmdAddGroup, "add_group", false, "create a new BibDesk static group: -add_group <group_name> [key...]")
 	flag.BoolVar(&cmdAddKeyMapping, "add_key_mapping", false, "add key alias(es) to a canonical key: -add_key_mapping <alias>... <canonical>")
-	flag.BoolVar(&cmdAddKeyMapping, "add_key_mappings", false, "alias for -add_key_mapping")
 	flag.BoolVar(&cmdMergeEntries, "merge_entries", false, "merge entries into target: -merge_entries <key>... <target>")
 	flag.BoolVar(&cmdAddNameMapping, "add_name_mapping", false, "add a name alias mapping: -add_name_mapping <alias> <canonical>")
 	flag.BoolVar(&cmdCorrectName, "correct_name", false, "correct a name spelling everywhere: -correct_name <bad_name> <correct_name>")
@@ -4345,7 +4195,6 @@ func main() {
 	flag.Var(&cmdExport, "export", "export tables to <base>.tables/ (bare = all; or comma-separated table names)")
 	flag.Var(&cmdImport, "import", "import tables from <base>.tables/, replace-all with confirmation (bare = all; or comma-separated table names)")
 	flag.StringVar(&cmdSetSyncStatus, "set_sync_status", "", "set/clear a sync status flag: -set_sync_status <status|''> <source_key> <stem>")
-	flag.BoolVar(&cmdImportAllCSV, "import_all_csv", false, "import all mapping CSVs (migration helper for migrate.sh)")
 	flag.BoolVar(&cmdImportBib, "import_bib", false, "import a bib file into the DB (requires filename argument; use to initialise or reinitialise bib_entries)")
 	flag.BoolVar(&cmdHarvest, "harvest", false, "interactively ingest entries from a bib file (path from args) or stdin into the library")
 
@@ -4363,7 +4212,7 @@ func main() {
 	// -set_sync_status operates on an explicit .sync file; no -base needed.
 	if cmdSetSyncStatus != "" {
 		if len(args) < 2 {
-			messageln("Usage: bibtex_check -set_sync_status <status|''> <source_key> <sync-file-stem>")
+			messageln("Usage: bibdb_manager -set_sync_status <status|''> <source_key> <sync-file-stem>")
 			endRun(1)
 		}
 		DoSetSyncStatus(cmdSetSyncStatus, args[0], args[1])
@@ -4371,7 +4220,7 @@ func main() {
 	}
 
 	if *baseFlag == "" {
-		messageln("Usage: bibtex_check -base <path/basename> [-command] [args...]")
+		messageln("Usage: bibdb_manager -base <path/basename> [-command] [args...]")
 		flag.PrintDefaults()
 		endRun(1)
 	}

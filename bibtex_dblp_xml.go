@@ -1,6 +1,6 @@
 /*
  *
- * Module:    bibtex_check
+ * Module:    bibdb_manager
  * Component:
  * - bibtex_dblp
  *   - bibtex_dblp_xml
@@ -977,7 +977,7 @@ func doUpdateDblp() error {
 	if sourcePath == "" {
 		messagef("No DBLP export (dblp.xml.gz) in %s.\n", dlFolder)
 		messagef("Please download %s in your browser,\n", dblpXMLDownloadURL)
-		messagef("save it to %s, then re-run -update_dblp.\n", dlFolder)
+		messagef("save it to %s, then run Update cache (web UI: Actions, DBLP) again.\n", dlFolder)
 		if dblpURL == "" {
 			messagef("(Or set dblp_url in the settings file to download it automatically.)\n")
 		}

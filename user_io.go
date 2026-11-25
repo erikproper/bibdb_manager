@@ -1,6 +1,6 @@
 /*
  *
- * Module:    bibtex_check
+ * Module:    bibdb_manager
  * Component:
  * - interaction
  *   - user_io
@@ -132,7 +132,7 @@ type TFrameIO struct {
 }
 
 // envFrames tells a child process of the service to speak frames on fd 3 and 4.
-const envFrames = "BIBTEX_CHECK_FRAMES"
+const envFrames = "BIBDB_MANAGER_FRAMES"
 
 func newFrameIO() *TFrameIO {
 	t := &TFrameIO{
