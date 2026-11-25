@@ -55,7 +55,7 @@ var (
 	Reporting TInteraction
 )
 
-const AppVersion = "30.147"
+const AppVersion = "30.148"
 
 // Run-state flags consumed by the write tail in main.
 var (
@@ -1710,26 +1710,12 @@ func countDblpCandidates() int {
 	return n
 }
 
+// reportHomework prints, at the end of a write session, what the session changed
+// and the homework still open (each with the action that does it), among which:
 //   - number of title-hash groups that contain at least one unresolved potential
 //     duplicate pair (title-equal, not in non_doubles, no divergent DBLP/DOI evidence)
 //   - number of entries without a dblp field that have at least one unresolved DBLP
 //     title-index candidate (not already in non_doubles)
-func doHomework() {
-	doEnrichContributorData()
-	if Library.QuitWasRequested() {
-		return
-	}
-	doTriageAuthorMappings()
-	if Library.QuitWasRequested() {
-		return
-	}
-	doFixCandidates()
-	if Library.QuitWasRequested() {
-		return
-	}
-	doFixDuplicates()
-}
-
 func reportHomework() {
 	// Session-change summary: compare current state to what was captured at session open.
 	currentEntries := countBibEntries()
@@ -4186,7 +4172,6 @@ var (
 	cmdUpgradeWatchActions      bool // -upgrade_watch_actions: rewrite watch file to contributor format
 	cmdAssignOrcid              bool // -assign_orcid: assign an ORCID to a contributor
 	cmdEnrichContributorData    bool // -enrich_contributor_data: run full contributor enrichment pipeline
-	cmdHomework                 bool // -homework: run all pending homework in priority order
 	cmdMergeContributors        bool // -merge_contributors: merge two contributors into one
 	cmdMergeOrcidDuplicates     bool // -merge_orcid_duplicates: merge contributors sharing an ORCID, or by ORCID's duplicates
 	cmdAddDblpEntry             bool
@@ -4319,7 +4304,6 @@ func main() {
 	flag.BoolVar(&cmdUpgradeWatchActions, "upgrade_watch_actions", false, "rewrite watch file replacing name/orcid entries with contributor EP_XXXX")
 	flag.BoolVar(&cmdAssignOrcid, "assign_orcid", false, "assign an ORCID to a contributor: -assign_orcid <name-or-EP-id> <orcid>")
 	flag.BoolVar(&cmdEnrichContributorData, "enrich_contributor_data", false, "run full contributor enrichment pipeline: absorb DBLP names+ORCIDs, enrich from ORCID profiles, merge ORCID duplicates")
-	flag.BoolVar(&cmdHomework, "homework", false, "run all pending homework in priority order: enrich contributors, triage superseded values, fix DBLP candidates, fix duplicates")
 	flag.BoolVar(&cmdMatchedOrcidDataOnly, "matched_orcid_data_only", false, "with -enrich_contributor_data: skip ORCID challenges in step 3, leaving them as homework")
 	flag.BoolVar(&cmdMergeContributors, "merge_contributors", false, "merge one or more contributors into another: -merge_contributors <from...> <into>")
 	flag.BoolVar(&cmdMergeOrcidDuplicates, "merge_orcid_duplicates", false, "merge contributors that share an ORCID, or whose ORCIDs ORCID itself merged (step 4 of -enrich_contributor_data)")

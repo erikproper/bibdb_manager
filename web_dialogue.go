@@ -309,7 +309,7 @@ func (s *TService) runDialogueJob(title string, cmds [][]string, own bool, done 
 // actionFromCommandLine: the commands that, asked for at a terminal, run in the
 // Actions tab (command name → title).
 var actionFromCommandLine = map[string]string{
-	"check": "Check", "homework": "Homework", "fix_candidates": "Fix DBLP candidates",
+	"check": "Check", "fix_candidates": "Fix DBLP candidates",
 	"fix_duplicates": "Fix duplicates", "enrich_contributor_data": "Enrich contributor data",
 	"merge_entries": "Merge entries", "sync": "Sync", "harvest": "Harvest",
 }
@@ -320,7 +320,6 @@ var dialogueActions = map[string]struct {
 	Args  []string
 }{
 	"check":          {"Check", []string{}},
-	"homework":       {"Homework", []string{"-homework"}},
 	"fix_candidates": {"Fix DBLP candidates", []string{"-fix_candidates"}},
 	"fix_duplicates": {"Fix duplicates", []string{"-fix_duplicates"}},
 	"enrich":         {"Enrich contributor data", []string{"-enrich_contributor_data"}},
@@ -572,7 +571,6 @@ func refreshActionCounts(busy bool) {
 		}
 		ro.Close()
 	}
-	counts["homework"] = counts["fix_candidates"] + counts["fix_duplicates"] + counts["triage"] + counts["enrich"]
 	actionCountsMu.Lock()
 	actionCountsValue, actionCountsVersion = counts, version
 	actionCountsMu.Unlock()

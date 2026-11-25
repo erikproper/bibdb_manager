@@ -213,14 +213,6 @@ func init() {
 			},
 		},
 		{
-			name:     "homework",
-			kind:     commandWrite,
-			selected: func() bool { return cmdHomework },
-			run: func(args []string) {
-				doHomework()
-			},
-		},
-		{
 			name:     "enrich_contributor_data",
 			kind:     commandWrite,
 			selected: func() bool { return cmdEnrichContributorData },

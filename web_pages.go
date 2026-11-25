@@ -241,7 +241,6 @@ table.compare td.kept { box-shadow: inset 2px 0 0 var(--ok); }
       <div class="line" style="margin:0 0 8px">
         <span class="label" style="min-width:4.5em">Checks</span>
         <button class="plain" data-action="check" title="Check the library">Check</button>
-        <button class="plain" data-action="homework" title="Run the pending homework in order">Homework</button>
         <button class="plain" data-action="fix_duplicates" title="Resolve title duplicates">Fix duplicates</button>
         <button class="plain" data-action="enrich" title="Absorb DBLP names and ORCIDs, enrich from ORCID profiles, merge ORCID duplicates">Enrich contributors</button>
         <button class="plain" data-action="triage" title="Triage the author/editor values that lost a challenge">Triage author mappings</button>
