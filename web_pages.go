@@ -36,7 +36,7 @@ html, body { height: 100%; }
 body { margin: 0; background: var(--bg); color: var(--text); display: flex; flex-direction: column;
        font: 15px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
 header { background: var(--primary); color: var(--primary-text); padding: 0 16px; flex: none;
-         display: flex; align-items: last baseline; gap: 24px; height: 56px; } /* tabs at the bottom, the title on their baseline */
+         display: flex; align-items: last baseline; gap: 24px; min-height: 56px; } /* tabs at the bottom, the title on their baseline */
 header .logo { width: 32px; height: 32px; flex: none; align-self: center; margin-right: -12px; border-radius: 7px;
                box-shadow: 0 0 0 1.5px rgba(255,255,255,.7); }
 header .title { font-size: 20px; font-weight: 400; white-space: nowrap; }
@@ -46,7 +46,7 @@ header .led { display: inline-block; margin: 0 0 0 7px; vertical-align: 0; width
               box-shadow: 0 0 0 2px rgba(255,255,255,.6); }
 header .led.busy { background: var(--danger); animation: ledpulse 1s ease-in-out infinite alternate; }
 @keyframes ledpulse { from { opacity: 1; } to { opacity: .45; } }
-.tabs { display: flex; gap: 4px; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+.tabs { display: flex; flex-wrap: wrap; gap: 2px 4px; min-width: 0; padding-top: 4px; } /* a second line when the first is full */
 .tabs button { background: transparent; color: var(--primary-text); border: 0; border-radius: 8px 8px 0 0;
                padding: 8px 18px; font-size: 14px; cursor: pointer; opacity: .85; white-space: nowrap; flex: none; }
 .tabs button:hover { opacity: 1; background: rgba(255,255,255,.15); }
@@ -103,6 +103,7 @@ select.groupadd { font-size: 13px; padding: 3px 6px; border: 1px solid var(--bor
 .tabs button .tabx { margin-left: 8px; opacity: .7; padding: 0 2px; border-radius: 4px; }
 .tabs button .tabx:hover { opacity: 1; background: rgba(0,0,0,.15); }
 .tabs button.seltab { font-style: italic; }
+.actbtns { flex: 1; display: flex; flex-wrap: wrap; gap: 8px; min-width: 0; } /* they wrap beside their label */
 .tablehelp { margin: 4px 0 10px; padding: 8px 12px; border-left: 3px solid var(--chosen); background: var(--card); border-radius: 4px; font-size: 13.5px; line-height: 1.45; }
 .selbar { flex: none; display: flex; gap: 10px; align-items: center; margin-bottom: 8px; font-size: 13px; flex-wrap: wrap; }
 .selbar button.action, .editbar button.action { padding: 4px 12px; font-size: 13px; } /* the size of the other small buttons */
@@ -149,6 +150,10 @@ table.grid tbody tr.dropping { outline: 2px dashed var(--primary); outline-offse
 table.grid tbody tr, #mbody table.list tr[data-key] { cursor: pointer; }
 #mbody table.list tr[data-key]:hover { background: var(--hover); }
 table.grid td.inh { color: var(--muted); font-style: italic; }
+table.grid th.op { padding: 4px 5px; overflow: visible; }
+table.grid th.op svg { vertical-align: -2px; }
+table.grid th .headtick { display: inline-block; width: 16px; height: 16px; line-height: 16px; border-radius: 4px; text-align: center;
+                          font-size: 12px; background: var(--ok); color: #fff; }
 table.grid td.op { padding: 2px 3px; text-align: left; white-space: nowrap; }
 table.grid td.op .tick { margin-right: 3px; }
 table.grid td.op button.copykey, table.grid td.op button.rowpdf { border: 0 !important; padding: 0 2px !important; margin: 0 2px 0 0; vertical-align: middle; }
@@ -239,31 +244,40 @@ table.compare td.kept { box-shadow: inset 2px 0 0 var(--ok); }
   <section class="panel" id="panel-dialogue" hidden><div class="narrow">
     <div class="card">
       <div class="line" style="margin:0 0 8px">
-        <span class="label" style="min-width:4.5em">Checks</span>
+        <span class="label" style="min-width:4.5em">Checks</span><span class="actbtns">
         <button class="plain" data-action="check" title="Check the library">Check</button>
         <button class="plain" data-action="fix_duplicates" title="Resolve title duplicates">Fix duplicates</button>
-        <button class="plain" data-action="enrich" title="Absorb DBLP names and ORCIDs, enrich from ORCID profiles, merge ORCID duplicates">Enrich contributors</button>
-        <button class="plain" data-action="triage" title="Triage the author/editor values that lost a challenge">Triage author mappings</button>
+        <button class="plain" data-action="align_countries" title="Country names in booktitles, as the Country names in titles table has them">Country names in titles</button></span>
       </div>
       <div class="line" style="margin:0 0 8px">
-        <span class="label" style="min-width:4.5em">PDF</span>
+        <span class="label" style="min-width:4.5em">Authors</span><span class="actbtns">
+        <button class="plain" data-action="enrich" title="Absorb DBLP names and ORCIDs, enrich from ORCID profiles, merge ORCID duplicates">Enrich contributors</button>
+        <button class="plain" data-action="enrich_matched" title="As Enrich contributors, but without asking about names that differ from the ORCID profile">Enrich, matched ORCIDs only</button>
+        <button class="plain" data-action="refresh_orcid" title="Fetch the ORCID profiles again, the oldest first (Stop when it is enough)">Refresh ORCID</button>
+        <button class="plain" data-action="merge_orcid" title="Merge authors that share an ORCID, or whose ORCIDs were merged by ORCID">Merge ORCID duplicates</button>
+        <button class="plain" data-action="disambiguate" title="Resolve names that several authors share, entry by entry">Disambiguate authors</button>
+        <button class="plain" data-action="triage" title="Triage the author/editor values that lost a challenge">Triage author mappings</button>
+        <button class="plain" data-action="triage_aliases" title="Name forms used in one entry only: generalise them, or keep them there">Triage author aliases</button></span>
+      </div>
+      <div class="line" style="margin:0 0 8px">
+        <span class="label" style="min-width:4.5em">PDF</span><span class="actbtns">
         <button class="plain" data-action="get_pdfs" title="Download missing PDFs into the files folder">Get</button>
         <button class="plain" data-action="check_pdfs" title="Check PDF health, orphan files and duplicates">Check</button>
-        <button class="plain" data-action="add_failed" title="Add the URLs of the last failed downloads to Bad URLs, so that Get skips them">Add failed</button>
+        <button class="plain" data-action="add_failed" title="Add the URLs of the last failed downloads to Bad URLs, so that Get skips them">Add failed</button></span>
       </div>
       <div class="line" style="margin:0 0 8px">
-        <span class="label" style="min-width:4.5em">DBLP</span>
+        <span class="label" style="min-width:4.5em">DBLP</span><span class="actbtns">
         <button class="plain" data-action="update_dblp" title="Import the DBLP export into the local DBLP cache (downloaded from dblp_url, or from Downloads)">Update cache</button>
         <button class="plain" data-action="update_entries" title="Update every entry with a DBLP key from the DBLP cache">Update entries</button>
         <button class="plain" data-action="fix_candidates" title="Link entries without a DBLP key to DBLP records">Candidates</button>
         <button class="plain" data-action="watch" title="Check the watched persons and ORCIDs for missing publications">Watch</button>
-        <button class="plain" id="dblplookup" title="Find an entry in the local DBLP cache, and add it to the library">Lookup</button>
+        <button class="plain" id="dblplookup" title="Find an entry in the local DBLP cache, and add it to the library">Lookup</button></span>
       </div>
       <div class="line" style="margin:0 0 8px">
-        <span class="label" style="min-width:4.5em">Other</span>
+        <span class="label" style="min-width:4.5em">Other</span><span class="actbtns">
         <button class="plain" data-action="entry_actions" title="Run the group assignment rules (entry_actions)">Entry actions</button>
         <button class="plain" data-action="audit" title="Report mapping rows that never apply">Audit mappings</button>
-        <button class="plain" data-action="push" title="Push the changes of this machine to the shared DB folder now">Push</button>
+        <button class="plain" data-action="push" title="Push the changes of this machine to the shared DB folder now">Push</button></span>
       </div>
     </div>
     <div class="card">
@@ -291,10 +305,10 @@ table.compare td.kept { box-shadow: inset 2px 0 0 var(--ok); }
   <div class="gridbox tbox"><table class="list ttable"><thead><tr></tr></thead><tbody></tbody></table><div class="loading muted tmore"></div></div>
 </template>
 <template id="searchtpl">
-  <div class="searchbar"><input type="search" class="q" placeholder="Filter: words from the key, alias, title, authors, editors, year, venue, DOI (empty: all entries)" autocomplete="off"></div>
   <div class="selbar" hidden><b class="selname"></b><span class="selinfo muted"></span>
     <button class="action selsave">Save</button><button class="action selsync">Sync</button><button class="plain selclose">Close</button>
     <span class="selmsg"></span></div>
+  <div class="searchbar"><input type="search" class="q" placeholder="Filter: words from the key, alias, title, authors, editors, year, venue, DOI (empty: all entries)" autocomplete="off"></div>
   <div class="searchinfo"><span class="count muted"></span><button class="toggle selonly" hidden title="Show only the selected entries (green and amber)">Selection</button>
     <select class="groupadd" title="Limit the list to the entries in a group"></select><span class="groupchips" style="display:inline-flex;gap:6px"></span>
     <button class="plain choosecols">Columns…</button><button class="plain resetcols">Default layout</button>
@@ -494,6 +508,9 @@ async function pollState() {
   seenIndex = st.index;
 }
 setInterval(() => { if (!stopped) pollState(); }, 2000);
+// The service sees by this connection that a page is open (it then opens no other). The
+// browser connects again by itself after an interruption.
+if (window.EventSource) new EventSource(BASE + "/api/live");
 
 // ---- Dialogue: actions, warnings, and questions as pop-ups (the output goes to the Log tab) ----
 let dlg = null, qOpen = false, qShown = ""; // qShown: the question the pop-up shows (its line and position)
@@ -518,7 +535,7 @@ async function loadDialogue() {
   $("dlgout").innerHTML = (outs.length ? '<table class="list">' + outs.slice().reverse().map((o) => '<tr><td class="key">' + esc(o.key) + "</td><td>" + esc(o.action) +
       (o.text ? ' <span class="muted">(' + esc(o.text) + ")</span>" : "") + '</td><td class="key">' + (o.target ? '<a href="#" data-entry="' + esc(o.target) + '">' + esc(o.target) + "</a>" : "") + "</td></tr>").join("") + "</table>" : "") +
     tabs.map((t) => '<div class="qtext">' + esc(t.text) + '</div><table class="list">' + (t.rows || []).map((r) => "<tr><td>" + esc(r.label) + '</td><td style="text-align:right">' + esc(r.value) +
-      '</td><td class="muted">' + esc(r.note || "") + "</td></tr>").join("") + "</table>").join("");
+      '</td><td class="muted">' + (r.action ? '<button class="plain" data-start="' + esc(r.action) + '">' + esc(r.note) + "</button>" : esc(r.note || "")) + "</td></tr>").join("") + "</table>").join("");
   $("dlgnotescard").hidden = !(d.warnings && d.warnings.length);
   $("dlgnotes").innerHTML = (d.warnings || []).slice().reverse().map((w) => { const ls = w.text.trim().split("\n"); return warnHTML((w.kind === "error" ? "Error: " : "") + ls[0], ls.slice(1)); }).join("");
   $("dlghistcard").hidden = !(d.history && d.history.length);
@@ -753,15 +770,19 @@ async function sendAnswer(choice, text) {
 }
 $("dlgopen").onclick = openQuestion;
 // DBLP Lookup: an entry found in the local DBLP cache is added to the library (with its parent).
-$("dblplookup").onclick = () => openLookup(null, null, async (key) => {
-  closePopup();
-  try {
-    const r = await fetch(BASE + "/api/dialogue/start", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "add_dblp", arg: key }) });
-    if (!r.ok) { alert(await r.text()); return; }
-  } catch (e) { lost(e); }
-  setTimeout(loadDialogue, 300);
-});
+$("dblplookup").onclick = () => openLookup(null, null, (key) => startAction("add_dblp", [key]));
 $("dlgstop").onclick = async () => { try { if (dlg && dlg.job) await fetch(BASE + "/api/job/" + dlg.job + "/stop", { method: "POST" }); } catch (e) {} setTimeout(loadDialogue, 300); };
+// startAction starts an action (with what it is given) and shows the Actions tab.
+async function startAction(action, given) {
+  try {
+    const r = await fetch(BASE + "/api/dialogue/start", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action, given: given || [] }) });
+    if (!r.ok) { alert(await r.text()); return false; }
+  } catch (e) { lost(e); return false; }
+  closePopup();
+  showTab("dialogue");
+  setTimeout(loadDialogue, 300);
+  return true;
+}
 for (const b of document.querySelectorAll("[data-action]")) b.onclick = async () => {
   try {
     const r = await fetch(BASE + "/api/dialogue/start", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: b.dataset.action }) });
@@ -827,7 +848,10 @@ class SearchView {
                 selinfo: q("selinfo"), selmsg: q("selmsg"), selname: q("selname") };
     this.rows = []; this.total = 0; this.gen = 0; this.busy = false; this.query = ""; this.groups = new Set();
     this.only = false; this.started = false; this.seenLayout = -1;
-    this.opW = sel ? 64 : 30; // the first column: (tick, copy) and PDF, as bare icons
+    // The fixed columns, before those of the layout: in a Select tab the selection (tick and
+    // copy), and the PDF.
+    this.fixed = sel ? [["sel", 56], ["pdf", 42]] : [["pdf", 42]];
+    this.opW = this.fixed.reduce((w, f) => w + f[1], 0);
     const el = this.el;
     el.gridbox.addEventListener("scroll", () => {
       if (this.rows.length < this.total && el.gridbox.scrollTop + el.gridbox.clientHeight > el.gridbox.scrollHeight - 600) this.fetchRows(false);
@@ -887,12 +911,17 @@ class SearchView {
   header() {
     this.seenLayout = layoutVersion;
     const g = this.el.grid, cg = g.querySelector("colgroup"), tr = g.querySelector("thead tr");
-    cg.innerHTML = '<col style="width:' + this.opW + 'px">' + layout.cols.map((c) => '<col style="width:' + width(c) + 'px">').join("");
-    // The first column: in a Select tab "Selection" (sorts on it), else unnamed (sorts on having a PDF).
-    const first = this.sel ? "sel" : "pdf";
-    tr.innerHTML = '<th title="' + (this.sel ? "Sort on being selected" : "Sort on having a PDF") + '">' + (this.sel ? "select" : "") +
-      (this.sortKey() === first ? ((this.selSort ? this.selDesc : layout.desc) ? " ▼" : " ▲") : "") + "</th>";
-    tr.firstChild.onclick = () => this.sortOn(first);
+    cg.innerHTML = this.fixed.map((f) => '<col style="width:' + f[1] + 'px">').join("") + layout.cols.map((c) => '<col style="width:' + width(c) + 'px">').join("");
+    tr.innerHTML = "";
+    for (const [name] of this.fixed) {
+      const th = document.createElement("th");
+      th.className = "op";
+      th.title = name === "sel" ? "Selected: sort on it" : "PDF: sort on having one";
+      th.innerHTML = (name === "sel" ? '<span class="headtick">✓</span>' : PDFICON) +
+        (this.sortKey() === name ? ((this.selSort ? this.selDesc : layout.desc) ? " ▼" : " ▲") : "");
+      th.onclick = () => this.sortOn(name);
+      tr.appendChild(th);
+    }
     layout.cols.forEach((c, i) => {
       const th = document.createElement("th");
       th.textContent = c + (this.sortKey() === c ? (layout.desc ? " ▼" : " ▲") : "");
@@ -916,7 +945,7 @@ class SearchView {
   fitWidth() { this.el.grid.style.width = this.opW + layout.cols.reduce((s, c) => s + width(c), 0) + "px"; }
   resizeStart(ev, c, i) {
     ev.preventDefault(); ev.stopPropagation();
-    const col = this.el.grid.querySelectorAll("col")[i + 1], x0 = ev.clientX, w0 = width(c);
+    const col = this.el.grid.querySelectorAll("col")[i + this.fixed.length], x0 = ev.clientX, w0 = width(c);
     const move = (e) => { layout.widths[c] = Math.max(40, w0 + e.clientX - x0); col.style.width = layout.widths[c] + "px"; this.fitWidth(); };
     const up = () => { document.removeEventListener("mousemove", move); document.removeEventListener("mouseup", up); saveLayout(); this.seenLayout = layoutVersion; };
     document.addEventListener("mousemove", move);
@@ -985,7 +1014,7 @@ class SearchView {
     const html = [];
     for (let n = from; n < this.rows.length; n++) {
       const r = this.rows[n];
-      html.push('<tr data-key="' + esc(r.k) + '"><td class="op">' + (this.sel ? this.tickHTML(r.t) + this.copyHTML(r) : "") +
+      html.push('<tr data-key="' + esc(r.k) + '">' + (this.sel ? '<td class="op">' + this.tickHTML(r.t) + this.copyHTML(r) + "</td>" : "") + '<td class="op">' +
         (r.pdf ? '<button class="rowpdf" data-pdf="' + esc(r.k) + '" title="Open the PDF">' + PDFICON + "</button><span></span>" : "") + "</td>");
       for (const c of layout.cols) {
         const v = r.cells[c] || "";
@@ -1572,7 +1601,7 @@ class AuthorEditView {
       try {
         const r = await fetch(BASE + "/api/table/name_forms", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(edit) });
         const d = r.ok ? await r.json() : { ok: false, message: await r.text() };
-        if (!d.ok || /another author|stored name|No such/.test(d.message)) alert(d.message); else toast(d.message);
+        if (!d.ok) alert(d.message); else toast(d.message);
       } catch (e) { lost(e); }
       this.load();
     };
@@ -1584,6 +1613,12 @@ class AuthorEditView {
     const addForm = () => { const v = q("edformnew").value.trim(); if (v) formChange({ op: "add", row: { form: v, id: this.id } }); };
     q("edformadd").onclick = addForm;
     q("edformnew").onkeydown = (e) => { if (e.key === "Enter") addForm(); };
+    q("edcorrect").onclick = () => {
+      const good = q("edgood").value.trim();
+      if (!good) { q("edgood").focus(); return; }
+      if (this.dirty() && !confirm("Your unsaved changes to this author are lost. Go on?")) return;
+      startAction("correct_name", [q("edbad").value, good]).then((ok) => { if (ok) this.load(); });
+    };
     q("edrevert").onclick = () => { if (!this.dirty() || confirm("Undo your changes?")) this.load(); };
     q("edclose").onclick = () => this.close();
     this.panel.addEventListener("input", () => this.mark());
@@ -1778,9 +1813,14 @@ document.addEventListener("keydown", (e) => { if (e.key === "Escape" && $("overl
 
 // ---- clicks inside fragments ----
 document.addEventListener("click", async (e) => {
-  const el = e.target.closest("[data-entry],[data-author],[data-pdf],[data-pdfremove],[data-edit],[data-editauthor],[data-copy],[data-mark],#stop");
+  const el = e.target.closest("[data-entry],[data-author],[data-pdf],[data-pdfremove],[data-edit],[data-editauthor],[data-copy],[data-mark],[data-start],#stop");
   if (!el) return;
   e.preventDefault();
+  if (el.dataset.start) { // an action on this entry or author
+    if (el.dataset.confirm && !confirm(el.dataset.confirm)) return;
+    startAction(el.dataset.start, el.dataset.given ? JSON.parse(el.dataset.given) : []);
+    return;
+  }
   if (el.dataset.mark) { markForMerge(el.dataset.mark, el.dataset.key); return; }
   if (el.dataset.copy) {
     try { await navigator.clipboard.writeText(el.dataset.copy); toast("Copied: " + el.dataset.copy); }
@@ -1880,7 +1920,10 @@ else showTab(location.hash.slice(1) || "search");
 
 {{define "entry"}}
 <div class="line"><button class="plain" data-edit="{{.Key}}" title="Edit this entry in an edit tab">Edit</button>
-  <button class="plain" data-mark="entries" data-key="{{.Key}}" title="Collect it for a merge (the tray at the bottom)">Mark for merge</button></div>
+  <button class="plain" data-mark="entries" data-key="{{.Key}}" title="Collect it for a merge (the tray at the bottom)">Mark for merge</button>
+  <button class="plain" data-start="check_entry" data-given="{{given .Key}}" title="Run the checks on this entry (in the Actions tab)">Check</button>
+  <span style="flex:1"></span>
+  <button class="plain" data-start="delete_entry" data-given="{{given .Key}}" title="Delete this entry (asks first, in the Actions tab)">Delete</button></div>
 {{if .Reference}}<div class="card ref">{{.Reference}}</div>{{else}}<p class="muted">The reference (HTML) shows once the library is loaded or the running job is done (the busy light is then green); open the entry again then.</p>{{end}}
 <div class="line"><span class="label">Groups</span>{{range .Groups}}<span class="chip">{{.}}</span>{{else}}<span class="muted">none</span>{{end}}</div>
 {{if .HasPDF}}<div class="line"><span class="label">PDF</span><button class="plain" data-pdfremove="{{.Key}}" title="Move this PDF to the Trash (Undo for a few minutes)" style="order:2">Remove</button><button class="pdf" data-pdf="{{.Key}}" title="Open the PDF"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M8 13h8M8 17h5"/></svg>Open the PDF</button><span class="muted"></span></div>{{end}}
@@ -1894,6 +1937,10 @@ else showTab(location.hash.slice(1) || "search");
   </table>
   <div>}</div>
 </div>
+{{if or .Authors .Editors}}<details class="card" style="font-size:14px"><summary class="muted" style="cursor:pointer">One of the authors or editors is someone else</summary>
+  <p class="muted" style="font-size:13px">Gives that position an author of its own, with the same name, recorded as a different person. For two people with the same name that neither an ORCID nor DBLP tells apart.</p>
+  <table class="list">{{$key := .Key}}{{range .Authors}}<tr><td>{{tex .Name}}</td><td class="muted">author {{.Position}}</td><td class="key">{{.ID}}</td><td style="text-align:right"><button class="plain" data-start="split_position" data-given="{{given $key "author" .Position}}" data-confirm="Make this position ({{.Name}}) a different person?">Someone else</button></td></tr>{{end}}
+  {{range .Editors}}<tr><td>{{tex .Name}}</td><td class="muted">editor {{.Position}}</td><td class="key">{{.ID}}</td><td style="text-align:right"><button class="plain" data-start="split_position" data-given="{{given $key "editor" .Position}}" data-confirm="Make this position ({{.Name}}) a different person?">Someone else</button></td></tr>{{end}}</table></details>{{end}}
 {{end}}
 
 {{define "edit"}}
@@ -1928,7 +1975,10 @@ else showTab(location.hash.slice(1) || "search");
 <div class="card">
   <table class="edit">
     <tr><td class="field">name</td><td><textarea class="edname" rows="1">{{.Name}}</textarea>
-      <div class="out">Changing it keeps the current name as another name form (an alias). A name that is another author's is refused: merge them instead (-merge_contributors).</div></td></tr>
+      <div class="out">Changing it keeps the current name as another name form (an alias). A name that is another author's is refused: merge them instead (Mark for merge).</div></td></tr>
+    <tr><td class="field">misspelt</td><td><div class="line" style="margin:0"><select class="edbad"><option value="{{.Name}}">{{.Name}}</option>{{range .Forms}}<option value="{{.}}">{{.}}</option>{{end}}</select>
+      <input class="edgood" placeholder="the correct spelling" style="flex:1;font:13px ui-monospace, Menlo, monospace;padding:5px 8px;border:1px solid var(--border);border-radius:6px;background:var(--card);color:var(--text)"><button class="plain edcorrect">Correct everywhere</button></div>
+      <div class="out">Replaces a wrong spelling in every entry; unlike a changed name, it is not kept as a name form. Asks first, in the Actions tab.</div></td></tr>
     <tr><td class="field">ORCID</td><td>{{range $i, $o := .ORCIDs}}{{if $i}}, {{end}}<a href="https://orcid.org/{{$o}}" target="_blank" rel="noopener">{{$o}}</a>{{else}}<span class="muted">none</span>{{end}}
       <textarea class="edorcid" rows="1" placeholder="add an ORCID: 0000-0000-0000-0000" style="margin-top:6px"></textarea></td></tr>
     <tr><td class="field">DBLP</td><td>{{if .DBLP}}<a href="https://dblp.org/pid/{{.DBLP}}.html" target="_blank" rel="noopener">{{.DBLP}}</a>{{else}}<span class="muted">none</span>{{end}}</td></tr>

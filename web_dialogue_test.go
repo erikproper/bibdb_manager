@@ -51,3 +51,21 @@ func TestSummariseAnswer(t *testing.T) {
 		t.Errorf("text: %v", got)
 	}
 }
+
+func TestActionCommand(t *testing.T) {
+	split := dialogueActions["split_position"]
+	if got, err := split.command([]string{"EP-1", "author", "2"}); err != nil || strings.Join(got, " ") != "-split_position EP-1 author 2" {
+		t.Errorf("%v %v", got, err)
+	}
+	for _, bad := range [][]string{nil, {"EP-1"}, {"EP-1", "", "2"}, {"-stop", "author", "2"}, {"EP-1", "author", "2\n3"}} {
+		if got, err := split.command(bad); err == nil {
+			t.Errorf("%q taken: %v", bad, got)
+		}
+	}
+	if _, err := dialogueActions["check"].command([]string{"x"}); err == nil {
+		t.Error("an argument for an action without any")
+	}
+	if got := givenArguments("EP-1", "editor", 3); got != `["EP-1","editor","3"]` {
+		t.Error(got)
+	}
+}

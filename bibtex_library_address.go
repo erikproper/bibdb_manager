@@ -745,7 +745,8 @@ func (l *TBibTeXLibrary) NormaliseAddressNames(address string) string {
 
 // NormaliseBooktitleLocationNames replaces state and country name aliases in
 // the comma-separated parts of a conference title or booktitle with their
-// canonical forms.  Unlike NormaliseAddressNames it does not append a country
+// canonical forms, keeping the braces of a braced one.  Unlike
+// NormaliseAddressNames it does not append a country
 // when only a state is found, and it preserves the surrounding whitespace of
 // each part so the rest of the title string is unaffected.
 func (l *TBibTeXLibrary) NormaliseBooktitleLocationNames(title string) string {
@@ -754,6 +755,11 @@ func (l *TBibTeXLibrary) NormaliseBooktitleLocationNames(title string) string {
 	for i, part := range parts {
 		trimmed := strings.TrimSpace(part)
 		canonical, _ := lookupAlias(l.BooktitleCountryAliasToCanonical, trimmed)
+		// Braces in a title protect its capitals: kept, whatever the table's form has
+		// (Erik, 2026-11-25; the table lists "{USA}" as an alias of "USA").
+		if canonical != "" && stripOuterBraces(trimmed) != trimmed && stripOuterBraces(canonical) == canonical {
+			canonical = "{" + canonical + "}"
+		}
 		if canonical == "" || canonical == trimmed {
 			continue
 		}

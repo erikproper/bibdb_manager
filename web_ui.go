@@ -34,6 +34,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -47,6 +48,36 @@ type TWebUI struct {
 	port    int
 	pages   *template.Template
 	server  *http.Server
+	open    atomic.Int32 // the pages connected now (handleLive)
+}
+
+// connected tells whether a page of the web UI is open in a browser now.
+func (w *TWebUI) connected() bool { return w != nil && w.open.Load() > 0 }
+
+// handleLive holds a page's connection (GET /api/live, server-sent events) while
+// the page is open: it ends at once when the page is closed, also one whose timers
+// the browser slows down in the background.
+func (w *TWebUI) handleLive(rw http.ResponseWriter, r *http.Request) {
+	flusher, ok := rw.(http.Flusher)
+	if !ok {
+		http.Error(rw, "not supported", http.StatusNotImplemented)
+		return
+	}
+	rw.Header().Set("Content-Type", "text/event-stream")
+	rw.Header().Set("Cache-Control", "no-store")
+	w.open.Add(1)
+	defer w.open.Add(-1)
+	for {
+		if _, err := fmt.Fprint(rw, ": open\n\n"); err != nil { // a comment: keeps the connection alive, finds a dead one
+			return
+		}
+		flusher.Flush()
+		select {
+		case <-r.Context().Done():
+			return
+		case <-time.After(15 * time.Second):
+		}
+	}
 }
 
 func newWebUI(s *TService) *TWebUI {
@@ -58,8 +89,9 @@ func newWebUI(s *TService) *TWebUI {
 	}
 	return &TWebUI{service: s, token: hex.EncodeToString(b), port: port,
 		pages: template.Must(template.New("").Funcs(template.FuncMap{
-			"esc": url.PathEscape,
-			"tex": texToText, // TeX markup to plain text ({\"o} → ö), for text outside the BibTeX layout
+			"esc":   url.PathEscape,
+			"given": givenArguments,
+			"tex":   texToText, // TeX markup to plain text ({\"o} → ö), for text outside the BibTeX layout
 		}).Parse(webPages))}
 }
 
@@ -84,6 +116,7 @@ func (w *TWebUI) start() {
 	mux.HandleFunc(prefix+"/api/merge", w.handleMerge)
 	mux.HandleFunc(prefix+"/api/dialogue", w.handleDialogue)
 	mux.HandleFunc(prefix+"/api/dialogue/", w.handleDialogue)
+	mux.HandleFunc(prefix+"/api/live", w.handleLive)
 	mux.HandleFunc(prefix+"/api/jobs", w.handleJobs)
 	mux.HandleFunc(prefix+"/api/job/", w.handleJob)
 	mux.HandleFunc(prefix+"/api/dblpsearch", w.handleDBLPSearch)
@@ -419,11 +452,14 @@ func webEntryRow(ro *sql.DB, key string) TWebEntryRow {
 }
 
 // TWebPerson is a contributor as a list shows it: name and id (for the link).
-type TWebPerson struct{ ID, Name string }
+type TWebPerson struct {
+	ID, Name string
+	Position int
+}
 
 // webContributors returns the contributors in a role of an entry, in order.
 func webContributors(ro *sql.DB, key, role string) []TWebPerson {
-	rows, err := ro.Query(`SELECT c.id, c.name FROM contributor_roles r JOIN contributors c ON c.id = r.contributor_id
+	rows, err := ro.Query(`SELECT c.id, c.name, r.position FROM contributor_roles r JOIN contributors c ON c.id = r.contributor_id
 		WHERE r.entry_key = ? AND r.role = ? ORDER BY r.position`, key, role)
 	if err != nil {
 		return nil
@@ -432,7 +468,7 @@ func webContributors(ro *sql.DB, key, role string) []TWebPerson {
 	var people []TWebPerson
 	for rows.Next() {
 		var p TWebPerson
-		if rows.Scan(&p.ID, &p.Name) == nil {
+		if rows.Scan(&p.ID, &p.Name, &p.Position) == nil {
 			people = append(people, p)
 		}
 	}

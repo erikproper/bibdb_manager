@@ -91,10 +91,6 @@ var webTables = map[string]TWebTable{
 func init() {
 	// The other tables, each with its primary key (Erik, 2026-11-25).
 	for _, t := range []TWebTable{
-		{Name: "generic_field_mappings", Title: "Value corrections", Group: "Mappings", Columns: []string{"field", "challenger", "winner"}, Keys: []string{"field", "challenger"},
-			Help: "Legacy table, no longer read: value corrections now live in Field mappings (same field on both sides). A challenger value of a field was corrected to the winner."},
-		{Name: "cross_field_mappings", Title: "Cross-field mappings", Group: "Mappings", Columns: []string{"source_field", "source_value", "target_field", "target_value"}, Keys: []string{"source_field", "source_value", "target_field"},
-			Help: "Legacy table, no longer read: these now live in Field mappings (different fields on the two sides). A value of one field set a value of another."},
 		{Name: "shorten_mappings", Title: "Shortened values", Group: "Mappings", Columns: []string{"field", "original", "shortened"}, Keys: []string{"field", "original"},
 			Help: "Short forms used when writing bib files with shortening on (the sync config's \"shorten\"): in that field, the original value is written as the shortened one (e.g. a long booktitle as its acronym). The library itself keeps the original."},
 		{Name: "country_names", Title: "Country names (address)", Group: "Mappings", Columns: []string{"alias", "canonical"}, Keys: []string{"alias"},

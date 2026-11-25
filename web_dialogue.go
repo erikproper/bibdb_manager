@@ -61,6 +61,13 @@ func (d *TDialogue) show(job *TJob) bool {
 	return !shown
 }
 
+// shows tells whether a job is shown.
+func (d *TDialogue) shows() bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.job != nil
+}
+
 // finishIf is finish, when job is the one shown.
 func (d *TDialogue) finishIf(job *TJob, code int) {
 	d.mu.Lock()
@@ -139,7 +146,11 @@ func (s *TService) runDialogueJob(title string, cmds [][]string, own bool, done 
 			sio := &TSocketIO{out: dialogueSink{}, interactive: true, lines: make(chan string, 16), job: job}
 			setAnswerValue("")
 			job.setReply(sio.answer)
-			dialogue.start(title, job)
+			if own && dialogue.shows() {
+				job.onAsk = func() { dialogue.show(job) } // a reload leaves the last job's result, until it asks
+			} else {
+				dialogue.start(title, job)
+			}
 			fmt.Fprintf(os.Stderr, "%s  job (Actions tab): %s\n", time.Now().Format(time.DateTime), strings.Join(append([]string{title + ":"}, args...), " "))
 			req := serviceFrame{T: "run", Args: append([]string{"-base", libraryBase()}, args...), Version: AppVersion, Base: libraryBase()}
 			flag.CommandLine.SetOutput(flagOutput{sio})
@@ -175,7 +186,7 @@ func (s *TService) runDialogueJob(title string, cmds [][]string, own bool, done 
 			sio.finished.Store(true)
 			sio.endInput()
 			fmt.Fprintf(os.Stderr, "\n[ended with code %d]\n", code)
-			dialogue.finish(code)
+			dialogue.finishIf(job, code)
 			if code != 0 {
 				break
 			}
@@ -207,30 +218,72 @@ var actionFromCommandLine = map[string]string{
 	"merge_entries": "Merge entries", "sync": "Sync", "harvest": "Harvest",
 }
 
-// dialogueActions are the action buttons: name → command.
-var dialogueActions = map[string]struct {
+// TDialogueAction is an action the web UI can start: its title (the button's name),
+// its command, and what it is given (the names of its arguments, for a refusal).
+type TDialogueAction struct {
 	Title string
 	Args  []string
-}{
-	"check":          {"Check", []string{}},
-	"fix_candidates": {"Fix DBLP candidates", []string{"-fix_candidates"}},
-	"fix_duplicates": {"Fix duplicates", []string{"-fix_duplicates"}},
-	"enrich":         {"Enrich contributor data", []string{"-enrich_contributor_data"}},
-	"triage":         {"Triage author mappings", []string{"-triage_author_mappings"}},
-	"check_pdfs":     {"Check PDFs", []string{"-check_pdfs"}},
-	"get_pdfs":       {"Get PDFs", []string{"-get_pdfs"}},
-	"add_failed":     {"Add failed URLs to Bad URLs", []string{"-add_failed_urls"}},
-	"update_dblp":    {"Update DBLP", []string{"-update_dblp"}},
-	"update_entries": {"Update all DBLP entries", []string{"-update_all_dblp_entries"}},
-	"watch":          {"Watch", []string{"-watch"}},
-	"entry_actions":  {"Entry actions", []string{"-do_entry_actions"}},
-	"audit":          {"Audit mappings", []string{"-audit_mappings"}},
-	"push":           {"Push", []string{"-push"}},
+	Given []string
+}
+
+// dialogueActions are the actions: name → command.
+var dialogueActions = map[string]TDialogueAction{
+	"check":           {"Check", []string{}, nil},
+	"fix_candidates":  {"DBLP candidates", []string{"-fix_candidates"}, nil},
+	"fix_duplicates":  {"Fix duplicates", []string{"-fix_duplicates"}, nil},
+	"align_countries": {"Country names in titles", []string{"-align_booktitle_countries"}, nil},
+	"enrich":          {"Enrich contributors", []string{"-enrich_contributor_data"}, nil},
+	"enrich_matched":  {"Enrich, matched ORCIDs only", []string{"-matched_orcid_data_only", "-enrich_contributor_data"}, nil},
+	"refresh_orcid":   {"Refresh ORCID", []string{"-update_orcid"}, nil},
+	"merge_orcid":     {"Merge ORCID duplicates", []string{"-merge_orcid_duplicates"}, nil},
+	"disambiguate":    {"Disambiguate authors", []string{"-disambiguate_contributors"}, nil},
+	"triage":          {"Triage author mappings", []string{"-triage_author_mappings"}, nil},
+	"triage_aliases":  {"Triage author aliases", []string{"-triage_contributor_aliases"}, nil},
+	"check_pdfs":      {"Check PDFs", []string{"-check_pdfs"}, nil},
+	"get_pdfs":        {"Get PDFs", []string{"-get_pdfs"}, nil},
+	"add_failed":      {"Add failed URLs to Bad URLs", []string{"-add_failed_urls"}, nil},
+	"update_dblp":     {"Update DBLP", []string{"-update_dblp"}, nil},
+	"update_entries":  {"Update all DBLP entries", []string{"-update_all_dblp_entries"}, nil},
+	"watch":           {"Watch", []string{"-watch"}, nil},
+	"entry_actions":   {"Entry actions", []string{"-do_entry_actions"}, nil},
+	"audit":           {"Audit mappings", []string{"-audit_mappings"}, nil},
+	"push":            {"Push", []string{"-push"}, nil},
+	"add_dblp":        {"Add DBLP entry", []string{"-add_dblp_entry"}, []string{"a DBLP key"}},
+	"check_entry":     {"Check entry", []string{"-fix_entries"}, []string{"an entry's key"}},
+	"delete_entry":    {"Delete entry", []string{"-delete_entry"}, []string{"an entry's key"}},
+	"split_position":  {"Someone else", []string{"-split_position"}, []string{"an entry's key", "author or editor", "a position"}},
+	"correct_name":    {"Correct name", []string{"-correct_name"}, []string{"the wrong name", "the correct name"}},
+}
+
+// givenArguments are an action's arguments, as a page gives them (JSON).
+func givenArguments(args ...any) string {
+	given := make([]string, len(args))
+	for i, a := range args {
+		given[i] = fmt.Sprint(a)
+	}
+	out, _ := json.Marshal(given)
+	return string(out)
+}
+
+// command is the action's command line with what it is given.
+func (a TDialogueAction) command(given []string) ([]string, error) {
+	if len(given) != len(a.Given) {
+		return nil, fmt.Errorf("%s: give %s", a.Title, strings.Join(a.Given, ", "))
+	}
+	args := append([]string{}, a.Args...)
+	for i, g := range given {
+		g = strings.TrimSpace(g)
+		if g == "" || strings.HasPrefix(g, "-") || strings.ContainsAny(g, "\r\n") {
+			return nil, fmt.Errorf("%s: %q is not %s", a.Title, g, a.Given[i])
+		}
+		args = append(args, g)
+	}
+	return args, nil
 }
 
 // handleDialogue answers what the Actions tab shows (GET /api/dialogue: the job, its
 // status, question, results), or acts on it (POST
-// /api/dialogue/start {action}). Answers and stop: /api/job/<id>/… (service_dialogue.go).
+// /api/dialogue/start {action, given}). Answers and stop: /api/job/<id>/… (service_dialogue.go).
 func (w *TWebUI) handleDialogue(rw http.ResponseWriter, r *http.Request) {
 	action := strings.TrimPrefix(r.URL.Path, "/"+w.token+"/api/dialogue")
 	action = strings.TrimPrefix(action, "/")
@@ -259,31 +312,27 @@ func (w *TWebUI) handleDialogue(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Action string `json:"action"`
-		Arg    string `json:"arg"` // add_dblp: the DBLP key
+		Action string   `json:"action"`
+		Given  []string `json:"given"` // the action's arguments
 	}
 	json.NewDecoder(http.MaxBytesReader(rw, r.Body, 1<<16)).Decode(&req) //nolint:errcheck
 	switch action {
 	case "start":
-		if req.Action == "add_dblp" { // the Add section: a DBLP entry by its key
-			key := strings.TrimSpace(req.Arg)
-			if key == "" || strings.ContainsAny(key, " \t") {
-				http.Error(rw, "give a DBLP key, e.g. conf/er/SmithJ21", http.StatusBadRequest)
-				return
-			}
-			if err := w.service.runDialogueJob("Add DBLP entry "+key, [][]string{{"-add_dblp_entry", key}}, false, nil); err != nil {
-				http.Error(rw, err.Error(), http.StatusConflict)
-				return
-			}
-			rw.WriteHeader(http.StatusAccepted)
-			return
-		}
 		a, ok := dialogueActions[req.Action]
 		if !ok {
 			http.Error(rw, "no such action", http.StatusBadRequest)
 			return
 		}
-		if err := w.service.runDialogueJob(a.Title, [][]string{a.Args}, false, nil); err != nil {
+		args, err := a.command(req.Given)
+		if err != nil {
+			http.Error(rw, err.Error(), http.StatusBadRequest)
+			return
+		}
+		title := a.Title
+		if len(req.Given) > 0 {
+			title += " " + strings.Join(req.Given, " ")
+		}
+		if err := w.service.runDialogueJob(title, [][]string{args}, false, nil); err != nil {
 			http.Error(rw, err.Error(), http.StatusConflict)
 			return
 		}

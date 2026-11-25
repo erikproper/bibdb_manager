@@ -302,7 +302,7 @@ func orcidCacheAge(orcid string) time.Time {
 // an ORCID, working from the stalest entry (missing cache = oldest) toward the
 // most recently cached. After the person pass, a works-backfill pass fetches works
 // for entries whose person data is already fresh but whose works have never been
-// cached. Stops cleanly when the user presses q+Enter.
+// cached. Stops cleanly on Ctrl-C (or Stop in the web UI).
 func doUpdateOrcidCache() {
 	// Re-probe connectivity now, not just at startup, since the network may have
 	// changed state since the binary was launched.
@@ -430,7 +430,7 @@ func doUpdateOrcidCache() {
 
 	// Works-backfill pass — one API call per entry; person data already fresh.
 	if len(worksEntries) > 0 {
-		Library.Progress("Backfilling ORCID works cache: %d entries missing works data. q+Enter to stop.", len(worksEntries))
+		Library.Progress("Backfilling ORCID works cache: %d entries missing works data. Ctrl-C (or Stop in the web UI) to stop.", len(worksEntries))
 		ticker := Library.NewProgressTicker("Backfilling works cache", len(worksEntries))
 		fetched, failed := 0, 0
 		for i, orcid := range worksEntries {

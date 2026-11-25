@@ -305,7 +305,8 @@ func bootstrapKeysFromBib(fileName string) []TBibGetPair {
 	return pairs
 }
 
-// readKeysFile reads <fileName>.keys (local_key;canonical_key CSV).
+// readKeysFile reads <fileName>.keys (local_key;canonical_key, or with the preferred
+// alias as a third column, which is not used here).
 // Lines without a ';' are bare canonical keys; localKey is left empty and
 // the caller must resolve them against the open library.
 // modified is true when a bare-key line was found (requiring a write-back).
@@ -350,12 +351,7 @@ func readKeysFile(fileName string) (pairs []TBibGetPair, modified bool, ok bool)
 			}
 			return
 		}
-		parts := strings.SplitN(line, csvDelimiter, 2)
-		if len(parts) != 2 {
-			return
-		}
-		local := strings.TrimSpace(parts[0])
-		canonical := strings.TrimSpace(parts[1])
+		local, canonical, _, _ := splitKeysLine(line)
 		if local == "" || canonical == "" {
 			return
 		}
@@ -2036,13 +2032,9 @@ func appendPairToKeysFile(keysFilePath, localKey, canonicalKey string) {
 	line := localKey + csvDelimiter + canonicalKey
 	if data, err := os.ReadFile(keysFilePath); err == nil {
 		for _, existing := range strings.Split(string(data), "\n") {
-			trimmed := strings.TrimSpace(existing)
-			if trimmed == line {
-				return // exact duplicate
-			}
-			// Also skip if this canonical key is already mapped (possibly with a
-			// different local key) — keep the first occurrence.
-			if parts := strings.SplitN(trimmed, csvDelimiter, 2); len(parts) == 2 && parts[1] == canonicalKey {
+			// Skip if this canonical key is already mapped (possibly with a different
+			// local key) — keep the first occurrence.
+			if _, canonical, _, paired := splitKeysLine(existing); paired && canonical == canonicalKey {
 				return
 			}
 		}

@@ -222,7 +222,7 @@ func (t *TProgressTicker) Tick() bool {
 // pollForQuit did check, without blocking, whether "q" was typed: that read the
 // keyboard during every ticker, eating what was typed ahead for the shell. Since
 // 30.59 input is read only when asked (TUserIO.RequestInput); Ctrl-C stops a run
-// gracefully, and a command that offers "q+Enter" reads for it itself.
+// gracefully.
 func (t *TProgressTicker) pollForQuit() {}
 
 // WasAborted reports whether a graceful quit has been requested on the ticker's

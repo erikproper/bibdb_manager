@@ -732,7 +732,7 @@ func (s *TService) runJob(req serviceFrame, dec *json.Decoder, out *frameSender)
 			toldAsking = true
 			out.send(serviceFrame{T: "info", D: "It waits for an answer in the web UI's Actions tab: " + s.web.URL() + "#dialogue\n"}) //nolint:errcheck
 			if req.Interactive {
-				out.send(serviceFrame{T: "open", D: s.web.URL() + "#dialogue"}) //nolint:errcheck
+				s.openActionsTab(out)
 			}
 		}
 		time.Sleep(300 * time.Millisecond)
@@ -813,7 +813,7 @@ func (s *TService) runJob(req serviceFrame, dec *json.Decoder, out *frameSender)
 		routed = true
 		out.send(serviceFrame{T: "info", D: fmt.Sprintf("Started in the web UI's Actions tab (%s): answer its questions there; its output is in the Log tab.\n",
 			actionFromCommandLine[name])}) //nolint:errcheck
-		out.send(serviceFrame{T: "open", D: s.web.URL() + "#dialogue"}) //nolint:errcheck
+		s.openActionsTab(out)
 		out.send(serviceFrame{T: "exit"})                               //nolint:errcheck
 		return
 	}
@@ -924,6 +924,14 @@ func (s *TService) runChildJob(req serviceFrame, dec *json.Decoder, out *frameSe
 	})
 }
 
+// openActionsTab has the command line open the Actions tab in the browser, when no
+// page of the web UI is open (Erik, 2026-11-25): an open one shows it by its light.
+func (s *TService) openActionsTab(out *frameSender) {
+	if !s.web.connected() {
+		out.send(serviceFrame{T: "open", D: s.web.URL() + "#dialogue"}) //nolint:errcheck
+	}
+}
+
 // bringQuestionUp brings a question of a job of a command line up in the web UI:
 // shown in the Actions tab, the browser opened for the first one.
 func (s *TService) bringQuestionUp(job *TJob, out *frameSender) {
@@ -940,7 +948,7 @@ func (s *TService) bringQuestionUp(job *TJob, out *frameSender) {
 	first := dialogue.show(job)
 	out.send(serviceFrame{T: "info", D: "A question waits for your answer in the web UI's Actions tab: " + s.web.URL() + "#dialogue\n"}) //nolint:errcheck
 	if first {
-		out.send(serviceFrame{T: "open", D: s.web.URL() + "#dialogue"}) //nolint:errcheck
+		s.openActionsTab(out)
 	}
 }
 

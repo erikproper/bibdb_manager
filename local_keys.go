@@ -24,6 +24,16 @@ func resolveUserKey(rawKey string) string {
 	return key
 }
 
+// splitKeysLine splits a line of a .keys file into its columns,
+// local;canonical or local;canonical;preferred (Erik, 2026-11-25: the preferred alias
+// as a third column, for a later program that brings the keys in the tex files up to
+// date). paired is false for a line without a delimiter, a bare key (in local).
+func splitKeysLine(line string) (local, canonical, preferred string, paired bool) {
+	local, rest, paired := strings.Cut(strings.TrimSpace(line), csvDelimiter)
+	canonical, preferred, _ = strings.Cut(rest, csvDelimiter)
+	return strings.TrimSpace(local), strings.TrimSpace(canonical), strings.TrimSpace(preferred), paired
+}
+
 // lookupLocalKey returns the library key that a .keys file in dir maps
 // localKey to, or "" when there is none. It reads only file_names from
 // dir/bib.config and does not write anything back.
@@ -48,11 +58,8 @@ func lookupLocalKey(dir, localKey string) string {
 			continue
 		}
 		for _, line := range strings.Split(string(keys), "\n") {
-			parts := strings.SplitN(line, csvDelimiter, 2)
-			if len(parts) == 2 && strings.TrimSpace(parts[0]) == localKey {
-				if canonical := strings.TrimSpace(parts[1]); canonical != "" {
-					return canonical
-				}
+			if local, canonical, _, paired := splitKeysLine(line); paired && local == localKey && canonical != "" {
+				return canonical
 			}
 		}
 	}

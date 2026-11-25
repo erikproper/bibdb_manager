@@ -100,6 +100,8 @@ type TMessageRow struct {
 	Label string `json:"label"`
 	Value string `json:"value"`
 	Note  string `json:"note,omitempty"`
+	// Action is the action of the Actions tab that the note names (a button there).
+	Action string `json:"action,omitempty"`
 }
 
 // messageSender is a TUserIO that sends dialogue frames (a job of the service, in
@@ -238,7 +240,9 @@ func renderTable(m TMessage) string {
 	b.WriteString("\n" + m.Text + ":\n")
 	for _, r := range m.Rows {
 		line := fmt.Sprintf("  %-*s  %*s", lw, r.Label+":", vw, r.Value)
-		if r.Note != "" {
+		if r.Action != "" {
+			line += "  [Actions: " + r.Note + "]"
+		} else if r.Note != "" {
 			line += "  " + r.Note
 		}
 		b.WriteString(line + "\n")

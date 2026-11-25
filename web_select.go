@@ -196,7 +196,8 @@ func openSelectSessions(files []TSelectFile) string {
 	return first
 }
 
-// read loads the session's .keys file: "local;canonical" lines (a bare key is
+// read loads the session's .keys file: "local;canonical" lines, or with the
+// preferred alias as a third column (a bare key is
 // a canonical one, its local key the preferred alias). Old keys are mapped to
 // their entry.
 func (s *TSelectSession) read() {
@@ -227,8 +228,7 @@ func (s *TSelectSession) read() {
 		if line == "" {
 			continue
 		}
-		local, canonical, paired := strings.Cut(line, csvDelimiter)
-		local, canonical = strings.TrimSpace(local), strings.TrimSpace(canonical)
+		local, canonical, _, paired := splitKeysLine(line)
 		if !paired {
 			canonical, local = local, ""
 		}

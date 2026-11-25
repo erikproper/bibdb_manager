@@ -346,8 +346,17 @@ func (l *TBibTeXLibrary) CheckAlignBooktitleCountries() {
 	}
 	messagef("Found %d candidate(s)\n", len(allHits))
 
-	// Phase 2: action.
+	// Phase 2: action. The question shows the first cases.
+	var cases []TQuestionValue
+	for i, kh := range allHits {
+		if i == 100 {
+			cases = append(cases, TQuestionValue{Role: "more", Value: fmt.Sprintf("%d (all in the log)", len(allHits)-i)})
+			break
+		}
+		cases = append(cases, TQuestionValue{Role: kh.key, Value: kh.hit.proposed, Note: "now: " + kh.hit.original})
+	}
 	q := &TQuestion{Kind: "choice", Text: "Proceed?", Warning: fmt.Sprintf("Found %d candidate(s)", len(allHits)),
+		Values: cases,
 		Options: []TQuestionOption{{Key: "a", Label: "accept all"}, {Key: "i", Label: "one by one"}, {Key: "q", Label: "stop"}}}
 	for {
 		sendQuestion(q)

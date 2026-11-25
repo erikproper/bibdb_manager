@@ -55,7 +55,7 @@ var (
 	Reporting TInteraction
 )
 
-const AppVersion = "30.155"
+const AppVersion = "30.157"
 
 // Run-state flags consumed by the write tail in main.
 var (
@@ -1744,25 +1744,28 @@ func reportHomework() {
 		bibQueryRow(`SELECT COUNT(*) FROM contributors WHERE orcid != '' AND NOT EXISTS (SELECT 1 FROM contributor_orcid_seen s WHERE s.contributor_id = contributors.id AND s.canonical != '')`).Scan(&newOrcidContributors)
 	}
 
-	hwComment := func(count int, cmd string) string {
-		if cmd != "" && count > 0 {
-			return "[-" + cmd + "]"
+	// Each line of homework names the action that does it.
+	homework := TMessage{Kind: "table", Text: "Homework"}
+	todo := func(label string, count int, action string) {
+		row := TMessageRow{Label: label, Value: fmt.Sprintf("%d", count)}
+		if count > 0 {
+			row.Note, row.Action = dialogueActions[action].Title, action
 		}
-		return ""
+		homework.Rows = append(homework.Rows, row)
 	}
 	var triagePending int
 	bibQueryRow(`SELECT COUNT(*) FROM superseded_field_values WHERE field IN ('author', 'editor') AND triage_status IS NULL`).Scan(&triagePending)
 
-	var hwRows []statRow
 	if seenTableExists > 0 {
-		hwRows = append(hwRows, statRow{StatContributorsWithOrcidNotYetEnriched, fmt.Sprintf("%d", newOrcidContributors), hwComment(newOrcidContributors, "enrich_contributor_data")})
+		todo(StatContributorsWithOrcidNotYetEnriched, newOrcidContributors, "enrich")
 	}
-	hwRows = append(hwRows,
-		statRow{StatLosingValuesPending, fmt.Sprintf("%d", triagePending), hwComment(triagePending, "triage_author_mappings")},
-		statRow{StatEntriesWithUnresolvedDblpCandidates, fmt.Sprintf("%d", dblpCandidates), hwComment(dblpCandidates, "fix_candidates")},
-		statRow{StatTitleGroupsWithUnresolvedDuplicates, fmt.Sprintf("%d", unresolvedGroups), hwComment(unresolvedGroups, "fix_duplicates")},
-	)
-	printStatBlock("Homework:", hwRows, true)
+	todo(StatLosingValuesPending, triagePending, "triage")
+	todo(StatEntriesWithUnresolvedDblpCandidates, dblpCandidates, "fix_candidates")
+	todo(StatTitleGroupsWithUnresolvedDuplicates, unresolvedGroups, "fix_duplicates")
+	if isTTY {
+		emit(homework)
+		emit(TMessage{Kind: "note"})
+	}
 	stderrPrintf("\n")
 }
 
@@ -4326,7 +4329,7 @@ func main() {
 	flag.BoolVar(&cmdRenderAsText, "render_as_text", false, "render entry as plain-text bibliography reference")
 	flag.BoolVar(&cmdCheckPdfs, "check_pdfs", false, "check PDF health, orphan files, and duplicates in the files folder")
 	flag.BoolVar(&cmdAlignBooktitleCountries, "align_booktitle_countries", false, "detect and fix unbraced country names in booktitle fields")
-	flag.BoolVar(&cmdUpdateOrcidCache, "update_orcid", false, "refresh the ORCID disk cache for all known contributors (oldest-first, q+Enter to stop)")
+	flag.BoolVar(&cmdUpdateOrcidCache, "update_orcid", false, "refresh the ORCID disk cache for all known contributors (oldest-first; Ctrl-C to stop)")
 	flag.BoolVar(&cmdLoadDblpXml, "load_dblp_xml", false, "load a DBLP .xml.gz export into the local DBLP store")
 	flag.BoolVar(&cmdPushDblp, "push_dblp", false, "copy the local DBLP store to DBLP/ in the shared DB folder (Nextcloud)")
 	flag.BoolVar(&cmdRestoreDblp, "restore_dblp", false, "replace the local DBLP store with the copy in DBLP/ in the shared DB folder")
