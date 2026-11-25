@@ -12,13 +12,18 @@ package main
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
+	"syscall"
 	"time"
 )
 
@@ -34,6 +39,7 @@ type TDialogue struct {
 	code    int
 	asking  bool
 	sio     *TSocketIO
+	reply   func(string) // gives an answer to the job: a line for its questions (in the service, or a child's stdin)
 	started time.Time
 	since   int              // the line number after the last answer: a question's context starts there
 	notes   []TDialogueNote  // the warnings of this job (shown in the tab)
@@ -92,6 +98,16 @@ func (d *TDialogue) start(title string, sio *TSocketIO) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.title, d.sio, d.running, d.asking, d.code, d.started = title, sio, true, false, 0, time.Now()
+	d.reply = nil
+	if sio != nil {
+		d.reply = func(text string) {
+			sio.asked.Store(false)
+			select {
+			case sio.lines <- text:
+			default:
+			}
+		}
+	}
 	d.lines, d.ended, d.since, d.notes, d.history, d.inNote, d.step, d.substep = nil, 0, 0, nil, nil, false, "", ""
 	d.current.Reset()
 }
@@ -99,7 +115,7 @@ func (d *TDialogue) start(title string, sio *TSocketIO) {
 func (d *TDialogue) finish(code int) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	d.running, d.asking, d.code, d.sio = false, false, code, nil
+	d.running, d.asking, d.code, d.sio, d.reply = false, false, code, nil, nil
 }
 
 // write adds output: "\r" restarts the current line (a progress line shows its
@@ -178,21 +194,25 @@ func (dialogueSink) send(f serviceFrame) error {
 		dialogue.write(f.D)
 	case "ask", "askall":
 		dialogue.mu.Lock()
-		// The question's context (the run of entry, option and warning lines right before
-		// it) stays out of the log; what came before it (progress) goes there.
-		cut := len(dialogue.pending)
-		for cut > 0 && isQuestionContext(dialogue.pending[cut-1].text) {
-			cut--
-		}
-		keep := dialogue.pending[:cut]
-		dialogue.pending = nil
-		dialogue.asking = true
+		dialogueSink{}.markAsking()
 		dialogue.mu.Unlock()
-		for _, l := range keep {
-			fmt.Fprintln(os.Stderr, l.text)
-		}
 	}
 	return nil
+}
+
+// markAsking marks the dialogue as asking (called with dialogue.mu held): the
+// question's context (the run of entry, option and warning lines right before it)
+// stays out of the log; what came before it (progress) goes there.
+func (dialogueSink) markAsking() {
+	cut := len(dialogue.pending)
+	for cut > 0 && isQuestionContext(dialogue.pending[cut-1].text) {
+		cut--
+	}
+	for _, l := range dialogue.pending[:cut] {
+		fmt.Fprintln(os.Stderr, l.text)
+	}
+	dialogue.pending = nil
+	dialogue.asking = true
 }
 
 // reHeadingWarning: a warning that is a heading of up to three words ("First entry:").
@@ -254,7 +274,18 @@ func (s *TService) runDialogueJob(title string, cmds [][]string, own bool, done 
 			req := serviceFrame{T: "run", Args: append([]string{"-base", libraryBase()}, args...), Version: AppVersion, Base: libraryBase()}
 			flag.CommandLine.SetOutput(flagOutput{sio})
 			code = 2
-			if positional, ok := parseJobArguments(req.Args); ok {
+			positional, ok := parseJobArguments(req.Args)
+			if ok && !runsInService() {
+				// A command that runs as a process of its own (-update_dblp, ...): its output
+				// and questions relayed (runDialogueChild).
+				childDir := ""
+				if len(dir) > 0 {
+					childDir = dir[0]
+				}
+				code = s.runDialogueChild(req.Args, childDir)
+				ok = false
+			}
+			if ok {
 				req.Cwd, _ = os.Getwd()
 				s.mu.Lock()
 				s.jobStop = sio.interrupt
@@ -304,7 +335,7 @@ func (s *TService) runDialogueJob(title string, cmds [][]string, own bool, done 
 var actionFromCommandLine = map[string]string{
 	"check": "Check", "homework": "Homework", "fix_candidates": "Fix DBLP candidates",
 	"fix_duplicates": "Fix duplicates", "enrich_contributor_data": "Enrich contributor data",
-	"merge_entries": "Merge entries", "sync": "Sync",
+	"merge_entries": "Merge entries", "sync": "Sync", "harvest": "Harvest",
 }
 
 // dialogueActions are the action buttons: name → command.
@@ -317,6 +348,14 @@ var dialogueActions = map[string]struct {
 	"fix_candidates": {"Fix DBLP candidates", []string{"-fix_candidates"}},
 	"fix_duplicates": {"Fix duplicates", []string{"-fix_duplicates"}},
 	"enrich":         {"Enrich contributor data", []string{"-enrich_contributor_data"}},
+	"triage":         {"Triage author mappings", []string{"-triage_author_mappings"}},
+	"check_pdfs":     {"Check PDFs", []string{"-check_pdfs"}},
+	"get_pdfs":       {"Get PDFs", []string{"-get_pdfs"}},
+	"update_dblp":    {"Update DBLP", []string{"-update_dblp"}},
+	"update_entries": {"Update all DBLP entries", []string{"-update_all_dblp_entries"}},
+	"watch":          {"Watch", []string{"-watch"}},
+	"entry_actions":  {"Entry actions", []string{"-do_entry_actions"}},
+	"audit":          {"Audit mappings", []string{"-audit_mappings"}},
 	"push":           {"Push", []string{"-push"}},
 }
 
@@ -368,10 +407,24 @@ func (w *TWebUI) handleDialogue(rw http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Action string `json:"action"`
 		Text   string `json:"text"`
+		Arg    string `json:"arg"` // add_dblp: the DBLP key
 	}
 	json.NewDecoder(http.MaxBytesReader(rw, r.Body, 1<<16)).Decode(&req) //nolint:errcheck
 	switch action {
 	case "start":
+		if req.Action == "add_dblp" { // the Add section: a DBLP entry by its key
+			key := strings.TrimSpace(req.Arg)
+			if key == "" || strings.ContainsAny(key, " \t") {
+				http.Error(rw, "give a DBLP key, e.g. conf/er/SmithJ21", http.StatusBadRequest)
+				return
+			}
+			if err := w.service.runDialogueJob("Add DBLP entry "+key, [][]string{{"-add_dblp_entry", key}}, false, nil); err != nil {
+				http.Error(rw, err.Error(), http.StatusConflict)
+				return
+			}
+			rw.WriteHeader(http.StatusAccepted)
+			return
+		}
 		a, ok := dialogueActions[req.Action]
 		if !ok {
 			http.Error(rw, "no such action", http.StatusBadRequest)
@@ -385,10 +438,10 @@ func (w *TWebUI) handleDialogue(rw http.ResponseWriter, r *http.Request) {
 	case "answer":
 		d := dialogue
 		d.mu.Lock()
-		sio, asking := d.sio, d.asking
+		reply, asking := d.reply, d.asking
 		d.asking = false
 		d.mu.Unlock()
-		if sio == nil || !asking {
+		if reply == nil || !asking {
 			http.Error(rw, "no question is waiting", http.StatusConflict)
 			return
 		}
@@ -413,11 +466,7 @@ func (w *TWebUI) handleDialogue(rw http.ResponseWriter, r *http.Request) {
 		for _, line := range summariseAnswer(q, context, req.Text) {
 			fmt.Fprintln(os.Stderr, line)
 		}
-		sio.asked.Store(false)
-		select {
-		case sio.lines <- req.Text:
-		default:
-		}
+		reply(req.Text)
 		rw.WriteHeader(http.StatusNoContent)
 	case "stop":
 		w.service.mu.Lock()
@@ -686,3 +735,103 @@ func isQuestionContext(line string) bool {
 }
 
 var reContextField = regexp.MustCompile(`^[a-z][\w-]*\s+:\s`)
+
+// runDialogueChild runs a command that does not run in the service (a process of
+// its own: -update_dblp, -harvest, ...) as the Actions tab's job: its output goes
+// through the dialogue (the log, the warnings, the progress), and a question it asks
+// (an unfinished line ending in "(a/b/c):", "?" or ":", the process quiet a moment)
+// is put to the page; the answer goes to its stdin.
+func (s *TService) runDialogueChild(args []string, dir string) int {
+	exe, err := os.Executable()
+	if err != nil {
+		dialogue.write("The service cannot find its programme: " + err.Error() + "\n")
+		return 1
+	}
+	cmd := exec.Command(exe, args...)
+	if dir != "" {
+		cmd.Dir = dir
+	}
+	cmd.Env = append(os.Environ(), envServiceJob+"=1", envInteractive+"=1")
+	stdin, err1 := cmd.StdinPipe()
+	stdout, err2 := cmd.StdoutPipe()
+	stderr, err3 := cmd.StderrPipe()
+	if err := errors.Join(err1, err2, err3); err != nil {
+		dialogue.write("The service cannot run the job: " + err.Error() + "\n")
+		return 1
+	}
+	if err := cmd.Start(); err != nil {
+		dialogue.write("The service cannot start the job: " + err.Error() + "\n")
+		return 1
+	}
+	s.mu.Lock()
+	s.jobStop = func() {
+		cmd.Process.Signal(syscall.SIGINT) //nolint:errcheck
+		dialogue.mu.Lock()
+		if dialogue.asking { // a question waiting: answered "q", as a Ctrl-C would
+			io.WriteString(stdin, "q\n") //nolint:errcheck
+		}
+		dialogue.mu.Unlock()
+	}
+	s.mu.Unlock()
+	dialogue.mu.Lock()
+	dialogue.reply = func(text string) { io.WriteString(stdin, text+"\n") } //nolint:errcheck
+	dialogue.mu.Unlock()
+
+	var lastOutput atomic.Int64
+	lastOutput.Store(time.Now().UnixNano())
+	var copies sync.WaitGroup
+	relay := func(r io.Reader) {
+		defer copies.Done()
+		buf := make([]byte, 32*1024)
+		for {
+			n, err := r.Read(buf)
+			if n > 0 {
+				lastOutput.Store(time.Now().UnixNano())
+				dialogue.mu.Lock()
+				dialogue.asking = false
+				dialogue.mu.Unlock()
+				dialogue.write(string(buf[:n]))
+			}
+			if err != nil {
+				return
+			}
+		}
+	}
+	copies.Add(2)
+	go relay(stdout)
+	go relay(stderr)
+	// A question: the process quiet, its last line unfinished and asking.
+	done := make(chan struct{})
+	go func() {
+		for {
+			select {
+			case <-done:
+				return
+			case <-time.After(150 * time.Millisecond):
+			}
+			if time.Since(time.Unix(0, lastOutput.Load())) < 350*time.Millisecond {
+				continue
+			}
+			dialogue.mu.Lock()
+			line := strings.TrimSpace(dialogue.current.String())
+			if !dialogue.asking && line != "" && reChildQuestion.MatchString(line) {
+				dialogueSink{}.markAsking() // as an "ask" frame does
+			}
+			dialogue.mu.Unlock()
+		}
+	}()
+	copies.Wait()
+	err = cmd.Wait()
+	close(done)
+	stdin.Close()
+	if exit, ok := err.(*exec.ExitError); ok {
+		return exit.ExitCode()
+	}
+	if err != nil {
+		return 1
+	}
+	return 0
+}
+
+// reChildQuestion: a line a process waits on, by its end: options "(n/y/q):", or "?" or ":".
+var reChildQuestion = regexp.MustCompile(`(\([^()]*/[^()]*\)\s*:?|\?|:)\s*$`)

@@ -710,7 +710,8 @@ func (s *TService) runJob(req serviceFrame, dec *json.Decoder, out *frameSender)
 		out.send(serviceFrame{T: "exit"})                                                                                                              //nolint:errcheck
 		return
 	}
-	if req.Interactive && runsInService() && actionFromCommandLine[selectCommand().name] != "" {
+	childAction := selectCommand().name == "harvest" && len(positional) > 0 // a file (stdin stays on the terminal)
+	if req.Interactive && (runsInService() || childAction) && actionFromCommandLine[selectCommand().name] != "" {
 		name := selectCommand().name
 		s.mu.Lock()
 		s.busy = false

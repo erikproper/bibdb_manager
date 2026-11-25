@@ -24,9 +24,12 @@ package main
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/mattn/go-isatty"
 )
@@ -116,8 +119,71 @@ func (t *TTerminalIO) WriteResult(s string)  { os.Stdout.WriteString(s) } //noli
 func (t *TTerminalIO) Input() <-chan string { return t.lines }
 
 
+// TFrameIO is the TUserIO of a job the service runs as a child process: it speaks
+// the service's protocol (the frames of service.go) as a job in the service does
+// (Erik, 2026-11-25: a question/answer protocol between client and server, not
+// text the other side interprets). Frames go out on fd 3 (out, err, ask,
+// question), answers come in on fd 4 ("in", "eof"); stdin, stdout and stderr
+// stay what they are (data from a pipe, stray output).
+type TFrameIO struct {
+	interactive bool
+	out         *frameSender
+	lines       chan string
+	asked       atomic.Bool
+}
+
+// envFrames tells a child process of the service to speak frames on fd 3 and 4.
+const envFrames = "BIBTEX_CHECK_FRAMES"
+
+func newFrameIO() *TFrameIO {
+	t := &TFrameIO{
+		interactive: os.Getenv(envInteractive) == "1",
+		out:         newFrameSender(os.NewFile(3, "frames-out")),
+		lines:       make(chan string, 1),
+	}
+	if !t.interactive {
+		close(t.lines)
+		return t
+	}
+	go func() {
+		defer close(t.lines)
+		dec := json.NewDecoder(bufio.NewReader(os.NewFile(4, "frames-in")))
+		for {
+			var f serviceFrame
+			if dec.Decode(&f) != nil || f.T == "eof" {
+				return
+			}
+			if f.T == "in" {
+				t.asked.Store(false)
+				t.lines <- strings.TrimSuffix(f.D, "\n")
+			}
+		}
+	}()
+	return t
+}
+
+func (t *TFrameIO) IsInteractive() bool   { return t.interactive }
+func (t *TFrameIO) WriteMessage(s string) { t.out.send(serviceFrame{T: "err", D: s}) } //nolint:errcheck
+func (t *TFrameIO) WriteResult(s string)  { t.out.send(serviceFrame{T: "out", D: s}) } //nolint:errcheck
+func (t *TFrameIO) Input() <-chan string  { return t.lines }
+
+// RequestInput asks the job's client (a command line, the Actions tab) for a line.
+func (t *TFrameIO) RequestInput() {
+	if t.interactive && t.asked.CompareAndSwap(false, true) {
+		t.out.send(serviceFrame{T: "ask"}) //nolint:errcheck
+	}
+}
+
+// newUserIO is the terminal, or the frames of a child job of the service.
+func newUserIO() TUserIO {
+	if os.Getenv(envFrames) == "1" {
+		return newFrameIO()
+	}
+	return newTerminalIO()
+}
+
 // userIO is the current session's TUserIO.
-var userIO TUserIO = newTerminalIO()
+var userIO TUserIO = newUserIO()
 
 // message, messagef and messageln write to the user, like fmt.Fprint(os.Stderr, ...)
 // and friends did. They do not filter: whether a message is wanted (interactive

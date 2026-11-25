@@ -248,10 +248,27 @@ table.compare td.kept { box-shadow: inset 2px 0 0 var(--ok); }
         <button class="plain" data-action="fix_candidates" title="Link entries without a DBLP key to DBLP records">Fix DBLP candidates</button>
         <button class="plain" data-action="fix_duplicates" title="Resolve title duplicates">Fix duplicates</button>
         <button class="plain" data-action="enrich" title="Absorb DBLP names and ORCIDs, enrich from ORCID profiles, merge ORCID duplicates">Enrich contributors</button>
+        <button class="plain" data-action="triage" title="Triage the author/editor values that lost a challenge">Triage author mappings</button>
+        <button class="plain" data-action="check_pdfs" title="Check PDF health, orphan files and duplicates">Check PDFs</button>
+      </div>
+      <div class="line" style="margin:0 0 8px">
+        <span class="label" style="min-width:4.5em">DBLP</span>
+        <button class="plain" data-action="update_dblp" title="Import the DBLP export (downloaded from dblp_url, or from Downloads)">Update DBLP</button>
+        <button class="plain" data-action="update_entries" title="Update every entry with a DBLP key from the DBLP data">Update all DBLP entries</button>
+        <button class="plain" data-action="watch" title="Check the watched persons and ORCIDs for missing publications">Watch</button>
+      </div>
+      <div class="line" style="margin:0 0 8px">
+        <span class="label" style="min-width:4.5em">Other</span>
+        <button class="plain" data-action="get_pdfs" title="Download missing PDFs into the files folder">Get PDFs</button>
+        <button class="plain" data-action="entry_actions" title="Run the group assignment rules (entry_actions)">Entry actions</button>
+        <button class="plain" data-action="audit" title="Report mapping rows that never apply">Audit mappings</button>
+        <button class="plain" data-action="push" title="Push the changes of this machine to the shared DB folder now">Push</button>
       </div>
       <div class="line" style="margin:0">
-        <span class="label" style="min-width:4.5em">Other</span>
-        <button class="plain" data-action="push" title="Push the changes of this machine to the shared DB folder now">Push</button>
+        <span class="label" style="min-width:4.5em">Add</span>
+        <input id="adddblpkey" placeholder="DBLP key, e.g. conf/er/SmithJ21" autocomplete="off" style="width:280px;font:13px ui-monospace, Menlo, monospace;padding:5px 8px;border:1px solid var(--border);border-radius:6px;background:var(--card);color:var(--text)">
+        <button class="plain" id="adddblplookup" title="Find the key in the local DBLP data">Lookup</button>
+        <button class="plain" id="adddblpgo" title="Add the DBLP entry (and its parent) to the library">Add DBLP entry</button>
       </div>
     </div>
     <div class="card">
@@ -757,7 +774,7 @@ function openQuestion() {
 // The Lookup pop-up: finds a DBLP key in the local DBLP data; "Use" answers the question
 // with "enter key manually" and then with that key.
 let pendingDblpKey = "", pendingText = null;
-function openLookup(keyOpt, cards) {
+function openLookup(keyOpt, cards, onUse) {
   const field = (name) => { for (const c of cards || []) for (const l of c.lines) { const m = l.match(new RegExp("^\\s*" + name + "\\s*=\\s*\\{(.*)\\},?\\s*$")); if (m) return m[1].replace(/[{}]/g, ""); } return ""; };
   const title = field("title"), firstAuthor = (field("author").split(" and ")[0] || "").trim();
   const authorDblp = firstAuthor.includes(",") ? firstAuthor.split(",").slice(1).join(",").trim() + " " + firstAuthor.split(",")[0].trim() : firstAuthor;
@@ -779,13 +796,16 @@ function openLookup(keyOpt, cards) {
       Object.entries(r.fields).filter(([f]) => f !== "entrytype").map(([f, v]) => '<tr><td class="f">' + esc(f) + "</td><td>= {" + esc(v) + "},</td></tr>").join("") +
       '</table></div></div><button class="action" data-use="' + esc(r.key) + '">Use</button></label>').join("") + "</div>"
       : '<p class="muted">Nothing found.' + ($("lka").value.trim() ? "" : " Try with the author, or part of the key.") + "</p>";
-    for (const b of $("lkres").querySelectorAll("button[data-use]")) b.onclick = () => { pendingDblpKey = b.dataset.use; sendAnswer(keyOpt); };
+    for (const b of $("lkres").querySelectorAll("button[data-use]")) b.onclick = () => {
+      if (onUse) { onUse(b.dataset.use); return; } // the Add section: the key into its field
+      pendingDblpKey = b.dataset.use; sendAnswer(keyOpt);
+    };
   };
   $("lkgo").onclick = search;
   $("lkauthor").onclick = () => { $("lka").value = authorDblp; search(); };
   $("lkq").onkeydown = (e) => { if (e.key === "Enter") search(); };
   $("lka").onkeydown = (e) => { if (e.key === "Enter") search(); };
-  $("lkback").onclick = () => { qShown = ""; openQuestion(); };
+  $("lkback").onclick = () => { if (onUse) { closePopup(); return; } qShown = ""; openQuestion(); };
   search();
 }
 // qWaiting greys the pop-up's Confirm while the job takes the answer (the pop-up stays).
@@ -813,6 +833,19 @@ async function sendAnswer(text) {
   setTimeout(loadDialogue, 400);
 }
 $("dlgopen").onclick = openQuestion;
+// The Add section: a DBLP entry by its key (typed, or found with Lookup).
+const addDblp = async () => {
+  const key = $("adddblpkey").value.trim(); if (!key) { $("adddblpkey").focus(); return; }
+  try {
+    const r = await fetch(BASE + "/api/dialogue/start", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "add_dblp", arg: key }) });
+    if (!r.ok) { alert(await r.text()); return; }
+    $("adddblpkey").value = "";
+  } catch (e) { lost(e); }
+  setTimeout(loadDialogue, 300);
+};
+$("adddblpgo").onclick = addDblp;
+$("adddblpkey").onkeydown = (e) => { if (e.key === "Enter") addDblp(); };
+$("adddblplookup").onclick = () => openLookup(null, [], (key) => { $("adddblpkey").value = key; closePopup(); });
 $("dlgstop").onclick = async () => { try { await fetch(BASE + "/api/dialogue/stop", { method: "POST" }); } catch (e) {} setTimeout(loadDialogue, 300); };
 for (const b of document.querySelectorAll("[data-action]")) b.onclick = async () => {
   try {
