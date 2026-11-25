@@ -220,10 +220,7 @@ table.compare td.kept { box-shadow: inset 2px 0 0 var(--ok); }
   <nav class="tabs" id="tabs">
     <button data-tab="status">Status</button>
     <button data-tab="search">Search</button>
-    <button data-tab="tbl-field_mappings">Field mappings</button>
-    <button data-tab="tbl-name_forms">Name mappings</button>
-    <button data-tab="tbl-key_oldies">Old keys</button>
-    <button data-tab="tbl-key_hints">Key aliases</button>
+    <button data-tab="tables">Tables</button>
     <button data-tab="dialogue">Actions<span class="waiting idle" title="No question waiting"></span></button>
     <button data-tab="stats">Statistics</button>
     <button data-tab="log">Log<span class="led" id="led" title=""></span></button>
@@ -235,40 +232,38 @@ table.compare td.kept { box-shadow: inset 2px 0 0 var(--ok); }
 <main>
   <section class="panel" id="panel-status" hidden><div class="narrow" id="status"><p class="muted">Loading…</p></div></section>
   <section class="panel fill" id="panel-search" hidden></section>
-  <section class="panel fill" id="panel-tbl-field_mappings" hidden></section>
-  <section class="panel fill" id="panel-tbl-name_forms" hidden></section>
-  <section class="panel fill" id="panel-tbl-key_oldies" hidden></section>
-  <section class="panel fill" id="panel-tbl-key_hints" hidden></section>
+  <section class="panel" id="panel-tables" hidden><div class="narrow"><div class="card"><h2>Tables</h2>
+    <p class="muted" style="font-size:13px;margin-top:0">Each table can have a tab of its own: choose the ones to show in the tab bar.</p>
+    <div id="tablelist"><p class="muted">Loading…</p></div></div></div></section>
   <section class="panel" id="panel-dialogue" hidden><div class="narrow">
     <div class="card">
       <div class="line" style="margin:0 0 8px">
         <span class="label" style="min-width:4.5em">Checks</span>
         <button class="plain" data-action="check" title="Check the library">Check</button>
         <button class="plain" data-action="homework" title="Run the pending homework in order">Homework</button>
-        <button class="plain" data-action="fix_candidates" title="Link entries without a DBLP key to DBLP records">Fix DBLP candidates</button>
         <button class="plain" data-action="fix_duplicates" title="Resolve title duplicates">Fix duplicates</button>
         <button class="plain" data-action="enrich" title="Absorb DBLP names and ORCIDs, enrich from ORCID profiles, merge ORCID duplicates">Enrich contributors</button>
         <button class="plain" data-action="triage" title="Triage the author/editor values that lost a challenge">Triage author mappings</button>
-        <button class="plain" data-action="check_pdfs" title="Check PDF health, orphan files and duplicates">Check PDFs</button>
+      </div>
+      <div class="line" style="margin:0 0 8px">
+        <span class="label" style="min-width:4.5em">PDF</span>
+        <button class="plain" data-action="get_pdfs" title="Download missing PDFs into the files folder">Get</button>
+        <button class="plain" data-action="check_pdfs" title="Check PDF health, orphan files and duplicates">Check</button>
+        <button class="plain" data-action="add_failed" title="Add the URLs of the last failed downloads to Bad URLs, so that Get skips them">Add failed</button>
       </div>
       <div class="line" style="margin:0 0 8px">
         <span class="label" style="min-width:4.5em">DBLP</span>
-        <button class="plain" data-action="update_dblp" title="Import the DBLP export (downloaded from dblp_url, or from Downloads)">Update DBLP</button>
-        <button class="plain" data-action="update_entries" title="Update every entry with a DBLP key from the DBLP data">Update all DBLP entries</button>
+        <button class="plain" data-action="update_dblp" title="Import the DBLP export into the local DBLP cache (downloaded from dblp_url, or from Downloads)">Update cache</button>
+        <button class="plain" data-action="update_entries" title="Update every entry with a DBLP key from the DBLP cache">Update entries</button>
+        <button class="plain" data-action="fix_candidates" title="Link entries without a DBLP key to DBLP records">Candidates</button>
         <button class="plain" data-action="watch" title="Check the watched persons and ORCIDs for missing publications">Watch</button>
+        <button class="plain" id="dblplookup" title="Find an entry in the local DBLP cache, and add it to the library">Lookup</button>
       </div>
       <div class="line" style="margin:0 0 8px">
         <span class="label" style="min-width:4.5em">Other</span>
-        <button class="plain" data-action="get_pdfs" title="Download missing PDFs into the files folder">Get PDFs</button>
         <button class="plain" data-action="entry_actions" title="Run the group assignment rules (entry_actions)">Entry actions</button>
         <button class="plain" data-action="audit" title="Report mapping rows that never apply">Audit mappings</button>
         <button class="plain" data-action="push" title="Push the changes of this machine to the shared DB folder now">Push</button>
-      </div>
-      <div class="line" style="margin:0">
-        <span class="label" style="min-width:4.5em">Add</span>
-        <input id="adddblpkey" placeholder="DBLP key, e.g. conf/er/SmithJ21" autocomplete="off" style="width:280px;font:13px ui-monospace, Menlo, monospace;padding:5px 8px;border:1px solid var(--border);border-radius:6px;background:var(--card);color:var(--text)">
-        <button class="plain" id="adddblplookup" title="Find the key in the local DBLP data">Lookup</button>
-        <button class="plain" id="adddblpgo" title="Add the DBLP entry (and its parent) to the library">Add DBLP entry</button>
       </div>
     </div>
     <div class="card">
@@ -694,7 +689,7 @@ function openLookup(keyOpt, entry, onUse) {
   popup("Lookup a DBLP key", '<div class="line"><input id="lkq" style="flex:1;min-width:260px" placeholder="title (whole), or a DBLP key" value="' + esc(title) + '">' +
     '<input id="lka" style="width:220px" placeholder="author as in DBLP (optional)" value=""></div>' +
     '<div class="line"><button class="action" id="lkgo">Search</button><button class="plain" id="lkauthor">Search by ' + esc(authorDblp || "author") + '</button>' +
-    '<span style="flex:1"></span><button class="plain" id="lkback">Back to the question</button></div>' +
+    '<span style="flex:1"></span><button class="plain" id="lkback">' + (onUse ? "Close" : "Back to the question") + "</button></div>" +
     '<div class="muted" style="font-size:13px">A title is looked up whole (as the matching does); with an author, the words of the title filter their entries.</div>' +
     '<div id="lkres" style="margin-top:12px"></div>', false);
   qOpen = true;
@@ -707,7 +702,7 @@ function openLookup(keyOpt, entry, onUse) {
     $("lkres").innerHTML = list.length ? '<div class="qopts">' + list.map((r) => '<label style="cursor:default"><div style="flex:1"><span class="qlabel key">' + esc(r.key) +
       "</span> (" + esc(r.fields.entrytype || "") + ')<div class="qbib"><table>' +
       Object.entries(r.fields).filter(([f]) => f !== "entrytype").map(([f, v]) => '<tr><td class="f">' + esc(f) + "</td><td>= {" + esc(v) + "},</td></tr>").join("") +
-      '</table></div></div><button class="action" data-use="' + esc(r.key) + '">Use</button></label>').join("") + "</div>"
+      '</table></div></div><button class="action" data-use="' + esc(r.key) + '">' + (onUse ? "Add to library" : "Use") + "</button></label>").join("") + "</div>"
       : '<p class="muted">Nothing found.' + ($("lka").value.trim() ? "" : " Try with the author, or part of the key.") + "</p>";
     for (const b of $("lkres").querySelectorAll("button[data-use]")) b.onclick = () => {
       if (onUse) { onUse(b.dataset.use); return; } // the Add section: the key into its field
@@ -746,19 +741,15 @@ async function sendAnswer(text) {
   setTimeout(loadDialogue, 400);
 }
 $("dlgopen").onclick = openQuestion;
-// The Add section: a DBLP entry by its key (typed, or found with Lookup).
-const addDblp = async () => {
-  const key = $("adddblpkey").value.trim(); if (!key) { $("adddblpkey").focus(); return; }
+// DBLP Lookup: an entry found in the local DBLP cache is added to the library (with its parent).
+$("dblplookup").onclick = () => openLookup(null, null, async (key) => {
+  closePopup();
   try {
     const r = await fetch(BASE + "/api/dialogue/start", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "add_dblp", arg: key }) });
     if (!r.ok) { alert(await r.text()); return; }
-    $("adddblpkey").value = "";
   } catch (e) { lost(e); }
   setTimeout(loadDialogue, 300);
-};
-$("adddblpgo").onclick = addDblp;
-$("adddblpkey").onkeydown = (e) => { if (e.key === "Enter") addDblp(); };
-$("adddblplookup").onclick = () => openLookup(null, null, (key) => { $("adddblpkey").value = key; closePopup(); });
+});
 $("dlgstop").onclick = async () => { try { await fetch(BASE + "/api/dialogue/stop", { method: "POST" }); } catch (e) {} setTimeout(loadDialogue, 300); };
 for (const b of document.querySelectorAll("[data-action]")) b.onclick = async () => {
   try {
@@ -1189,6 +1180,7 @@ class TableView {
     this.el.q.addEventListener("input", () => { clearTimeout(typing); typing = setTimeout(() => { this.query = this.el.q.value.trim(); this.load(true); }, 300); });
     this.el.box.addEventListener("scroll", () => { const b = this.el.box; if (this.rows.length < this.total && b.scrollTop + b.clientHeight > b.scrollHeight - 400) this.load(false); });
     q("tadd").onclick = () => this.editRow(null);
+    this.addBtn = q("tadd");
     this.el.table.addEventListener("click", (e) => {
       const del = e.target.closest("button[data-del]");
       const tr = e.target.closest("tbody tr[data-i]");
@@ -1207,7 +1199,8 @@ class TableView {
       const d = await get("/api/table/" + this.name + "?" + p, "json");
       if (my !== this.gen) return;
       this.def = d.table; this.total = d.total;
-      this.el.help.textContent = d.table.help;
+      this.el.help.textContent = d.table.help + (d.table.readonly ? " (Derived data: read-only.)" : "");
+      this.addBtn.hidden = !!d.table.readonly;
       const got = d.rows.map((r) => Object.fromEntries(d.table.columns.map((c, i) => [c, r[i]])));
       this.rows = reset ? got : this.rows.concat(got);
       this.render();
@@ -1222,13 +1215,17 @@ class TableView {
       this.load(true);
     };
     this.el.table.querySelector("tbody").innerHTML = this.rows.map((r, i) => '<tr data-i="' + i + '" style="cursor:pointer">' +
-      cols.map((c) => '<td class="' + (/key|alias|hint|field/.test(c) ? "key" : "") + '">' + esc(r[c]) + "</td>").join("") +
-      '<td style="width:32px"><button class="plain" data-del="1" title="Delete this row">×</button></td></tr>').join("");
+      cols.map((c) => '<td class="' + (/key|alias|hint|field/.test(c) ? "key" : "") + '">' + esc((r[c] || "").length > 300 ? r[c].slice(0, 300) + "…" : r[c]) + "</td>").join("") +
+      '<td style="width:32px">' + (this.def.readonly ? "" : '<button class="plain" data-del="1" title="Delete this row">×</button>') + "</td></tr>").join("");
     this.el.count.textContent = this.total.toLocaleString() + " rows" + (this.query ? " match" : "");
     this.el.more.textContent = this.rows.length < this.total ? "Scroll for more (" + this.rows.length.toLocaleString() + " shown)…" : "";
   }
   editRow(row) {
     const cols = this.def.columns;
+    if (this.def.readonly) {
+      if (row) popup(this.def.title, '<table class="edit">' + cols.map((c) => '<tr><td class="field">' + esc(c) + '</td><td class="qbib">' + esc(row[c]) + "</td></tr>").join("") + "</table>", false);
+      return;
+    }
     popup((row ? "Change a row — " : "Add a row — ") + this.def.title, '<p class="muted" style="font-size:13px">' + esc(this.def.help) + "</p>" +
       '<table class="edit">' + cols.map((c) => '<tr><td class="field">' + esc(c) + '</td><td><textarea class="edval" rows="1" data-col="' + esc(c) + '">' +
         esc(row ? row[c] : "") + "</textarea></td></tr>").join("") + "</table>" +
@@ -1259,10 +1256,46 @@ class TableView {
     } catch (e) { lost(e); }
   }
 }
-for (const name of ["field_mappings", "name_forms", "key_oldies", "key_hints"]) {
-  const v = new TableView($("panel-tbl-" + name), name);
+// The Tables tab: every table (but the entries themselves), grouped; a table chosen there
+// gets a tab in the tab bar (the choice is kept in the preferences).
+let tableDefs = [];
+const shownTables = () => load("tables", ["field_mappings", "name_forms", "key_oldies", "key_hints"]);
+function addTableTab(name) {
+  const def = tableDefs.find((t) => t.name === name);
+  if (!def || $("panel-tbl-" + name)) return;
+  const b = document.createElement("button");
+  b.dataset.tab = "tbl-" + name; b.textContent = def.title; b.draggable = true;
+  $("tabs").insertBefore(b, document.querySelector('.tabs button[data-tab="dialogue"]'));
+  const panel = document.createElement("section");
+  panel.className = "panel fill"; panel.id = "panel-tbl-" + name; panel.hidden = true;
+  $("panel-tables").parentNode.appendChild(panel);
+  const v = new TableView(panel, name);
   views["tbl-" + name] = v;
   onShow["tbl-" + name] = () => v.show();
+}
+function dropTableTab(name) {
+  const b = document.querySelector('.tabs button[data-tab="tbl-' + name + '"]');
+  if (b) b.remove();
+  if ($("panel-tbl-" + name)) $("panel-tbl-" + name).remove();
+  delete views["tbl-" + name]; delete onShow["tbl-" + name];
+  if (current === "tbl-" + name) showTab("tables");
+}
+function renderTablesTab() {
+  const shown = new Set(shownTables()), groups = [];
+  for (const t of tableDefs) { if (!groups.length || groups[groups.length - 1].name !== t.group) groups.push({ name: t.group, list: [] }); groups[groups.length - 1].list.push(t); }
+  $("tablelist").innerHTML = groups.map((g) => '<div class="line" style="margin:0 0 10px;flex-wrap:wrap;gap:6px"><span class="label" style="min-width:10em">' + esc(g.name) + "</span>" +
+    g.list.map((t) => '<button class="toggle' + (shown.has(t.name) ? " on" : "") + '" data-tbl="' + esc(t.name) + '" title="' + esc(t.help) + '">' + esc(t.title) + "</button>").join("") + "</div>").join("");
+  for (const b of $("tablelist").querySelectorAll("button[data-tbl]")) b.onclick = () => {
+    const list = shownTables().filter((n) => n !== b.dataset.tbl);
+    if (!b.classList.contains("on")) { list.push(b.dataset.tbl); addTableTab(b.dataset.tbl); arrangeTabs(); } else dropTableTab(b.dataset.tbl);
+    save("tables", list);
+    b.classList.toggle("on");
+  };
+}
+async function setupTables() {
+  try { tableDefs = await get("/api/tables", "json") || []; } catch (e) { lost(e); return; }
+  for (const name of shownTables()) addTableTab(name);
+  renderTablesTab();
 }
 
 // ---- merging: marked entries or authors gather in a tray; the Merge tab compares them ----
@@ -1773,6 +1806,7 @@ document.addEventListener("click", async (e) => {
 
 (async () => {
 await loadPrefs();
+await setupTables();
 mergeTray = Object.assign({ entries: [], authors: [] }, load("mergetray", {}));
 showTray();
 for (const b of $("tabs").querySelectorAll("button[data-tab]")) if (!linkedTab(b.dataset.tab)) b.draggable = true;

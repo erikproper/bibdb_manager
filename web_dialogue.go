@@ -16,7 +16,6 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -25,51 +24,53 @@ import (
 // TDialogue is the job of the Actions tab: its output, and whether it waits
 // for an answer.
 type TDialogue struct {
-	mu      sync.Mutex
-	title   string
-	lines   []string
-	ended   int // lines ended so far (the kept ones are the last)
-	current strings.Builder
-	running bool
-	code    int
-	asking  bool
-	sio     *TSocketIO
-	reply   func(string) // gives an answer to the job: a line for its questions (in the service, or a child's stdin)
-	started time.Time
-	since   int              // the line number after the last answer: a question's context starts there
-	notes   []TDialogueNote  // the warnings of this job (shown in the tab)
-	inNote  bool             // the last warning still takes the lines that follow it
-	pending []dialogueLine   // finished lines not in the log yet: a question's context stays out of it
-	step    string           // the current step ("Opening the library:", "Step 3: …")
-	substep string           // the last sub-step line (indented) after it
-	history []TDialogueReply // the questions answered in this job
-	question *TQuestion      // the question the job asks (its "question" frame), until answered
+	mu       sync.Mutex
+	title    string
+	lines    []string
+	ended    int // lines ended so far (the kept ones are the last)
+	current  strings.Builder
+	running  bool
+	code     int
+	asking   bool
+	sio      *TSocketIO
+	reply    func(string) // gives an answer to the job: a line for its questions (in the service, or a child's stdin)
+	started  time.Time
+	since    int              // the line number after the last answer: a question's context starts there
+	notes    []TDialogueNote  // the warnings of this job (shown in the tab)
+	pending  []string         // finished lines not in the log yet: a question's context stays out of it
+	settled  int              // pending lines up to the job's last message (step, progress, warning): not a question's context
+	step     string           // the current step ("Opening the library:", "Step 3: …")
+	substep  string           // the last sub-step line (indented) after it
+	history  []TDialogueReply // the questions answered in this job
+	question *TQuestion       // the question the job asks (its "question" frame), until answered
 }
 
-// dialogueLine is an output line waiting to go to the log.
-type dialogueLine struct {
-	text string
-	at   time.Time
-}
-
-// dialogueLogDelay: a finished line goes to the log after this, unless a question
-// comes first (its context is printed right before it asks): the log then gets the
-// issue and the action taken instead (Erik, 2026-11-24).
-const dialogueLogDelay = 400 * time.Millisecond
-
-// flushLog writes the pending lines older than the delay (all: force) to the log.
+// flushLog writes the pending lines to the log: those up to the job's last
+// message (all: force; the job ended). The lines after it may still be the
+// context of a question (the entries, the candidates), printed right before it
+// asks: the log then gets the issue and the action taken instead (Erik, 2026-11-24).
 func (d *TDialogue) flushLog(force bool) {
 	d.mu.Lock()
-	n := 0
-	for n < len(d.pending) && (force || time.Since(d.pending[n].at) >= dialogueLogDelay) {
-		n++
+	n := d.settled
+	if force {
+		n = len(d.pending)
 	}
-	lines := d.pending[:n]
-	d.pending = append([]dialogueLine{}, d.pending[n:]...)
+	lines := d.logLines(n)
 	d.mu.Unlock()
 	for _, l := range lines {
-		fmt.Fprintln(os.Stderr, l.text)
+		fmt.Fprintln(os.Stderr, l)
 	}
+}
+
+// logLines takes the first n pending lines off for the log (called with d.mu held).
+func (d *TDialogue) logLines(n int) []string {
+	lines := append([]string{}, d.pending[:n]...)
+	d.pending = append([]string{}, d.pending[n:]...)
+	d.settled -= n
+	if d.settled < 0 {
+		d.settled = 0
+	}
+	return lines
 }
 
 // TDialogueNote is a warning: its first line and the lines that belong to it
@@ -104,7 +105,8 @@ func (d *TDialogue) start(title string, sio *TSocketIO) {
 			}
 		}
 	}
-	d.lines, d.ended, d.since, d.notes, d.history, d.inNote, d.step, d.substep = nil, 0, 0, nil, nil, false, "", ""
+	d.lines, d.ended, d.since, d.notes, d.history, d.step, d.substep = nil, 0, 0, nil, nil, "", ""
+	d.pending, d.settled = nil, 0
 	d.question = nil
 	d.current.Reset()
 }
@@ -126,8 +128,7 @@ func (d *TDialogue) write(s string) {
 			d.current.Reset()
 		case '\n':
 			line := d.current.String()
-			d.track(line)
-			d.pending = append(d.pending, dialogueLine{line, time.Now()})
+			d.pending = append(d.pending, line)
 			d.lines = append(d.lines, line)
 			d.ended++
 			d.current.Reset()
@@ -137,35 +138,6 @@ func (d *TDialogue) write(s string) {
 		default:
 			d.current.WriteRune(r)
 		}
-	}
-}
-
-// track notes a finished output line: a warning (with the lines that belong to
-// it), a step (a heading line), a sub-step (an indented line). Called with d.mu held.
-func (d *TDialogue) track(line string) {
-	trimmed := strings.TrimSpace(line)
-	switch {
-	case strings.HasPrefix(trimmed, "WARNING:") && reHeadingWarning.MatchString(strings.TrimSpace(strings.TrimPrefix(trimmed, "WARNING:"))):
-		d.inNote = false // a heading printed as a warning ("WARNING:  First entry:")
-		return
-	case strings.HasPrefix(trimmed, "WARNING:"):
-		d.notes = append(d.notes, TDialogueNote{Head: strings.TrimSpace(strings.TrimPrefix(trimmed, "WARNING:"))})
-		d.inNote = true
-		return
-	case d.inNote && trimmed != "" && !strings.HasPrefix(trimmed, "QUESTION:") && !strings.HasPrefix(trimmed, "@") &&
-		!(strings.HasSuffix(trimmed, ":") && !strings.HasPrefix(trimmed, "-")):
-		n := &d.notes[len(d.notes)-1]
-		n.Lines = append(n.Lines, line)
-		return
-	}
-	d.inNote = false
-	if trimmed == "" || strings.HasPrefix(trimmed, "QUESTION:") || strings.HasPrefix(trimmed, "@") || strings.Contains(trimmed, " = {") {
-		return
-	}
-	if line == trimmed && (strings.HasSuffix(trimmed, ":") || strings.HasPrefix(strings.ToLower(trimmed), "step ")) && len(trimmed) < 100 {
-		d.step, d.substep = strings.TrimSuffix(trimmed, ":"), ""
-	} else if line != trimmed && len(trimmed) < 160 {
-		d.substep = trimmed
 	}
 }
 
@@ -193,6 +165,8 @@ func (dialogueSink) send(f serviceFrame) error {
 		dialogue.mu.Lock()
 		dialogue.question = f.Q
 		dialogue.mu.Unlock()
+	case "warning", "error", "step", "progress":
+		dialogue.message(f)
 	case "ask":
 		dialogue.mu.Lock()
 		dialogueSink{}.markAsking()
@@ -201,23 +175,46 @@ func (dialogueSink) send(f serviceFrame) error {
 	return nil
 }
 
-// markAsking marks the dialogue as asking (called with dialogue.mu held): the
-// question's context (the run of entry, option and warning lines right before it)
-// stays out of the log; what came before it (progress) goes there.
-func (dialogueSink) markAsking() {
-	cut := len(dialogue.pending)
-	for cut > 0 && isQuestionContext(dialogue.pending[cut-1].text) {
-		cut--
+// message takes a message of the job (see messageSender): a warning or error
+// (the Warnings card), the step it begins, its progress. The output so far is
+// then no question's context: it goes to the log.
+func (d *TDialogue) message(f serviceFrame) {
+	d.mu.Lock()
+	switch f.T {
+	case "warning", "error":
+		head, rest, _ := strings.Cut(strings.TrimSpace(f.D), "\n")
+		if f.T == "error" {
+			head = "Error: " + head
+		}
+		note := TDialogueNote{Head: head}
+		if rest != "" {
+			note.Lines = strings.Split(rest, "\n")
+		}
+		d.notes = append(d.notes, note)
+	case "step":
+		d.step, d.substep = f.D, ""
+	case "progress":
+		d.substep, _, _ = strings.Cut(f.D, "\n")
 	}
-	for _, l := range dialogue.pending[:cut] {
-		fmt.Fprintln(os.Stderr, l.text)
+	d.settled = len(d.pending)
+	lines := d.logLines(d.settled)
+	d.mu.Unlock()
+	for _, l := range lines {
+		fmt.Fprintln(os.Stderr, l)
 	}
-	dialogue.pending = nil
-	dialogue.asking = true
 }
 
-// reHeadingWarning: a warning that is a heading of up to three words ("First entry:").
-var reHeadingWarning = regexp.MustCompile(`^[A-Z][\w-]*(?: [\w-]+){0,2}:$`)
+// markAsking marks the dialogue as asking (called with dialogue.mu held): the
+// output since the job's last message is the question's context (shown in its
+// pop-up from the question message) and stays out of the log; what came before
+// goes there.
+func (dialogueSink) markAsking() {
+	for _, l := range dialogue.logLines(dialogue.settled) {
+		fmt.Fprintln(os.Stderr, l)
+	}
+	dialogue.pending, dialogue.settled = nil, 0
+	dialogue.asking = true
+}
 
 // runDialogueJob runs commands one after the other as the dialogue's job, in
 // the background, with questions answered in the page. own: the service's own
@@ -330,6 +327,7 @@ var dialogueActions = map[string]struct {
 	"triage":         {"Triage author mappings", []string{"-triage_author_mappings"}},
 	"check_pdfs":     {"Check PDFs", []string{"-check_pdfs"}},
 	"get_pdfs":       {"Get PDFs", []string{"-get_pdfs"}},
+	"add_failed":     {"Add failed URLs to Bad URLs", []string{"-add_failed_urls"}},
 	"update_dblp":    {"Update DBLP", []string{"-update_dblp"}},
 	"update_entries": {"Update all DBLP entries", []string{"-update_all_dblp_entries"}},
 	"watch":          {"Watch", []string{"-watch"}},
@@ -424,7 +422,7 @@ func (w *TWebUI) handleDialogue(rw http.ResponseWriter, r *http.Request) {
 		d.write(req.Text + "\n") // as a terminal echoes it
 		d.mu.Lock()
 		d.since = d.ended
-		d.pending = nil // the question line and the echoed answer: the log gets the summary below
+		d.pending, d.settled = nil, 0 // the question line and the echoed answer: the log gets the summary below
 		d.mu.Unlock()
 		for _, line := range summariseAnswer(q, req.Text) {
 			fmt.Fprintln(os.Stderr, line)
@@ -659,26 +657,6 @@ func summariseAnswer(q *TQuestion, answer string) []string {
 	}
 	return append(out, "ACTION: "+action)
 }
-
-// isQuestionContext tells whether an output line belongs to a question's context:
-// an entry in BibTeX, a numbered option and its "key : value" lines, a warning and
-// the lines that go with it, a heading, a blank line.
-func isQuestionContext(line string) bool {
-	t := strings.TrimSpace(line)
-	switch {
-	case t == "", strings.HasPrefix(t, "WARNING:"), strings.HasPrefix(t, "QUESTION:"), strings.HasPrefix(t, "@"),
-		t == "}", strings.HasPrefix(t, "["), strings.HasPrefix(t, "- "), strings.HasPrefix(t, "("),
-		strings.HasPrefix(t, "Parent:"), t == "needs to be resolved":
-		return true
-	case strings.Contains(t, " = {"), reContextField.MatchString(t):
-		return true
-	case strings.HasSuffix(t, ":") && len(t) < 60:
-		return true
-	}
-	return false
-}
-
-var reContextField = regexp.MustCompile(`^[a-z][\w-]*\s+:\s`)
 
 // runDialogueChild runs a command that does not run in the service (a process of
 // its own: -update_dblp, -harvest, ...) as the Actions tab's job. It speaks the

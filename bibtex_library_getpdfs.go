@@ -21,6 +21,7 @@ package main
 
 import (
 	"bufio"
+	"encoding/csv"
 	"fmt"
 	"io"
 	"net/http"
@@ -104,6 +105,48 @@ func downloadPDF(url, destPath string) error {
 	}
 
 	return os.Rename(tmp, destPath)
+}
+
+// AddFailedURLsToIgnore puts the URLs of the last failed downloads
+// (urls_failed.csv, written by GetPDFs) on the list not to download from
+// (urls_ignore, the "Bad URLs" table), so that Get PDFs skips them (Erik,
+// 2026-11-25), and removes that file.
+func (l *TBibTeXLibrary) AddFailedURLsToIgnore() {
+	path := l.FilesRoot + URLsFailedFilePath
+	f, err := os.Open(path)
+	if err != nil {
+		messagef("No failed downloads recorded (%s).\n", path)
+		return
+	}
+	r := csv.NewReader(f)
+	r.Comma = rune(csvDelimiter[0])
+	r.FieldsPerRecord = -1
+	r.LazyQuotes = true
+	records, err := r.ReadAll()
+	f.Close()
+	if err != nil {
+		messagef("Cannot read %s: %s\n", path, err)
+		return
+	}
+	added := 0
+	for _, rec := range records {
+		if len(rec) == 0 {
+			continue
+		}
+		url := strings.TrimSpace(rec[0])
+		if url == "" || l.URLsIgnore.Contains(url) {
+			continue
+		}
+		if err := bibExec(`INSERT INTO urls_ignore (url) VALUES (?) ON CONFLICT(url) DO NOTHING`, url); err != nil {
+			messagef("Could not add %s: %s\n", url, err)
+			continue
+		}
+		l.URLsIgnore.Add(url)
+		added++
+	}
+	os.Remove(path) //nolint:errcheck // its URLs are in urls_ignore now
+	writesKeptInMemory([]string{"urls_ignore"}, nil)
+	messagef("Added %d URL(s) to Bad URLs (%d failed download(s) listed).\n", added, len(records))
 }
 
 // writeURLsFailedFile writes a sorted list of CSV lines to path.

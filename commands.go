@@ -61,6 +61,12 @@ func init() {
 			},
 		},
 		{
+			name:     "add_failed_urls",
+			kind:     commandWrite,
+			selected: func() bool { return cmdAddFailedURLs },
+			run:      func(args []string) { doAddFailedURLs() },
+		},
+		{
 			name:     "get_pdfs",
 			kind:     commandWrite,
 			selected: func() bool { return cmdGetPdfs },

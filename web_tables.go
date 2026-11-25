@@ -1,16 +1,20 @@
 package main
 
-// Table tabs in the web UI (Erik, 2026-11-24): the larger mapping and alias
+// Table tabs in the web UI (Erik, 2026-11-24): the mapping, alias and list
 // tables, each in a tab of its own: listed (filter, sort, paged), a "+" to add a
-// row, a delete per row, a click on a row for its edit pop-up. Reads go through
-// a read-only connection; writes are jobs (-table_edit), which change the
-// library's memory and the table together (no load afresh).
+// row, a delete per row, a click on a row for its edit pop-up. The Tables tab
+// lists them all; a table's tab is shown in the tab bar when chosen there (Erik,
+// 2026-11-25: in principle all content is editable). Reads go through a read-only
+// connection; writes are jobs (-table_edit). The tables with a memory of their own
+// (field_mappings, name_forms, key_oldies, key_hints) change it with the table (no
+// load afresh); a change to another table has the library loaded afresh.
 
 import (
 	"database/sql"
 	"encoding/json"
 	"net/http"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -18,13 +22,25 @@ import (
 // TWebTable describes a table tab: its rows (a query), the columns, which of them
 // identify a row, which can be edited.
 type TWebTable struct {
-	Name    string   `json:"name"`
-	Title   string   `json:"title"`
-	Columns []string `json:"columns"`
-	Keys    []string `json:"keys"` // the columns that identify a row
-	Help    string   `json:"help"`
-	from    string   // the SQL table, or a subquery, the rows are read from
-	table   string   // the SQL table written, when not from
+	Name     string   `json:"name"`
+	Title    string   `json:"title"`
+	Columns  []string `json:"columns"`
+	Keys     []string `json:"keys"` // the columns that identify a row
+	Help     string   `json:"help"`
+	Group    string   `json:"group"`              // the Tables tab's group
+	ReadOnly bool     `json:"readonly,omitempty"` // derived data: shown, not edited
+	from     string   // the SQL table, or a subquery, the rows are read from
+	table    string   // the SQL table written, when not from
+}
+
+// inMemory tells whether a change to the table is made in the library's memory
+// too (doTableEdit); for the other tables the library is loaded afresh.
+func (t TWebTable) inMemory() bool {
+	switch t.Name {
+	case "field_mappings", "name_forms", "key_oldies", "key_hints":
+		return true
+	}
+	return false
 }
 
 // written is the SQL table a change writes.
@@ -44,7 +60,7 @@ var webTables = map[string]TWebTable{
 		Help: "A value of source_field is replaced by target_value in target_field. The same field on both " +
 			"sides: a correction (stored values are corrected too); different fields: a value moved or added " +
 			"elsewhere (source_field may carry an entry type, e.g. author:techreport).",
-		from: "field_mappings",
+		Group: "Mappings", from: "field_mappings",
 	},
 	"name_forms": {
 		Name: "name_forms", Title: "Name mappings",
@@ -52,6 +68,7 @@ var webTables = map[string]TWebTable{
 		Keys:    []string{"form", "id"},
 		Help: "The other forms of an author's name, mapped to the author (their stored name and id): a form found " +
 			"in an entry is taken as that author. When adding, canonical may be the stored name or the id (EP-…).",
+		Group: "Mappings",
 		from:  "(SELECT n.name AS form, c.name AS canonical, n.id AS id FROM contributor_names n JOIN contributors c ON c.id = n.id WHERE n.name != c.name)",
 		table: "contributor_names",
 	},
@@ -60,15 +77,97 @@ var webTables = map[string]TWebTable{
 		Columns: []string{"alias", "key"},
 		Keys:    []string{"alias"},
 		Help:    "Former keys (EP-…) of entries, kept so that old citations still find their entry (e.g. after a merge).",
-		from:    "key_oldies",
+		Group:   "Keys and aliases", from: "key_oldies",
 	},
 	"key_hints": {
 		Name: "key_hints", Title: "Key aliases",
 		Columns: []string{"hint", "key"},
 		Keys:    []string{"hint"},
 		Help:    "Other keys an entry is known by (former preferred aliases, keys in harvested files), mapped to its key.",
-		from:    "key_hints",
+		Group:   "Keys and aliases", from: "key_hints",
 	},
+}
+
+func init() {
+	// The other tables, each with its primary key (Erik, 2026-11-25).
+	for _, t := range []TWebTable{
+		{Name: "generic_field_mappings", Title: "Value corrections", Group: "Mappings", Columns: []string{"field", "challenger", "winner"}, Keys: []string{"field", "challenger"},
+			Help: "A value (challenger) of a field corrected to another (winner)."},
+		{Name: "cross_field_mappings", Title: "Cross-field mappings", Group: "Mappings", Columns: []string{"source_field", "source_value", "target_field", "target_value"}, Keys: []string{"source_field", "source_value", "target_field"},
+			Help: "A value of one field that sets a value of another."},
+		{Name: "shorten_mappings", Title: "Shortened values", Group: "Mappings", Columns: []string{"field", "original", "shortened"}, Keys: []string{"field", "original"},
+			Help: "The short form of a field's value (e.g. a booktitle)."},
+		{Name: "country_names", Title: "Country names", Group: "Mappings", Columns: []string{"alias", "canonical"}, Keys: []string{"alias"},
+			Help: "Other names of a country, mapped to the one used."},
+		{Name: "state_names", Title: "State names", Group: "Mappings", Columns: []string{"alias", "canonical"}, Keys: []string{"alias"},
+			Help: "Other names of a state, mapped to the one used."},
+		{Name: "state_countries", Title: "State countries", Group: "Mappings", Columns: []string{"state", "country"}, Keys: []string{"state"},
+			Help: "The country a state is in."},
+		{Name: "booktitle_country_names", Title: "Booktitle countries", Group: "Mappings", Columns: []string{"alias", "canonical"}, Keys: []string{"alias"},
+			Help: "Country names as they appear in booktitles, mapped to the one used."},
+		{Name: "entry_doi_aliases", Title: "DOI aliases", Group: "Keys and aliases", Columns: []string{"doi", "entry_key"}, Keys: []string{"doi"},
+			Help: "Other DOIs an entry is known by."},
+		{Name: "contributor_id_oldies", Title: "Old author ids", Group: "Keys and aliases", Columns: []string{"absorbed_id", "canonical_id"}, Keys: []string{"absorbed_id"},
+			Help: "Former ids of authors (merged into another), mapped to the id used."},
+		{Name: "deleted_entries", Title: "Deleted entries", Group: "Keys and aliases", Columns: []string{"key"}, Keys: []string{"key"},
+			Help: "Keys of deleted entries (not to come back from a bib file)."},
+		{Name: "urls_ignore", Title: "Bad URLs", Group: "Lists", Columns: []string{"url"}, Keys: []string{"url"},
+			Help: "URLs not to download PDFs from (Get PDFs skips them)."},
+		{Name: "ignore_titles", Title: "Ignored titles", Group: "Lists", Columns: []string{"title"}, Keys: []string{"title"},
+			Help: "Titles not taken as duplicates of one another."},
+		{Name: "dblp_waived", Title: "DBLP waived", Group: "Lists", Columns: []string{"key"}, Keys: []string{"key"},
+			Help: "Entries without a DBLP key on purpose (no more warnings)."},
+		{Name: "non_double_entries", Title: "Not double: entries", Group: "Not doubles", Columns: []string{"key1", "key2"}, Keys: []string{"key1", "key2"},
+			Help: "Pairs of entries that are not the same publication."},
+		{Name: "non_double_contributors", Title: "Not double: authors", Group: "Not doubles", Columns: []string{"contributor_id_a", "contributor_id_b"}, Keys: []string{"contributor_id_a", "contributor_id_b"},
+			Help: "Pairs of authors that are different people (the smaller id first)."},
+		{Name: "non_double_contributor_names", Title: "Not double: names", Group: "Not doubles", Columns: []string{"name1", "name2"}, Keys: []string{"name1", "name2"},
+			Help: "Pairs of names of different people (the smaller name first)."},
+		{Name: "contributor_orcids", Title: "ORCIDs", Group: "Authors", Columns: []string{"orcid", "contributor_id", "is_canonical"}, Keys: []string{"orcid"},
+			Help: "The ORCIDs of authors (is_canonical: 1 for the one used)."},
+		{Name: "bib_groups", Title: "Group members", Group: "Entries", Columns: []string{"group_name", "entry_key"}, Keys: []string{"group_name", "entry_key"},
+			Help: "The entries in each group."},
+		{Name: "entry_metadata", Title: "Entry flags", Group: "Entries", Columns: []string{"entry_key", "property", "value"}, Keys: []string{"entry_key", "property"},
+			Help: "Properties of entries (flags) kept outside their fields."},
+		{Name: "superseded_field_values", Title: "Superseded values", Group: "Entries", Columns: []string{"entry_key", "field", "value", "triage_status", "winner"}, Keys: []string{"entry_key", "field", "value"},
+			Help: "Values of fields that lost a challenge, with their triage."},
+		{Name: "config", Title: "Config", Group: "Settings", Columns: []string{"key", "value"}, Keys: []string{"key"},
+			Help: "The library's stored configuration."},
+		{Name: "map_files", Title: "Map files", Group: "Settings", Columns: []string{"name", "content"}, Keys: []string{"name"},
+			Help: "The mapping files kept in the database (content as a whole)."},
+		{Name: "dblp_parent", Title: "DBLP parents", Group: "Derived (read-only)", Columns: []string{"child_key", "parent_key"}, Keys: []string{"child_key"}, ReadOnly: true,
+			Help: "Crossref parents of DBLP entries."},
+		{Name: "entry_warnings", Title: "Entry warnings", Group: "Derived (read-only)", Columns: []string{"key", "warning"}, Keys: []string{"key", "warning"}, ReadOnly: true,
+			Help: "The warnings of the last check, per entry."},
+	} {
+		t.from = t.Name
+		webTables[t.Name] = t
+	}
+}
+
+// handleTables lists the tables with a tab (GET /api/tables), for the Tables tab.
+func (w *TWebUI) handleTables(rw http.ResponseWriter, r *http.Request) {
+	list := make([]TWebTable, 0, len(webTables))
+	for _, t := range webTables {
+		list = append(list, t)
+	}
+	sort.Slice(list, func(i, j int) bool {
+		if list[i].Group != list[j].Group {
+			return tableGroupRank(list[i].Group) < tableGroupRank(list[j].Group)
+		}
+		return list[i].Title < list[j].Title
+	})
+	writeJSON(rw, list)
+}
+
+// tableGroupRank orders the Tables tab's groups.
+func tableGroupRank(g string) int {
+	for i, name := range []string{"Mappings", "Keys and aliases", "Lists", "Not doubles", "Authors", "Entries", "Settings", "Derived (read-only)"} {
+		if g == name {
+			return i
+		}
+	}
+	return 99
 }
 
 // handleTable serves a table tab: GET /api/table/<name>?q=…&sort=…&desc=1&from=…&n=…
@@ -82,6 +181,10 @@ func (w *TWebUI) handleTable(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method == http.MethodPost {
+		if t.ReadOnly {
+			http.Error(rw, t.Title+" is derived data: not edited here", http.StatusForbidden)
+			return
+		}
 		w.editTable(rw, r, t)
 		return
 	}
@@ -199,13 +302,24 @@ func doTableEdit(args []string) {
 	if !openLibraryToUpdate() {
 		return
 	}
+	if t.ReadOnly {
+		messagef("%s is derived data: not edited here.\n", t.Title)
+		endRun(1)
+	}
+	isKey := map[string]bool{}
+	for _, k := range t.Keys {
+		isKey[k] = true
+	}
 	for _, c := range t.Columns {
 		if t.Name == "name_forms" && (c == "id" || c == "canonical") {
 			continue // one of the two names the author
 		}
+		if !t.inMemory() && !isKey[c] {
+			continue // a value may be empty (stored as NULL where the column allows it)
+		}
 		if e.Op != "delete" && strings.TrimSpace(e.Row[c]) == "" {
 			messagef("%s is empty.\n", c)
-			return
+			endRun(1) // refused: the page keeps its pop-up open
 		}
 	}
 	// A deleted row leaves memory too (the library's own structures), so the change
@@ -299,23 +413,66 @@ func doTableEdit(args []string) {
 			}
 			upsertContributorNameToDB(cid, form)
 			Library.NameToContributorID[form] = cid
+		default:
+			nullable := tableNullableColumns(t.written())
+			var vals []any
+			for _, c := range t.Columns {
+				if v := get(c); v == "" && nullable[c] {
+					vals = append(vals, nil)
+				} else {
+					vals = append(vals, v)
+				}
+			}
+			marks := strings.TrimSuffix(strings.Repeat("?, ", len(t.Columns)), ", ")
+			if err := bibExec(`INSERT INTO `+t.written()+` (`+strings.Join(t.Columns, ", ")+`) VALUES (`+marks+`)`, vals...); err != nil {
+				messagef("Could not add: %s\n", err)
+				return false
+			}
 		}
 		return true
 	}
+	done := false
 	switch e.Op {
 	case "delete":
-		if del(e.Row) {
+		if done = del(e.Row); done {
 			messagef("Deleted from %s.\n", t.Title)
 		}
 	case "add":
-		if add(e.Row) {
+		if done = add(e.Row); done {
 			messagef("Added to %s.\n", t.Title)
 		}
 	case "update":
-		if del(e.Old) && add(e.Row) {
-			messagef("Changed in %s.\n", t.Title)
+		if del(e.Old) {
+			if done = add(e.Row); done {
+				messagef("Changed in %s.\n", t.Title)
+			} else {
+				add(e.Old) // the new row was refused: the old one back
+			}
 		}
 	}
-	writesKeptInMemory([]string{t.written()}, nil)
+	if t.inMemory() {
+		writesKeptInMemory([]string{t.written()}, nil)
+	} // else: the service loads the library afresh (its write hook sees the table changed)
 	bibEntriesModified = true
+	if !done {
+		endRun(1) // refused: the page keeps its pop-up open
+	}
+}
+
+// tableNullableColumns are the columns of table that may hold NULL.
+func tableNullableColumns(table string) map[string]bool {
+	out := map[string]bool{}
+	rows, err := bibQuery(`SELECT name, "notnull", pk FROM pragma_table_info(?)`, table)
+	if err != nil {
+		return out
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var name string
+		var notNull, pk int
+		if rows.Scan(&name, &notNull, &pk) == nil && notNull == 0 && pk == 0 {
+			out[name] = true
+		}
+	}
+	return out
 }

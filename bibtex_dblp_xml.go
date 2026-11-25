@@ -1646,7 +1646,7 @@ func doEnrichContributorData() {
 	if !openLibraryToUpdate() {
 		return
 	}
-	messagef("\nEnriching contributor data:\n")
+	announceStep("Enriching contributor data")
 
 	Library.Progress("  Step 1/4: absorbing DBLP name mappings...")
 	Library.progressPrefix = "  " // "  " + existing "  " prefix = "    "

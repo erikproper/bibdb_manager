@@ -55,7 +55,7 @@ var (
 	Reporting TInteraction
 )
 
-const AppVersion = "30.140"
+const AppVersion = "30.144"
 
 // Run-state flags consumed by the write tail in main.
 var (
@@ -434,7 +434,7 @@ func openLibraryToUpdate() bool {
 	if dbWriteSessionActive {
 		return true
 	}
-	stderrPrintf("\nOpening the library:\n")
+	announceStep("Opening the library")
 	if !prepareWorkingDatabase() {
 		return false
 	}
@@ -1484,7 +1484,7 @@ outer:
 				details += "  dblp: " + cand.DblpKey
 			}
 			details += fmt.Sprintf("  entries: %d]%s", entryCount, marker)
-			Library.Progress(details)
+			Library.Progress("%s", details)
 		}
 		// Before offering the choice, check whether any candidate without a DblpKey
 		// has entries with potential DBLP matches. Resolving those first may
@@ -1854,7 +1854,7 @@ func doDefaultRun() {
 	if openLibraryToUpdate() {
 		clearEntryWarnings()
 		Library.ReadURLsIgnoreFile()
-		stderrPrintf("\nAnalysing and checking library:\n")
+		announceStep("Analysing and checking library")
 
 		Library.BeginDeferringMessages()
 		Library.CheckEntries()
@@ -1907,6 +1907,12 @@ func doCheckPDFs() {
 		Library.ReadKeyNonDoublesFile()
 		Library.ReadURLsIgnoreFile()
 		Library.CheckPDFHealth()
+	}
+}
+
+func doAddFailedURLs() {
+	if openLibraryToUpdate() {
+		Library.AddFailedURLsToIgnore()
 	}
 }
 
@@ -2520,7 +2526,7 @@ func doUpsertDblpEntries() {
 		inDblpUpdate = true
 		scanned := 0
 		dblpUpdated := 0
-		stderrPrintf("\nDoing analysis based on DBLP data:\n")
+		announceStep("Doing analysis based on DBLP data")
 		Library.FixDblpHierarchy()
 		// Same definition as the "DBLP links" startup stat (countDblpKeyedEntries),
 		// so the ticker's denominator matches what's reported at session start
@@ -3116,7 +3122,7 @@ func runWatch() bool {
 // "Running scripts:" section header with one extra level of indentation.
 // Used by commands that embed both phases (e.g. -dblp_update).
 func runWatchAndScript() {
-	stderrPrintf("\nRunning scripts:\n")
+	announceStep("Running scripts")
 	Library.progressPrefix = "  "
 	runWatch()
 	runScript()
@@ -4165,6 +4171,7 @@ func doAssignOrcid(args []string) {
 var (
 	cmdSync                     bool
 	cmdGetPdfs                  bool
+	cmdAddFailedURLs            bool
 	cmdFindEntries              bool
 	cmdAuditMappings            bool
 	cmdEntryKey                 bool
@@ -4282,6 +4289,7 @@ func main() {
 
 	flag.BoolVar(&cmdStartService, "start", false, "start the service for this library in the background (commands then run through it) and open its web UI (-ui=false: not)")
 	flag.BoolVar(&cmdStopService, "stop", false, "stop the service gracefully (a running job is stopped as with Ctrl-C)")
+	flag.BoolVar(&cmdRestartService, "restart", false, "stop the service (when it runs) and start it again, opening its web UI (-ui=false: not)")
 	flag.BoolVar(&cmdOpenUI, "ui", false, "open the service's web UI in the browser (the service must run: -start)")
 	flag.BoolVar(&cmdSelect, "select", false, "open a Select tab in the web UI per .keys file of this folder's bib.config (optional arg: one file)")
 	flag.BoolVar(&cmdServiceStatus, "status", false, "tell whether the service runs, and which job")
@@ -4296,6 +4304,7 @@ func main() {
 	flag.BoolVar(&cmdSync, "sync", false, "sync library to bib file(s) via exchange config; optional arg narrows to one file")
 	flag.BoolVar(&cmdPull, "pull", false, "with -sync: skip up-sync (phase 1) and re-import; only write bib output from DB")
 	flag.BoolVar(&cmdGetPdfs, "get_pdfs", false, "download missing PDFs into the files folder")
+	flag.BoolVar(&cmdAddFailedURLs, "add_failed_urls", false, "add the URLs of the last failed PDF downloads (urls_failed.csv) to urls_ignore, so -get_pdfs skips them")
 	flag.BoolVar(&cmdAuditMappings, "audit_mappings", false, "report field_mappings rows that never apply, are undone or chained (read-only; details in <base>.tables/mapping_audit.log)")
 	flag.BoolVar(&cmdFindEntries, "find_entries", false, "list entries matching field [value] (key TAB value per line)")
 	flag.BoolVar(&cmdEntryKey, "entry_key", false, "resolve alias to canonical key")

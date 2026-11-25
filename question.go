@@ -77,29 +77,44 @@ type TQuestionValue struct {
 	Note  string `json:"note,omitempty"` // e.g. its lineage
 }
 
-// questionSender is a TUserIO that sends questions as messages (a job of the
-// service, in it or a child process); the terminal has none.
-type questionSender interface {
-	SendQuestion(q *TQuestion)
+// messageSender is a TUserIO that sends the job's messages as frames (a job of
+// the service, in it or a child process); the terminal has none. Besides its
+// text ("out", "err"), a job sends what a client shows in its own way:
+//
+//   - "question" (Q): the question it asks next, before "ask";
+//   - "warning", "error" (D): a warning or error, its first line the issue, the
+//     lines after it the details;
+//   - "step" (D): the step the job begins ("Opening the library");
+//   - "progress" (D): where it is within the step (a progress line, a counter).
+type messageSender interface {
+	SendMessage(f serviceFrame)
 }
 
-// sendQuestion sends q to the job's client, when it takes questions as messages.
+// sendMessage sends f to the job's client, when it takes messages as frames.
+func sendMessage(f serviceFrame) {
+	if s, ok := userIO.(messageSender); ok {
+		s.SendMessage(f)
+	}
+}
+
+// sendQuestion sends q to the job's client (see messageSender).
 func sendQuestion(q *TQuestion) {
-	if s, ok := userIO.(questionSender); ok {
-		s.SendQuestion(q)
+	if userIO.IsInteractive() {
+		sendMessage(serviceFrame{T: "question", Q: q})
 	}
 }
 
-func (s *TSocketIO) SendQuestion(q *TQuestion) {
-	if s.interactive {
-		s.out.send(serviceFrame{T: "question", Q: q}) //nolint:errcheck
-	}
-}
+func (s *TSocketIO) SendMessage(f serviceFrame) { s.out.send(f) } //nolint:errcheck
+func (t *TFrameIO) SendMessage(f serviceFrame)  { t.out.send(f) } //nolint:errcheck
 
-func (t *TFrameIO) SendQuestion(q *TQuestion) {
-	if t.interactive {
-		t.out.send(serviceFrame{T: "question", Q: q}) //nolint:errcheck
+// announceStep shows the step a job begins: a heading in the text, a "step"
+// message to a client that takes them.
+func announceStep(heading string) {
+	if !isTTY {
+		return
 	}
+	messagef("\n%s:\n", heading)
+	sendMessage(serviceFrame{T: "step", D: heading})
 }
 
 // reOptionLabels finds the option meanings the question constants carry in their

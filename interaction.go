@@ -169,8 +169,20 @@ func (t *TProgressTicker) render() {
 	} else {
 		messagef("\r\033[K%s: ...", t.label)
 	}
+	t.sendProgress()
 	t.rendered = true
 	t.lastRender = time.Now()
+}
+
+// sendProgress sends the counter as a "progress" message (see messageSender).
+func (t *TProgressTicker) sendProgress() {
+	text := strings.TrimSpace(t.label) + ": ..."
+	if t.total > 0 {
+		text = fmt.Sprintf("%s: %d/%d", strings.TrimSpace(t.label), t.current, t.total)
+	} else if t.current > 0 {
+		text = fmt.Sprintf("%s: %d", strings.TrimSpace(t.label), t.current)
+	}
+	sendMessage(serviceFrame{T: "progress", D: text})
 }
 
 // Step increments the count by one, redraws the line, and non-blockingly checks
@@ -345,6 +357,7 @@ func (r *TInteraction) printWarningLine(warning string, context ...any) {
 	}
 	SpinnerInterrupt()
 	messagef("\nWARNING:  "+warning+"\n", context...)
+	sendMessage(serviceFrame{T: "warning", D: sprintfIfArgs(warning, context...)})
 }
 
 // printWarningLineGrouped is printWarningLine without the leading blank line — for a
@@ -357,6 +370,7 @@ func (r *TInteraction) printWarningLineGrouped(warning string, context ...any) {
 	}
 	SpinnerInterrupt()
 	messagef("WARNING:  "+warning+"\n", context...)
+	sendMessage(serviceFrame{T: "warning", D: sprintfIfArgs(warning, context...)})
 }
 
 // printErrorLine prints an ERROR line immediately, bypassing any deferral.
@@ -366,6 +380,7 @@ func (r *TInteraction) printErrorLine(errorMessage string, context ...any) {
 	}
 	SpinnerInterrupt()
 	messagef("\nERROR:    "+errorMessage+"\n", context...)
+	sendMessage(serviceFrame{T: "error", D: sprintfIfArgs(errorMessage, context...)})
 }
 
 // BeginDeferringMessages enables warning/error deferral and clears any buffered messages.
@@ -392,12 +407,14 @@ func (r *TInteraction) FlushDeferredMessages() {
 		messagef("\nWarnings:\n")
 		for _, w := range r.deferredWarnings {
 			messagef("  - %s\n", w)
+			sendMessage(serviceFrame{T: "warning", D: w})
 		}
 	}
 	if len(r.deferredErrors) > 0 {
 		messagef("\nErrors:\n")
 		for _, e := range r.deferredErrors {
 			messagef("  - %s\n", e)
+			sendMessage(serviceFrame{T: "error", D: e})
 		}
 	}
 	if len(r.deferredWarnings) > 0 || len(r.deferredErrors) > 0 {
@@ -500,11 +517,12 @@ func (r *TInteraction) warningQuestionCore(about *TQuestion, question string, op
 	q := newChoiceQuestion(about, question, keys, sprintfIfArgs(warning, context...))
 
 	if warning != "" {
-		if grouped {
-			r.printWarningLineGrouped(warning, context...)
-		} else {
-			r.printWarningLine(warning, context...)
+		// The warning is shown with the question (in its message): no warning message.
+		SpinnerInterrupt()
+		if !grouped {
+			messageln()
 		}
+		messagef("WARNING:  "+warning+"\n", context...)
 		message("QUESTION: " + question + " " + optionSet)
 	} else {
 		SpinnerInterrupt()
@@ -566,7 +584,8 @@ func (r *TInteraction) WarningQuestionOrderedAbout(about TQuestion, question str
 	r.questionsAnswered++
 
 	if warning != "" {
-		r.printWarningLine(warning, context...)
+		SpinnerInterrupt()
+		messagef("\nWARNING:  "+warning+"\n", context...)
 		message("QUESTION: " + question + " " + optionSet)
 	} else {
 		SpinnerInterrupt()
@@ -685,6 +704,7 @@ func (r *TInteraction) Progress(progress string, context ...any) bool {
 	if isTTY && !r.silenced && !r.progressSuppressed {
 		SpinnerInterrupt()
 		messagef(r.progressPrefix+progress+"\n", context...)
+		sendMessage(serviceFrame{T: "progress", D: strings.TrimSpace(sprintfIfArgs(progress, context...))})
 	}
 	return true
 }

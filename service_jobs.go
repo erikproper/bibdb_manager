@@ -149,7 +149,7 @@ func closeServiceDatabase() {
 func runsInService() bool {
 	if cmdUpdateDblp || cmdLoadDblpXml || cmdPushDblp || cmdRestoreDblp || cmdDeleteGarbage ||
 		cmdRestoreFromDump || cmdRestoreBackupName != "" || cmdNewKey || cmdSetSyncStatus != "" ||
-		cmdHarvest || cmdStartService || cmdStopService || cmdServiceStatus || cmdServe {
+		cmdHarvest || cmdStartService || cmdStopService || cmdRestartService || cmdServiceStatus || cmdServe {
 		return false
 	}
 	if f := flag.Lookup("jobs_file"); f != nil && f.Value.String() != "" {

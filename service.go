@@ -46,13 +46,14 @@ const (
 )
 
 var (
-	cmdStartService  bool
-	cmdStopService   bool
-	cmdServiceStatus bool
-	cmdServe         bool
-	cmdPush          bool
-	cmdLoadLibrary   bool
-	cmdOpenUI        bool
+	cmdStartService   bool
+	cmdStopService    bool
+	cmdRestartService bool
+	cmdServiceStatus  bool
+	cmdServe          bool
+	cmdPush           bool
+	cmdLoadLibrary    bool
+	cmdOpenUI         bool
 
 	// relayingToService is set while the command line relays a job: Ctrl-C is
 	// then passed on to the job instead of handled here.
@@ -89,7 +90,7 @@ func dialService() net.Conn {
 	return conn
 }
 
-// handleServiceCommands handles -start, -stop, -status and -serve, and hands any
+// handleServiceCommands handles -start, -stop, -restart, -status and -serve, and hands any
 // other command to a running service. It returns true when the command was
 // dealt with here (the run then ends); false when it runs on its own.
 func handleServiceCommands() bool {
@@ -99,16 +100,17 @@ func handleServiceCommands() bool {
 		return true
 	case cmdStartService:
 		startService()
-		// -start implies -ui (Erik, 2026-11-24), unless -ui=false is given.
-		uiOff := false
-		flag.Visit(func(f *flag.Flag) {
-			if f.Name == "ui" && !cmdOpenUI {
-				uiOff = true
+		openWebUIUnlessOff()
+		return true
+	case cmdRestartService:
+		// -restart is -stop then -start (Erik, 2026-11-25), with its -ui.
+		if askService("stop") {
+			for i := 0; i < 600 && serviceRuns(); i++ { // the stop may still push (at most a minute)
+				time.Sleep(100 * time.Millisecond)
 			}
-		})
-		if !uiOff {
-			openWebUI()
 		}
+		startService()
+		openWebUIUnlessOff()
 		return true
 	case cmdStopService:
 		stopService()
@@ -300,6 +302,30 @@ func askService(request string) bool {
 		}
 		os.Stderr.WriteString(f.D) //nolint:errcheck
 	}
+}
+
+// openWebUIUnlessOff opens the web UI after -start or -restart, which imply -ui
+// (Erik, 2026-11-24), unless -ui=false is given.
+func openWebUIUnlessOff() {
+	uiOff := false
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == "ui" && !cmdOpenUI {
+			uiOff = true
+		}
+	})
+	if !uiOff {
+		openWebUI()
+	}
+}
+
+// serviceRuns tells whether a service answers on the library's socket.
+func serviceRuns() bool {
+	conn := dialService()
+	if conn == nil {
+		return false
+	}
+	conn.Close()
+	return true
 }
 
 func stopService() {
