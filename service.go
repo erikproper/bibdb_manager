@@ -66,14 +66,15 @@ var (
 // Service → command line: "out" (stdout), "err" (stderr), "exit" (code), and
 // "info" (a reply to stop/status, or why a run was refused, then "exit").
 type serviceFrame struct {
-	T           string   `json:"t"`
-	D           string   `json:"d,omitempty"`
-	Args        []string `json:"args,omitempty"`
-	Cwd         string   `json:"cwd,omitempty"`
-	Interactive bool     `json:"interactive,omitempty"`
-	Version     string   `json:"version,omitempty"`
-	Base        string   `json:"base,omitempty"`
-	Code        int      `json:"code,omitempty"`
+	T           string     `json:"t"`
+	D           string     `json:"d,omitempty"`
+	Args        []string   `json:"args,omitempty"`
+	Cwd         string     `json:"cwd,omitempty"`
+	Interactive bool       `json:"interactive,omitempty"`
+	Version     string     `json:"version,omitempty"`
+	Base        string     `json:"base,omitempty"`
+	Code        int        `json:"code,omitempty"`
+	Q           *TQuestion `json:"q,omitempty"` // "question": the question the job asks next
 }
 
 func serviceSocketPath() string { return localDBFolder + bibTeXBaseName + serviceSocketExtension }
@@ -180,19 +181,14 @@ func relayToService(conn net.Conn) int {
 	}()
 
 	// Typed lines come from the one input pump (user_io.go), and only when the
-	// job asks ("ask"; a child-process job, which cannot say, gets "askall":
-	// read all along). Without a person, stdin is passed on as it is.
-	asks := make(chan bool, 16) // true: from now on read all along
+	// job asks ("ask"; a child-process job asks in frames too). Without a person,
+	// stdin is passed on as it is.
+	asks := make(chan struct{}, 16)
 	go func() {
 		if interactive {
-			continuous := false
 			for {
-				if !continuous {
-					all, ok := <-asks
-					if !ok {
-						return
-					}
-					continuous = all
+				if _, ok := <-asks; !ok {
+					return
 				}
 				userIO.RequestInput()
 				line, ok := <-userIO.Input()
@@ -226,9 +222,9 @@ func relayToService(conn net.Conn) int {
 			return 1
 		}
 		switch f.T {
-		case "ask", "askall":
+		case "ask":
 			select {
-			case asks <- f.T == "askall":
+			case asks <- struct{}{}:
 			default:
 			}
 		case "out":
@@ -767,84 +763,164 @@ func (s *TService) runJob(req serviceFrame, dec *json.Decoder, out *frameSender)
 }
 
 // runChildJob runs one command as a child process (the same binary, the same
-// arguments), relaying its input and output, and returns its exit code.
+// arguments), relaying its frames, input and output, and returns its exit code.
 func (s *TService) runChildJob(req serviceFrame, dec *json.Decoder, out *frameSender) int {
-	exe, err := os.Executable()
+	c, err := startFrameChild(req.Args, req.Cwd, req.Interactive, func(kind, d string) {
+		webLog.write(d)
+		out.send(serviceFrame{T: kind, D: d}) //nolint:errcheck
+	})
 	if err != nil {
-		out.send(serviceFrame{T: "err", D: fmt.Sprintf("The service cannot find its programme: %s\n", err)}) //nolint:errcheck
-		return 1
-	}
-	interactive := "0"
-	if req.Interactive {
-		interactive = "1"
-	}
-	cmd := exec.Command(exe, req.Args...)
-	cmd.Dir = req.Cwd
-	cmd.Env = append(os.Environ(), envServiceJob+"=1", envInteractive+"="+interactive)
-	stdin, err1 := cmd.StdinPipe()
-	stdout, err2 := cmd.StdoutPipe()
-	stderr, err3 := cmd.StderrPipe()
-	if err := errors.Join(err1, err2, err3); err != nil {
 		out.send(serviceFrame{T: "err", D: fmt.Sprintf("The service cannot run the job: %s\n", err)}) //nolint:errcheck
 		return 1
 	}
-	if err := cmd.Start(); err != nil {
-		out.send(serviceFrame{T: "err", D: fmt.Sprintf("The service cannot start the job: %s\n", err)}) //nolint:errcheck
-		return 1
-	}
 	s.mu.Lock()
-	s.jobStop = func() { cmd.Process.Signal(syscall.SIGINT) } //nolint:errcheck
+	s.jobStop = c.interrupt
 	s.mu.Unlock()
-	if req.Interactive {
-		out.send(serviceFrame{T: "askall"}) //nolint:errcheck // the child reads its stdin itself
-	}
 
-	// From the command line: input, end of input, Ctrl-C. When the command line
-	// goes away (terminal closed), the job is stopped as with Ctrl-C.
+	// From the command line: answers (when a person is there; otherwise data for
+	// its stdin), end of input, Ctrl-C. When the command line goes away (terminal
+	// closed), the job is stopped as with Ctrl-C.
 	go func() {
 		for {
 			var f serviceFrame
 			if err := dec.Decode(&f); err != nil {
-				cmd.Process.Signal(syscall.SIGINT) //nolint:errcheck
-				stdin.Close()
+				c.interrupt()
+				c.endInput()
 				return
 			}
 			switch f.T {
 			case "in":
-				io.WriteString(stdin, f.D) //nolint:errcheck
+				if req.Interactive {
+					c.answer(f.D)
+				} else {
+					io.WriteString(c.stdin, f.D) //nolint:errcheck
+				}
 			case "eof":
-				stdin.Close()
+				c.endInput()
 			case "int":
-				cmd.Process.Signal(syscall.SIGINT) //nolint:errcheck
+				c.interrupt()
 			}
 		}
 	}()
+	return c.run(func(f serviceFrame) {
+		if f.T == "out" || f.T == "err" {
+			webLog.write(f.D)
+		}
+		out.send(f) //nolint:errcheck
+	})
+}
 
-	var copies sync.WaitGroup
-	relay := func(r io.Reader, kind string) {
-		defer copies.Done()
+// TFrameChild is a job run as a child process that speaks the service's frames
+// (TFrameIO): its frames on one pipe (its fd 3), answers to it on another (its
+// fd 4), its stdin, stdout and stderr as they are.
+type TFrameChild struct {
+	cmd      *exec.Cmd
+	stdin    io.WriteCloser
+	answers  *frameSender
+	answersW *os.File
+	frames   *os.File
+	raw      sync.WaitGroup
+	once     sync.Once
+}
+
+// startFrameChild starts the command; raw gets what it writes to stdout ("out")
+// and stderr ("err") outside the frames.
+func startFrameChild(args []string, dir string, interactive bool, raw func(kind, d string)) (*TFrameChild, error) {
+	exe, err := os.Executable()
+	if err != nil {
+		return nil, err
+	}
+	framesR, framesW, err := os.Pipe()
+	if err != nil {
+		return nil, err
+	}
+	answersR, answersW, err := os.Pipe()
+	if err != nil {
+		framesR.Close()
+		framesW.Close()
+		return nil, err
+	}
+	person := "0"
+	if interactive {
+		person = "1"
+	}
+	cmd := exec.Command(exe, args...)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), envServiceJob+"=1", envInteractive+"="+person, envFrames+"=1")
+	cmd.ExtraFiles = []*os.File{framesW, answersR} // fd 3, fd 4
+	stdin, err1 := cmd.StdinPipe()
+	stdout, err2 := cmd.StdoutPipe()
+	stderr, err3 := cmd.StderrPipe()
+	err = errors.Join(err1, err2, err3)
+	if err == nil {
+		err = cmd.Start()
+	}
+	framesW.Close()
+	answersR.Close()
+	if err != nil {
+		framesR.Close()
+		answersW.Close()
+		return nil, err
+	}
+	c := &TFrameChild{cmd: cmd, stdin: stdin, answers: newFrameSender(answersW), answersW: answersW, frames: framesR}
+	copyRaw := func(r io.Reader, kind string) {
+		defer c.raw.Done()
 		buf := make([]byte, 32*1024)
 		for {
 			n, err := r.Read(buf)
 			if n > 0 {
-				webLog.write(string(buf[:n]))
-				out.send(serviceFrame{T: kind, D: string(buf[:n])}) //nolint:errcheck
+				raw(kind, string(buf[:n]))
 			}
 			if err != nil {
 				return
 			}
 		}
 	}
-	copies.Add(2)
-	go relay(stdout, "out")
-	go relay(stderr, "err")
-	copies.Wait()
+	c.raw.Add(2)
+	go copyRaw(stdout, "out")
+	go copyRaw(stderr, "err")
+	return c, nil
+}
 
-	if err := cmd.Wait(); err != nil {
-		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) && exitErr.ExitCode() > 0 {
-			return exitErr.ExitCode()
+// answer gives the child a line (with its newline) for the question it asks.
+func (c *TFrameChild) answer(text string) {
+	c.answers.send(serviceFrame{T: "in", D: text}) //nolint:errcheck
+}
+
+// endInput ends the child's input: no more answers, end of its stdin.
+func (c *TFrameChild) endInput() {
+	c.once.Do(func() {
+		c.answers.send(serviceFrame{T: "eof"}) //nolint:errcheck
+		c.answersW.Close()
+		c.stdin.Close()
+	})
+}
+
+// interrupt stops the child gracefully, as Ctrl-C.
+func (c *TFrameChild) interrupt() { c.cmd.Process.Signal(syscall.SIGINT) } //nolint:errcheck
+
+// run hands each frame of the child to handle until it ends, and returns its exit code.
+func (c *TFrameChild) run(handle func(serviceFrame)) int {
+	dec := json.NewDecoder(bufio.NewReader(c.frames))
+	for {
+		var f serviceFrame
+		if dec.Decode(&f) != nil {
+			break
 		}
+		handle(f)
+	}
+	c.frames.Close()
+	c.raw.Wait()
+	err := c.cmd.Wait()
+	c.endInput()
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		if code := exitErr.ExitCode(); code > 0 {
+			return code
+		}
+		return 1
+	}
+	if err != nil {
 		return 1
 	}
 	return 0

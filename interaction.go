@@ -305,6 +305,7 @@ func (r *TInteraction) AskForInput(prompt string) (string, error) {
 	}
 	SpinnerInterrupt()
 	messagef("\nQUESTION: %s (q=quit): ", prompt)
+	sendQuestion(&TQuestion{Kind: "text", Text: prompt})
 	line := readStdinLine()
 	if line == "q" {
 		r.quitRequested = true
@@ -458,7 +459,13 @@ func (r *TInteraction) WarningGrouped(warning string, context ...any) bool {
 // as inline context for the question.
 // In non-TTY sessions, quits immediately (see quitNow) and never returns.
 func (r *TInteraction) WarningQuestion(question string, options TStringSet, warning string, context ...any) string {
-	return r.warningQuestionCore(question, options, warning, false, context...)
+	return r.warningQuestionCore(nil, question, options, warning, false, context...)
+}
+
+// WarningQuestionAbout is WarningQuestion with what the caller knows about the
+// question (its topic, entries, values) for a client that shows it as a message.
+func (r *TInteraction) WarningQuestionAbout(about TQuestion, question string, options TStringSet, warning string, context ...any) string {
+	return r.warningQuestionCore(&about, question, options, warning, false, context...)
 }
 
 // WarningQuestionGrouped behaves like WarningQuestion but omits the leading blank
@@ -467,10 +474,10 @@ func (r *TInteraction) WarningQuestion(question string, options TStringSet, warn
 // ... / Superseded: ..." block) instead of having a blank line wedge itself in
 // between.
 func (r *TInteraction) WarningQuestionGrouped(question string, options TStringSet, warning string, context ...any) string {
-	return r.warningQuestionCore(question, options, warning, true, context...)
+	return r.warningQuestionCore(nil, question, options, warning, true, context...)
 }
 
-func (r *TInteraction) warningQuestionCore(question string, options TStringSet, warning string, grouped bool, context ...any) string {
+func (r *TInteraction) warningQuestionCore(about *TQuestion, question string, options TStringSet, warning string, grouped bool, context ...any) string {
 	if !isTTY {
 		r.quitRequested = true
 		quitNow()
@@ -480,14 +487,17 @@ func (r *TInteraction) warningQuestionCore(question string, options TStringSet, 
 
 	optionSet := "("
 	separator := ""
-	for _, option := range options.ElementsSorted() {
+	keys := options.ElementsSorted()
+	for _, option := range keys {
 		optionSet += separator + option
 		separator = "/"
 	}
 	if !options.Contains("q") {
 		optionSet += separator + "q"
+		keys = append(keys, "q")
 	}
 	optionSet += "): "
+	q := newChoiceQuestion(about, question, keys, sprintfIfArgs(warning, context...))
 
 	if warning != "" {
 		if grouped {
@@ -502,6 +512,7 @@ func (r *TInteraction) warningQuestionCore(question string, options TStringSet, 
 	}
 
 	for {
+		sendQuestion(q)
 		option := readStdinLine()
 		if option == "q" {
 			r.quitRequested = true
@@ -521,6 +532,12 @@ func (r *TInteraction) warningQuestionCore(question string, options TStringSet, 
 // to control the display order of options (useful when ASCII sort would mis-group them).
 // In non-TTY sessions, quits immediately (see quitNow) and never returns.
 func (r *TInteraction) WarningQuestionOrdered(question string, ordered []string, warning string, context ...any) string {
+	return r.WarningQuestionOrderedAbout(TQuestion{}, question, ordered, warning, context...)
+}
+
+// WarningQuestionOrderedAbout is WarningQuestionOrdered with what the caller knows
+// about the question (see WarningQuestionAbout).
+func (r *TInteraction) WarningQuestionOrderedAbout(about TQuestion, question string, ordered []string, warning string, context ...any) string {
 	if !isTTY {
 		r.quitRequested = true
 		quitNow()
@@ -538,10 +555,13 @@ func (r *TInteraction) WarningQuestionOrdered(question string, ordered []string,
 		optionSet += separator + opt
 		separator = "/"
 	}
+	keys := append([]string{}, ordered...)
 	if !hasQ {
 		optionSet += separator + "q"
+		keys = append(keys, "q")
 	}
 	optionSet += "): "
+	q := newChoiceQuestion(&about, question, keys, sprintfIfArgs(warning, context...))
 
 	r.questionsAnswered++
 
@@ -554,6 +574,7 @@ func (r *TInteraction) WarningQuestionOrdered(question string, ordered []string,
 	}
 
 	for {
+		sendQuestion(q)
 		option := readStdinLine()
 		if option == "q" {
 			r.quitRequested = true
@@ -578,6 +599,14 @@ func (r *TInteraction) WarningYesNoQuestion(question, warning string, context ..
 	answer := r.WarningQuestion(question, options, warning, context...)
 
 	return answer == "y"
+}
+
+// WarningYesNoQuestionAbout is WarningYesNoQuestion with what the caller knows
+// about the question (see WarningQuestionAbout).
+func (r *TInteraction) WarningYesNoQuestionAbout(about TQuestion, question, warning string, context ...any) bool {
+	options := TStringSetNew()
+	options.Add("y", "n")
+	return r.WarningQuestionAbout(about, question, options, warning, context...) == "y"
 }
 
 // statRow is a label/value/comment triple for printStatBlock.
@@ -632,7 +661,9 @@ func (r *TInteraction) ConfirmAction(prompt string) bool {
 	r.questionsAnswered++
 	SpinnerInterrupt()
 	messagef("\nCONFIRM:  %s (y/n/q): ", prompt)
+	q := newChoiceQuestion(nil, prompt, []string{"y", "n", "q"}, "")
 	for {
+		sendQuestion(q)
 		answer := readStdinLine()
 		if answer == "y" || answer == "n" {
 			messageln()
@@ -656,4 +687,13 @@ func (r *TInteraction) Progress(progress string, context ...any) bool {
 		messagef(r.progressPrefix+progress+"\n", context...)
 	}
 	return true
+}
+
+// sprintfIfArgs formats format with args, or returns it as it is without args (a
+// warning without arguments may hold a literal "%").
+func sprintfIfArgs(format string, args ...any) string {
+	if len(args) == 0 {
+		return format
+	}
+	return fmt.Sprintf(format, args...)
 }

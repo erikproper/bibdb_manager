@@ -2253,7 +2253,9 @@ func (l *TBibTeXLibrary) CheckLoneProceedings() {
 		l.printWarningLine(WarningLoneProceedings, key)
 		message(l.entryDisplayString(key))
 
-		switch l.WarningQuestion(QuestionLoneProceedings, validAnswers, "") {
+		about := TQuestion{Key: key, Warning: fmt.Sprintf(WarningLoneProceedings, key),
+			Entries: []TQuestionEntry{l.questionEntryOf("", key)}}
+		switch l.WarningQuestionAbout(about, QuestionLoneProceedings, validAnswers, "") {
 		case "k":
 			if typed, err := Reporting.AskForInput("DBLP key"); err == nil && typed != "" {
 				if dblpKey := l.resolveTypedDblpKey(key, typed); dblpKey != "" {

@@ -358,9 +358,14 @@ func (l *TBibTeXLibrary) ResolveFieldValue(key, challengeKey, field, challengeRa
 	if challengeSource != "" {
 		l.setSourceFieldSignature(key, field, challengeSource, challenge)
 	}
+	about := TQuestion{Topic: "field_challenge", Key: key, Field: field, Text: "Keep the value as is?",
+		Warning: "For entry " + key + " and field " + field + ": needs to be resolved",
+		Values: []TQuestionValue{{Role: "current", Value: current, Note: "lineage: " + currentLineageDisplay},
+			{Role: "challenger", Value: challenge, Note: "source: " + challengerLineageDisplay}},
+		Entries: []TQuestionEntry{l.questionChallengingEntry(challengeKey), l.questionEntryOf("Current entry", key)}}
 	var answer string
 	for {
-		answer = l.WarningQuestion(question, options, warning, key, field, current, currentLineageDisplay, challenge, challengerLineageDisplay)
+		answer = l.WarningQuestionAbout(about, question, options, warning, key, field, current, currentLineageDisplay, challenge, challengerLineageDisplay)
 		if answer == "s" {
 			l.displayDblpEntry(dblpKey)
 			continue
@@ -429,7 +434,7 @@ func (l *TBibTeXLibrary) ResolveFieldValue(key, challengeKey, field, challengeRa
 		// swap here previously showed challenge in the "Current" slot and vice versa.)
 		ynOptions := TStringSetNew()
 		ynOptions.Add("y", "n")
-		answer = l.WarningQuestion(question, ynOptions, warning, key, field, current, currentLineageDisplay, challenge, challengerLineageDisplay)
+		answer = l.WarningQuestionAbout(about, question, ynOptions, warning, key, field, current, currentLineageDisplay, challenge, challengerLineageDisplay)
 		if answer == "n" {
 			l.UpdateEntryFieldAlias(key, field, current, challenge)
 			l.setLineage(key, field, challenge, challengeSource, false)
@@ -652,7 +657,9 @@ func (l *TBibTeXLibrary) resolveNamePair(key, field string, namePos, nameTotal, 
 		challengerDisplay += " [" + challengerORCID + "]"
 	}
 
-	answer := l.WarningQuestionOrdered(
+	about := TQuestion{Topic: "name_pair", Key: key, Field: field,
+		Values: []TQuestionValue{{Role: "current", Value: currentDisplay}, {Role: "challenger", Value: challengerDisplay}}}
+	answer := l.WarningQuestionOrderedAbout(about,
 		"Keep current name? (Y/N = everywhere, y/n = this entry only, e = edit canonical name, d = different people)",
 		[]string{"N", "Y", "n", "y", "e", "d", "q"},
 		"Name %d of %d (difference %d of %d) for entry %s field %s:\n- Current:    %s\n- Challenger: %s",
@@ -847,6 +854,26 @@ func (l *TBibTeXLibrary) MaybeResolveFieldValue(key, challengeKey, field, challe
 // or (a "DBLP:<key>" challenge) the DBLP record from the local store with its DBLP
 // key, so the challenge can be judged in its context (Erik, 2026-11-24; before,
 // a DBLP challenger showed nothing here).
+// questionChallengingEntry is the challenging entry of a field challenge as shown
+// with the question: a library entry, or a DBLP entry ("DBLP:<key>") from the store.
+func (l *TBibTeXLibrary) questionChallengingEntry(challengeKey string) TQuestionEntry {
+	if q := l.questionEntryOf("Challenging entry", challengeKey); q.Type != "" {
+		return q
+	}
+	if dblpKey, ok := strings.CutPrefix(challengeKey, "DBLP:"); ok {
+		if e := dblpEntryFromStore(dblpKey); e != nil {
+			fields := map[string]string{DBLPField: dblpKey}
+			for f, v := range e.Fields {
+				fields[f] = v
+			}
+			q := questionEntryOfFields("Challenging entry", challengeKey, fields)
+			q.Type = e.Fields[EntryTypeField]
+			return q
+		}
+	}
+	return TQuestionEntry{Role: "Challenging entry", Key: challengeKey}
+}
+
 func (l *TBibTeXLibrary) challengingEntryString(challengeKey string) string {
 	if s := l.EntryString(challengeKey, "", "  "); s != "" {
 		return s

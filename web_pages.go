@@ -521,14 +521,15 @@ async function loadDialogue() {
   // The question pop-up: opened while the tab is shown; a new question re-uses it; when the
   // job goes on without asking, it waits (Confirm greyed); when the job ends, it says so.
   // A key chosen in Lookup answers the question that asks for it ("DBLP key").
-  if (d.asking && pendingDblpKey && !(d.options && d.options.length) && /key/i.test(d.question || "")) {
+  const asksText = d.asking && d.q && d.q.kind === "text";
+  if (asksText && pendingDblpKey && /key/i.test(d.q.text)) {
     const k = pendingDblpKey; pendingDblpKey = ""; sendAnswer(k); return;
   }
   // A value typed in the pop-up (Edit) answers the question that asks for it.
-  if (d.asking && pendingText !== null && !(d.options && d.options.length) && /enter|value|name/i.test(d.question || "")) {
+  if (asksText && pendingText !== null) {
     const t = pendingText; pendingText = null; sendAnswer(t); return;
   }
-  const key = d.asking ? d.next + "|" + d.question : "";
+  const key = qKey(d);
   if (current === "dialogue") {
     if (d.asking && (!qOpen || key !== qShown) && (qOpen || !$("overlay").classList.contains("open"))) openQuestion();
     else if (qOpen && !d.asking && !d.running) qEnded(d);
@@ -546,236 +547,148 @@ function warnHTML(head, lines) {
   }
   return '<div class="qwarn"><div>' + esc(head) + "</div>" + (rows ? '<table class="qvals">' + rows + "</table>" : "") + rest + "</div>";
 }
-// bibRows renders "name : value" lines as the entry pop-up's BibTeX layout.
-function bibRows(lines) {
-  const rows = [], rest = [];
-  for (const l of lines) {
-    const m = l.match(/^\s*([A-Za-z][\w-]*)\s*[:=]\s*\{?(.*?)\}?,?\s*$/);
-    if (m && !/^Parent$/i.test(m[1])) rows.push('<tr><td class="f">' + esc(m[1]) + '</td><td>= {' + esc(m[2]) + "},</td></tr>");
-    else if (l.trim()) rest.push(l.trim());
-  }
-  return { rows: rows.join(""), rest };
+// The question pop-up, made from the job's question message (d.q: kind, topic, warning,
+// text, options with their labels and candidate entries, entries, field, values); the
+// output text is never read for it. A line asked for without a message (d.q null) gets a
+// text field under the job's last line.
+const cap = (t) => (t || "").charAt(0).toUpperCase() + (t || "").slice(1);
+// entryHTML lays an entry out as BibTeX ("@type{key," its fields "}"), framed; its notes
+// under it, its crossref parent likewise under "Crossref parent:".
+function entryHTML(e, framed) {
+  if (!e) return "";
+  const rows = (e.fields || []).map((f) => '<tr><td class="f">' + esc(f.name) + "</td><td>= {" + esc(f.value) + "},</td></tr>").join("");
+  let html = '<div class="qbib">' + (e.key ? "<div>@" + esc(e.type || "misc") + "{" + esc(e.key) + ",</div>" : "") +
+    '<table style="margin-left:2ch">' + rows + "</table>" + (e.key ? "<div>}</div>" : "") + "</div>" +
+    (e.notes || []).map((n) => '<div class="muted" style="font-size:12.5px">' + esc(n) + "</div>").join("");
+  if (e.parent) html += '<div class="qsub" style="font-weight:600;color:var(--text);margin-top:8px">Crossref parent:</div>' + entryHTML(e.parent, false);
+  return framed ? '<div class="qframe">' + html + "</div>" : html;
 }
-function blockHTML(header, lines) {
-  // A candidate laid out as the library entry is: "@type{key," with its fields and "}",
-  // from a header "conf/x/Y (inproceedings)"; its crossref parent ("Parent: conf/x/86")
-  // likewise under "Crossref parent:"; counts ("children : …") as a note under it.
-  const parse = (h) => { const m = (h || "").match(/^(\S+)\s*\((\w+)\)/); return m ? { key: m[1], type: m[2] } : { key: (h || "").trim(), type: "" }; };
-  const parentType = { inproceedings: "proceedings", incollection: "book", inbook: "book" };
-  const box = (type, key, part) => {
-    const fields = [], notes = [];
-    for (const l of part) (/^\s*children\s*:/.test(l) ? notes : fields).push(l);
-    const b = bibRows(fields);
-    return '<div class="qbib">' + (key ? "<div>@" + esc(type || "misc") + "{" + esc(key) + ",</div>" : "") +
-      '<table style="margin-left:2ch">' + b.rows + "</table>" + (key ? "<div>}</div>" : "") +
-      (b.rest.length ? '<div class="muted">' + b.rest.map(esc).join("<br>") + "</div>" : "") + "</div>" +
-      notes.map((n) => '<div class="muted" style="font-size:12.5px">' + esc(n.trim().replace(/\s*:\s*/, ": ")) + "</div>").join("");
-  };
-  const own = parse(header);
-  let html = "", part = [], parent = null;
-  for (const l of lines) {
-    const p = l.match(/^\s*Parent:\s*(.*)$/);
-    if (p) { html += box(own.type, own.key, part); part = []; parent = p[1].trim(); continue; }
-    if (/^\s*@\w+\{/.test(l) || /^\s*\}\s*$/.test(l)) continue;
-    part.push(l);
-  }
-  if (parent === null) html += box(own.type, own.key, part);
-  else html += '<div class="qsub" style="font-weight:600;color:var(--text);margin-top:8px">Crossref parent:</div>' + box(parentType[own.type] || "proceedings", parent, part);
-  return html;
+const entryCard = (e, title) => (title || e.role ? '<div class="qtext">' + esc(title || e.role) + ":</div>" : "") + entryHTML(e, true);
+const warnBox = (w) => { if (!w) return ""; const ls = w.split("\n"); return warnHTML(ls[0], ls.slice(1)); };
+const valueOf = (q, role) => (q.values || []).find((v) => v.role === role);
+const optKeys = (q) => (q.options || []).map((o) => o.key);
+function showQuestion(d, html) {
+  qOpen = true;
+  qShown = qKey(d);
+  popup("Question — " + (d.title || ""), html, false);
+  for (const b of $("mbody").querySelectorAll("button[data-qopt]")) b.onclick = () => sendAnswer(b.dataset.qopt);
 }
+function qKey(d) { return d.asking ? d.next + "|" + (d.q ? d.q.text + "|" + optKeys(d.q).join("/") : d.current) : ""; }
+// editHTML: [Edit…] opens a field (prefilled); its value answers opt and then the question
+// that asks for the value.
+const editHTML = (prefill) => '<div class="qedit" hidden><input id="qeditin" value="' + esc(prefill || "") + '" autocomplete="off"><button class="action" id="qeditok">Use this value</button></div>';
+function wireEdit(opt) {
+  const btn = $("qeditbtn"); if (!btn) return;
+  btn.onclick = () => { $("mbody").querySelector(".qedit").hidden = false; $("qeditin").focus(); $("qeditin").select(); };
+  const go = () => { const v = $("qeditin").value.trim(); if (!v) return; pendingText = v; sendAnswer(opt); };
+  $("qeditok").onclick = go;
+  $("qeditin").onkeydown = (e) => { if (e.key === "Enter") go(); };
+}
+const stopButton = (q) => optKeys(q).includes("q") ? '<button class="plain" data-qopt="q" title="Stop the job">Stop</button>' : "";
 function openQuestion() {
   const d = dlg;
   if (!d || !d.asking) return;
-  const ctx = (d.context || []).slice();
-  const q = (d.question || "").replace(/^QUESTION:\s*/, "");
-  // The options, and what they mean: "(0 = none, k = enter key manually) (0/1/k/q)".
-  const opts = d.options || [];
-  const meaning = { y: "Yes", n: "No", q: "Stop (quit this job)", s: "Skip" };
-  for (const m of q.matchAll(/(\w+)\s*=\s*([^,()]+)/g)) meaning[m[1]] = m[2].trim();
-  const qtext = q.replace(/\s*\((?:[^()]*=[^()]*)\)/g, "").replace(/\s*\([^()]*\/[^()]*\)\s*:?\s*$/, "").trim();
-  // The context: warnings, the original (before the first "[n]"), the numbered options' blocks.
-  // A warning runs on over the lines after it (e.g. "- Current : …", "- Challenger: …",
-  // "needs to be resolved"), up to a blank line, a question line or an entry.
-  const warns = [], original = [], blocks = {};
-  let cur = null, inWarn = null;
-  for (const l of ctx) {
-    const w = l.match(/^\s*WARNING:\s*(.*)$/);
-    // A heading printed as a warning ("WARNING:  First entry:") is a heading.
-    if (w && /^[A-Z][\w-]*(?: [\w-]+){0,2}:\s*$/.test(w[1].trim())) { inWarn = null; original.push(w[1].trim()); continue; }
-    if (w) { inWarn = { head: w[1], lines: [] }; warns.push(inWarn); continue; }
-    if (inWarn) {
-      if (!l.trim() || /^\s*QUESTION:/.test(l) || /^\s*@\w+\{/.test(l) || /^\s*\[\w+\]/.test(l) || /^\s*[A-Z][^:{}=]{0,48}:\s*$/.test(l)) inWarn = null;
-      else { inWarn.lines.push(l); continue; }
-    }
-    const qh = l.match(/^\s*QUESTION:\s*([A-Z][^:{}=]{0,48}:)\s*$/); // a question's heading ("QUESTION: Challenging entry:")
-    if (qh) { original.push(qh[1]); continue; }
-    if (/^\s*QUESTION:/.test(l)) continue;
-    const b = l.match(/^\s*\[(\w+)\]\s*(.*)$/);
-    if (b) { cur = b[1]; blocks[cur] = { header: b[2], lines: [] }; continue; }
-    if (cur) blocks[cur].lines.push(l); else original.push(l);
+  const q = d.q;
+  if (!q) { // a line asked for without a question message
+    showQuestion(d, '<div class="qtext">' + esc((d.current || "").trim() || "Your answer?") + "</div>" +
+      '<div class="qactions"><input id="qtextin" placeholder="Your answer" autocomplete="off"><button class="action" id="qconfirm">Confirm</button></div>');
+    const t = $("qtextin"); t.focus();
+    t.onkeydown = (e) => { if (e.key === "Enter") sendAnswer(t.value); };
+    $("qconfirm").onclick = () => sendAnswer(t.value);
+    return;
   }
-  // A field challenge ("For entry X and field F:" with "- Current : …" and "- Challenger: …",
-  // asked as "Keep the value as is? (n/y/q)"): shown as a choice between the two values.
-  const challenge = warns.find((w) => /and field\s+(\S+?):?\s*$/.test(w.head) &&
-    w.lines.some((l) => /^\s*-\s*Current\s*:/.test(l)) && w.lines.some((l) => /^\s*-\s*Challenger\s*:/.test(l)));
-  const isChallenge = challenge && opts.includes("y") && opts.includes("n");
-  let html = warns.filter((w) => !(isChallenge && w === challenge)).map((w) => warnHTML(w.head, w.lines)).join("");
-  // The entries the question is about: the run of headed BibTeX blocks ("Library entry:",
-  // "Parent entry:", "@type{…") at the end of what came before the options, not the job's
-  // earlier progress lines. Each heading gets a card.
-  const origText = original.filter((l) => l.trim());
-  const entryLine = (l) => /^\s*[A-Z][^:{}=]{0,48}:\s*$/.test(l) || /^\s*@\w+\{/.test(l) || /^\s*[\w-]+\s*=\s*\{/.test(l) || /^\s*\}\s*$/.test(l);
-  let from = origText.length;
-  while (from > 0 && entryLine(origText[from - 1])) from--;
-  const cards = [];
-  for (const l of origText.slice(from)) {
-    if (/^\s*[A-Z][^:{}=]{0,48}:\s*$/.test(l) || (!cards.length)) cards.push({ title: /:\s*$/.test(l) ? l.trim().replace(/:$/, "") : "", lines: [] });
-    if (!/:\s*$/.test(l) || /=/.test(l)) cards[cards.length - 1].lines.push(l);
-  }
-  // An entry in a frame, laid out as BibTeX with its braces balanced.
-  const entryBox = (c) => {
-    const head = c.lines.find((l) => /^\s*@\w+\{/.test(l));
-    return '<div class="qframe"><div class="qbib">' + (head ? "<div>" + esc(head.trim()) + "</div>" : "") +
-      '<table style="margin-left:2ch">' + bibRows(c.lines.filter((l) => !/^\s*@\w+\{/.test(l) && !/^\s*\}\s*$/.test(l))).rows + "</table>" + (head ? "<div>}</div>" : "") + "</div></div>";
-  };
-  const challengingCard = cards.find((c) => /^challenging entry$/i.test(c.title));
-  const shownCards = cards.filter((c) => c !== challengingCard && c.lines.some((l) => /=/.test(l)));
-  for (const c of shownCards) html += (c.title ? '<div class="qtext">' + esc(c.title === "Current entry" && isChallenge ? "For entry" : c.title) + ":</div>" : "") + entryBox(c);
-  // editRow: [Edit…] opens a field (prefilled); its value answers "e" and then the question
-  // that asks for the value.
-  const editHTML = (prefill) => '<div class="qedit" hidden><input id="qeditin" value="' + esc(prefill || "") + '" autocomplete="off"><button class="action" id="qeditok">Use this value</button></div>';
-  const wireEdit = (opt) => {
-    const btn = $("qeditbtn"); if (!btn) return;
-    btn.onclick = () => { const box = $("mbody").querySelector(".qedit"); box.hidden = false; $("qeditin").focus(); $("qeditin").select(); };
-    const go = () => { const v = $("qeditin").value.trim(); if (!v) return; pendingText = v; sendAnswer(opt); };
-    $("qeditok").onclick = go;
-    $("qeditin").onkeydown = (e) => { if (e.key === "Enter") go(); };
-  };
-  // A name pair ("Name 2 of 6 … for entry X field author:", "Keep current name?"): each name
-  // with its buttons, everywhere (a name mapping) or for this entry only.
-  const namePair = /^keep current name/i.test(qtext) && warns.find((w) => w.lines.some((l) => /^\s*-\s*Current\s*:/.test(l)));
-  if (namePair) {
-    const val = (who) => { const l = namePair.lines.find((x) => new RegExp("^\\s*-\\s*" + who + "\\s*:").test(x)); return l ? l.replace(/^\s*-\s*\w+\s*:\s*/, "") : ""; };
-    const cur = val("Current"), chal = val("Challenger");
-    html = '<div class="qwarn">' + esc(namePair.head) + "</div>" + html.replace(warnHTML(namePair.head, namePair.lines), "");
-    html += '<div class="qtext">Which name?</div><div class="qopts">' +
-      '<div class="qrow"><div><span class="qlabel">Current</span><div class="qbib" style="font-size:13.5px">' + esc(cur) + '</div></div><span style="flex:1"></span>' +
+  const keys = optKeys(q), has = (k) => keys.includes(k);
+  const label = (k) => { const o = (q.options || []).find((x) => x.key === k); return o && o.label ? o.label : k; };
+  const entries = q.entries || [];
+  const cur = valueOf(q, "current"), chal = valueOf(q, "challenger");
+  // A name pair: each name with its buttons, everywhere (a name mapping) or for this entry only.
+  if (q.topic === "name_pair") {
+    showQuestion(d, warnBox((q.warning || "").split("\n")[0]) +
+      '<div class="qtext">Which name?</div><div class="qopts">' +
+      '<div class="qrow"><div><span class="qlabel">Current</span><div class="qbib" style="font-size:13.5px">' + esc(cur ? cur.value : "") + '</div></div><span style="flex:1"></span>' +
         '<button class="plain" data-qopt="Y" title="Keep it, and map the other name to it in every entry">Keep everywhere</button><button class="plain" data-qopt="y" title="Keep it in this entry only">Keep here</button></div>' +
-      '<div class="qrow"><div><span class="qlabel">Challenger</span><div class="qbib" style="font-size:13.5px">' + esc(chal) + '</div></div><span style="flex:1"></span>' +
+      '<div class="qrow"><div><span class="qlabel">Challenger</span><div class="qbib" style="font-size:13.5px">' + esc(chal ? chal.value : "") + '</div></div><span style="flex:1"></span>' +
         '<button class="plain" data-qopt="N" title="Take it, and map the current name to it in every entry">Take everywhere</button><button class="plain" data-qopt="n" title="Take it in this entry only">Take here</button></div></div>' +
       '<div class="muted" style="font-size:13px;margin:-2px 0 6px">Everywhere: remembered as a name mapping, for all entries. Here: this entry only.</div>' +
       '<div class="qactions"><button class="plain" id="qeditbtn" title="Type the canonical name: both names are mapped to it">Edit…</button>' +
-      '<button class="plain" data-qopt="d" title="These are two different people: never ask again">Different people</button><span style="flex:1"></span>' +
-      (opts.includes("q") ? '<button class="plain" data-qopt="q" title="Stop the job">Stop</button>' : "") + "</div>" + editHTML(cur);
-    qOpen = true;
-    qShown = d.next + "|" + d.question;
-    popup("Question — " + (d.title || ""), html, false);
-    for (const b of $("mbody").querySelectorAll("button[data-qopt]")) b.onclick = () => sendAnswer(b.dataset.qopt);
+      '<button class="plain" data-qopt="d" title="These are two different people: never ask again">Different people</button><span style="flex:1"></span>' + stopButton(q) + "</div>" +
+      editHTML(cur ? cur.value : ""));
     wireEdit("e");
     return;
   }
-  if (isChallenge) {
-    // Further options the question offers ("b = break down by name", "e = edit"); the ones
-    // that show a DBLP entry in the external viewer (s, S) are left out: the challenging
-    // entry is shown below.
-    const cap = (t) => (t || "").charAt(0).toUpperCase() + (t || "").slice(1);
-    const extra = opts.filter((o) => !["y", "n", "Y", "N", "e", "q", "s", "S"].includes(o) && meaning[o]);
-    const forAll = opts.includes("Y") && opts.includes("N");
-    const field = challenge.head.match(/and field\s+(\S+?):?\s*$/)[1];
-    const vals = {}; let last = "";
-    for (const l of challenge.lines) {
-      const m = l.match(/^\s*-\s*(Current|Challenger)\s*:\s*(.*)$/);
-      if (m) { last = m[1]; vals[last] = { value: m[2], note: "" }; }
-      else if (last && /^\s*\(.*\)\s*$/.test(l)) vals[last].note = l.trim().replace(/^\(|\)$/g, "");
-    }
-    const rest = challenge.lines.filter((l) => !/^\s*-\s*(Current|Challenger)\s*:/.test(l) && !/^\s*\(.*\)\s*$/.test(l) && !/needs to be resolved/.test(l));
-    if (!cards.length) html = '<div class="qwarn">' + esc(challenge.head) + "</div>" + html;
-    html += '<div class="qtext">Select as ' + esc(field) + ":</div>" + (rest.length ? '<div class="muted">' + rest.map((l) => esc(l.trim())).join("<br>") + "</div>" : "") +
-      '<div class="qopts">' + [["Current", "y"], ["Challenger", "n"]].map(([name, ans]) => vals[name] ?
-        '<label><input type="radio" name="qopt" value="' + ans + '"><div><span class="qlabel">' + name + '</span><div class="qbib" style="font-size:13.5px">' + esc(vals[name].value) + "</div>" +
-        (vals[name].note ? '<div class="muted" style="font-size:12.5px">' + esc(vals[name].note) + "</div>" : "") + "</div></label>" : "").join("") + "</div>" +
+  // A field challenge: the entry, a choice between the current and the challenging value,
+  // for this entry or (when offered) all; Edit; further options; the challenging entry below.
+  if (q.topic === "field_challenge") {
+    const current = entries.find((e) => e.role === "Current entry"), challenging = entries.find((e) => e.role === "Challenging entry");
+    const extra = keys.filter((o) => !["y", "n", "Y", "N", "e", "q", "s", "S"].includes(o));
+    const forAll = has("Y") && has("N");
+    const radio = (name, ans, v) => v ? '<label><input type="radio" name="qopt" value="' + ans + '"><div><span class="qlabel">' + name + '</span><div class="qbib" style="font-size:13.5px">' + esc(v.value) + "</div>" +
+      (v.note ? '<div class="muted" style="font-size:12.5px">' + esc(v.note) + "</div>" : "") + "</div></label>" : "";
+    showQuestion(d, (current && current.type ? entryCard(current, "For entry") : warnBox(q.warning)) +
+      '<div class="qtext">Select as ' + esc(q.field) + ':</div><div class="qopts">' + radio("Current", "y", cur) + radio("Challenger", "n", chal) + "</div>" +
       (forAll ? '<label class="muted" style="display:block;margin:2px 0 8px;font-size:13px"><input type="checkbox" id="qforall"> for all entries (remembered: the other value is mapped to this one everywhere)</label>' : "") +
       '<div class="qactions"><button class="action" id="qconfirm" disabled>Confirm</button>' +
-      (opts.includes("e") ? '<button class="plain" id="qeditbtn" title="Type the value to use">Edit…</button>' : "") +
-      extra.map((o) => '<button class="plain" data-qopt="' + esc(o) + '">' + esc(cap(meaning[o])) + "</button>").join("") +
-      '<span style="flex:1"></span>' + (opts.includes("q") ? '<button class="plain" id="qstop" title="Stop the job">Stop</button>' : "") + "</div>" +
-      editHTML(vals.Current ? vals.Current.value : "") +
-      (challengingCard && challengingCard.lines.some((l) => /=/.test(l)) ? '<div class="qtext" style="margin-top:18px">From challenging entry:</div>' + entryBox(challengingCard) : "");
-    qOpen = true;
-    qShown = d.next + "|" + d.question;
-    popup("Question — " + (d.title || ""), html, false);
+      (has("e") ? '<button class="plain" id="qeditbtn" title="Type the value to use">Edit…</button>' : "") +
+      extra.map((o) => '<button class="plain" data-qopt="' + esc(o) + '">' + esc(cap(label(o))) + "</button>").join("") +
+      '<span style="flex:1"></span>' + stopButton(q) + "</div>" + editHTML(cur ? cur.value : "") +
+      (challenging && challenging.type ? '<div class="qtext" style="margin-top:18px">From challenging entry:</div>' + entryHTML(challenging, true) : ""));
     const cb = $("qconfirm");
     for (const r of $("mbody").querySelectorAll('input[name="qopt"]')) r.onchange = () => { cb.disabled = false; };
     cb.onclick = () => {
       const r = $("mbody").querySelector('input[name="qopt"]:checked');
       if (r) sendAnswer($("qforall") && $("qforall").checked ? r.value.toUpperCase() : r.value);
     };
-    if ($("qstop")) $("qstop").onclick = () => sendAnswer("q");
-    for (const b of $("mbody").querySelectorAll("button[data-qopt]")) b.onclick = () => sendAnswer(b.dataset.qopt);
     wireEdit("e");
     return;
   }
-  // A yes/no question: two buttons (no radio buttons, no Confirm), named after what they
-  // do where the question says ("Merge these entries" → Merge / Keep).
-  if (opts.length && opts.every((o) => ["y", "n", "q"].includes(o)) && opts.includes("y") && opts.includes("n") && !Object.keys(blocks).length) {
-    const yes = /^merge\b/i.test(qtext) ? "Merge" : "Yes", no = /^merge\b/i.test(qtext) ? "Keep" : "No";
-    html += '<div class="qtext">' + esc(qtext) + "</div>" +
-      '<div class="qactions"><button class="action" data-qopt="y">' + yes + '</button><button class="plain" data-qopt="n">' + no + "</button>" +
-      '<span style="flex:1"></span>' + (opts.includes("q") ? '<button class="plain" data-qopt="q" title="Stop the job">Stop</button>' : "") + "</div>";
-    qOpen = true;
-    qShown = d.next + "|" + d.question;
-    popup("Question — " + (d.title || ""), html, false);
-    for (const b of $("mbody").querySelectorAll("button[data-qopt]")) b.onclick = () => sendAnswer(b.dataset.qopt);
-    return;
-  }
-  html += '<div class="qtext">' + esc(qtext || "Your answer?") + "</div>"; // (replaced below for a single DBLP candidate)
-  // Options with a button of their own: "none" (0), "enter key manually" (k: Lookup),
-  // stop (q); the others are radio buttons (without their letters or numbers).
-  const isNone = (o) => /^none$/i.test(meaning[o] || "");
-  const isKey = (o) => /key/i.test(meaning[o] || "") && !blocks[o];
-  const special = (o) => o === "q" || isNone(o) || isKey(o);
-  const radios = opts.filter((o) => !special(o));
-  const noneOpt = opts.find(isNone), keyOpt = opts.find(isKey), stopOpt = opts.includes("q") ? "q" : "";
-  // One DBLP candidate: "Possible DBLP entry match:", chosen already; Confirm takes it.
-  const single = radios.length === 1 && blocks[radios[0]] && /DBLP entry matches/i.test(qtext);
-  if (single) html = html.replace('<div class="qtext">' + esc(qtext) + "</div>", '<div class="qtext">Possible DBLP entry match:</div>');
-  if (opts.length) {
-    html += '<div class="qopts">' + radios.map((o) => {
-      const blk = blocks[o];
-      const label = blk ? "" : esc(meaning[o] || o);
-      return '<label><input type="radio" name="qopt" value="' + esc(o) + '"' + (single ? " checked" : "") + '><div style="flex:1">' + (label ? '<span class="qlabel">' + label + "</span>" : "") +
-        (blk ? blockHTML(blk.header, blk.lines) : "") + "</div></label>";
-    }).join("") + "</div>" +
-      '<div class="qactions">' + (radios.length ? '<button class="action" id="qconfirm"' + (single ? "" : " disabled") + ">Confirm</button>" : "") +
-      (keyOpt ? '<button class="plain" id="qlookup" title="Find the key in the local DBLP data">Lookup</button>' : "") +
-      (noneOpt ? '<button class="plain" id="qnone">' + esc(meaning[noneOpt].charAt(0).toUpperCase() + meaning[noneOpt].slice(1)) + "</button>" : "") +
-      '<span style="flex:1"></span>' + (stopOpt ? '<button class="plain" id="qstop" title="Stop the job">Stop</button>' : "") + "</div>";
-  } else {
-    html += '<div class="qactions"><input id="qtextin" placeholder="Your answer" autocomplete="off"><button class="action" id="qconfirm">Confirm</button></div>';
-  }
-  qOpen = true;
-  qShown = d.next + "|" + d.question;
-  popup("Question — " + (d.title || ""), html, false);
-  const confirmBtn = $("qconfirm");
-  if (opts.length) {
-    if (confirmBtn) {
-      for (const r of $("mbody").querySelectorAll('input[name="qopt"]')) r.onchange = () => { confirmBtn.disabled = false; };
-      confirmBtn.onclick = () => { const r = $("mbody").querySelector('input[name="qopt"]:checked'); if (r) sendAnswer(r.value); };
-    }
-    if ($("qnone")) $("qnone").onclick = () => sendAnswer(noneOpt);
-    if ($("qstop")) $("qstop").onclick = () => sendAnswer("q");
-    if ($("qlookup")) $("qlookup").onclick = () => openLookup(keyOpt, cards);
-  } else {
+  // What it is about: the warning, the entries, the values.
+  let html = warnBox(q.warning) + entries.map((e) => entryCard(e)).join("");
+  if (q.values && q.values.length) html += '<table class="qvals" style="margin-bottom:8px">' + q.values.map((v) => '<tr><td class="f"><b>' + esc(cap(v.role)) + "</b></td><td>" + esc(v.value) +
+    (v.note ? ' <span class="muted">(' + esc(v.note) + ")</span>" : "") + "</td></tr>").join("") + "</table>";
+  // A typed answer (options, when given, as buttons besides).
+  if (q.kind === "text") {
+    showQuestion(d, html + '<div class="qtext">' + esc(q.text || "Your answer?") + "</div>" +
+      '<div class="qactions"><input id="qtextin" placeholder="Your answer" autocomplete="off"><button class="action" id="qconfirm">Confirm</button>' +
+      (q.options || []).map((o) => '<button class="plain" data-qopt="' + esc(o.key) + '">' + esc(cap(o.label || o.key)) + "</button>").join("") + "</div>");
     const t = $("qtextin"); t.focus();
     t.onkeydown = (e) => { if (e.key === "Enter") sendAnswer(t.value); };
-    confirmBtn.onclick = () => sendAnswer(t.value);
+    $("qconfirm").onclick = () => sendAnswer(t.value);
+    return;
   }
+  // A yes/no question: two buttons, named after what they do where the question says.
+  if (keys.every((k) => ["y", "n", "q"].includes(k)) && has("y") && has("n")) {
+    const merge = q.topic === "merge";
+    showQuestion(d, html + '<div class="qtext">' + esc(q.text) + "</div>" +
+      '<div class="qactions"><button class="action" data-qopt="y">' + (merge ? "Merge" : esc(cap(label("y")))) + '</button><button class="plain" data-qopt="n">' + (merge ? "Keep" : esc(cap(label("n")))) + "</button>" +
+      '<span style="flex:1"></span>' + stopButton(q) + "</div>");
+    return;
+  }
+  // A choice: candidates (with their entries) or labelled options as radio buttons; "none"
+  // (0), "enter key manually" (k: Lookup) and Stop as buttons of their own.
+  const candidate = q.topic === "dblp_candidate" || q.topic === "library_candidate";
+  const noneOpt = candidate && has("0") ? "0" : "", keyOpt = q.topic === "dblp_candidate" && has("k") ? "k" : "";
+  const radios = (q.options || []).filter((o) => o.key !== "q" && o.key !== noneOpt && o.key !== keyOpt);
+  const single = radios.length === 1 && radios[0].entry && q.topic === "dblp_candidate";
+  html += '<div class="qtext">' + (single ? "Possible DBLP entry match:" : esc(q.text || "Your answer?")) + "</div>" +
+    '<div class="qopts">' + radios.map((o) => '<label><input type="radio" name="qopt" value="' + esc(o.key) + '"' + (single ? " checked" : "") + '><div style="flex:1">' +
+      (o.entry ? entryHTML(o.entry, false) : '<span class="qlabel">' + esc(cap(o.label || o.key)) + "</span>") + "</div></label>").join("") + "</div>" +
+    '<div class="qactions">' + (radios.length ? '<button class="action" id="qconfirm"' + (single ? "" : " disabled") + ">Confirm</button>" : "") +
+    (keyOpt ? '<button class="plain" id="qlookup" title="Find the key in the local DBLP data">Lookup</button>' : "") +
+    (noneOpt ? '<button class="plain" data-qopt="0">' + esc(cap(label("0"))) + "</button>" : "") +
+    '<span style="flex:1"></span>' + stopButton(q) + "</div>";
+  showQuestion(d, html);
+  const confirmBtn = $("qconfirm");
+  if (confirmBtn) {
+    for (const r of $("mbody").querySelectorAll('input[name="qopt"]')) r.onchange = () => { confirmBtn.disabled = false; };
+    confirmBtn.onclick = () => { const r = $("mbody").querySelector('input[name="qopt"]:checked'); if (r) sendAnswer(r.value); };
+  }
+  if ($("qlookup")) $("qlookup").onclick = () => openLookup(keyOpt, entries[0]);
 }
 // The Lookup pop-up: finds a DBLP key in the local DBLP data; "Use" answers the question
 // with "enter key manually" and then with that key.
 let pendingDblpKey = "", pendingText = null;
-function openLookup(keyOpt, cards, onUse) {
-  const field = (name) => { for (const c of cards || []) for (const l of c.lines) { const m = l.match(new RegExp("^\\s*" + name + "\\s*=\\s*\\{(.*)\\},?\\s*$")); if (m) return m[1].replace(/[{}]/g, ""); } return ""; };
+function openLookup(keyOpt, entry, onUse) {
+  const field = (name) => { const f = ((entry && entry.fields) || []).find((x) => x.name === name); return f ? f.value.replace(/[{}]/g, "") : ""; };
   const title = field("title"), firstAuthor = (field("author").split(" and ")[0] || "").trim();
   const authorDblp = firstAuthor.includes(",") ? firstAuthor.split(",").slice(1).join(",").trim() + " " + firstAuthor.split(",")[0].trim() : firstAuthor;
   popup("Lookup a DBLP key", '<div class="line"><input id="lkq" style="flex:1;min-width:260px" placeholder="title (whole), or a DBLP key" value="' + esc(title) + '">' +
@@ -845,7 +758,7 @@ const addDblp = async () => {
 };
 $("adddblpgo").onclick = addDblp;
 $("adddblpkey").onkeydown = (e) => { if (e.key === "Enter") addDblp(); };
-$("adddblplookup").onclick = () => openLookup(null, [], (key) => { $("adddblpkey").value = key; closePopup(); });
+$("adddblplookup").onclick = () => openLookup(null, null, (key) => { $("adddblpkey").value = key; closePopup(); });
 $("dlgstop").onclick = async () => { try { await fetch(BASE + "/api/dialogue/stop", { method: "POST" }); } catch (e) {} setTimeout(loadDialogue, 300); };
 for (const b of document.querySelectorAll("[data-action]")) b.onclick = async () => {
   try {

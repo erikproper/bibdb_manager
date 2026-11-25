@@ -1170,7 +1170,9 @@ func (l *TBibTeXLibrary) MaybeMergeEntries(sourceRAW, targetRAW string) {
 				l.Warning("Empty target entry: %s", target)
 			}
 
-			if l.WarningYesNoQuestion("Merge these entries", "First entry:\n%s\nSecond entry:\n%s", sourceEntry, targetEntry) {
+			about := TQuestion{Topic: "merge", Warning: "Found potential double entries",
+				Entries: []TQuestionEntry{l.questionEntryOf("First entry", source), l.questionEntryOf("Second entry", target)}}
+			if l.WarningYesNoQuestionAbout(about, "Merge these entries", "First entry:\n%s\nSecond entry:\n%s", sourceEntry, targetEntry) {
 				confirmed := true
 				// A "y" here is easy to fire off on autopilot when scanning a long
 				// run — differing years are the cheapest, most reliable signal that

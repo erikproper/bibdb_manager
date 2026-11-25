@@ -299,15 +299,20 @@ func (l *TBibTeXLibrary) harvestTitleMatches(e TBibTeXEntry) []string {
 	return result
 }
 
-// askHarvestLibraryChoice asks the user to pick one of n numbered library candidates.
+// askHarvestLibraryChoice asks the user to pick one of the library entries keys (numbered).
 // Returns the 1-based index, or 0 for none.
-func (l *TBibTeXLibrary) askHarvestLibraryChoice(n int) int {
+func (l *TBibTeXLibrary) askHarvestLibraryChoice(e TBibTeXEntry, keys []string) int {
 	options := TStringSetNew()
 	options.Add("0")
-	for i := 1; i <= n; i++ {
-		options.Add(fmt.Sprintf("%d", i))
+	var offered []*TQuestionEntry
+	for i, k := range keys {
+		options.Add(fmt.Sprintf("%d", i+1))
+		c := l.questionEntryOf("", k)
+		offered = append(offered, &c)
 	}
-	answer := l.WarningQuestion(QuestionHarvestLibraryChoice, options, "")
+	about := TQuestion{Topic: "library_candidate", Entries: []TQuestionEntry{questionEntryOfFields("Source entry", e.Key, e.Fields)},
+		Options: candidateOptions(offered)}
+	answer := l.WarningQuestionAbout(about, QuestionHarvestLibraryChoice, options, "")
 	result := 0
 	fmt.Sscanf(answer, "%d", &result)
 	return result
@@ -373,7 +378,13 @@ func (l *TBibTeXLibrary) harvestFindDblpCandidates(e TBibTeXEntry, excludeDblpKe
 	for i := range candidates {
 		options.Add(fmt.Sprintf("%d", i+1))
 	}
-	answer := l.WarningQuestion(QuestionHarvestDblpChoose, options,
+	about := TQuestion{Topic: "dblp_candidate", Entries: []TQuestionEntry{questionEntryOfFields("Source entry", e.Key, e.Fields)}}
+	var offered []*TQuestionEntry
+	for _, c := range candidates {
+		offered = append(offered, l.questionDblpCandidate(c))
+	}
+	about.Options = candidateOptions(offered)
+	answer := l.WarningQuestionAbout(about, QuestionHarvestDblpChoose, options,
 		WarningHarvestDblpCandidatesFound, e.Fields[TitleField], len(candidates))
 	if answer == "k" {
 		if typed, err := Reporting.AskForInput("DBLP key"); err == nil && typed != "" {
@@ -849,7 +860,7 @@ func (l *TBibTeXLibrary) runHarvestEntry(e TBibTeXEntry, syncState *TSyncState) 
 			messagef("[%d]\n", i+1)
 			message(l.entryDisplayString(k))
 		}
-		pick := l.askHarvestLibraryChoice(len(titleMatches))
+		pick := l.askHarvestLibraryChoice(e, titleMatches)
 		if l.QuitWasRequested() {
 			return "", true
 		}
@@ -929,6 +940,7 @@ func (l *TBibTeXLibrary) runHarvestEntry(e TBibTeXEntry, syncState *TSyncState) 
 	case "m":
 		for {
 			message("Merge into EP key: ")
+			sendQuestion(&TQuestion{Kind: "text", Text: "Merge into EP key"})
 			targetKey := readStdinLine()
 			canon := l.MapEntryKey(targetKey)
 			if !l.EntryExists(canon) {

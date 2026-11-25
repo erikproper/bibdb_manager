@@ -300,7 +300,12 @@ func (l *TBibTeXLibrary) CheckTitleFromURL(entry *TBibTeXEntry) {
 	l.Warning("Entry %s has no title; fetched from URL: %s", entry.Key, fetchedTitle)
 
 	message("QUESTION: Accept title (y), skip (n), or type alternative: ")
+	q := &TQuestion{Kind: "text", Key: entry.Key, Field: "title", Text: "Accept the title, skip, or type another",
+		Warning: fmt.Sprintf("Entry %s has no title; fetched from URL: %s", entry.Key, fetchedTitle),
+		Values:  []TQuestionValue{{Role: "proposed", Value: fetchedTitle}},
+		Options: []TQuestionOption{{Key: "y", Label: "accept"}, {Key: "n", Label: "skip"}}}
 	for {
+		sendQuestion(q)
 		input := readStdinLine()
 		switch input {
 		case "y":

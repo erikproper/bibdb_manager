@@ -118,7 +118,6 @@ func (t *TTerminalIO) WriteResult(s string)  { os.Stdout.WriteString(s) } //noli
 
 func (t *TTerminalIO) Input() <-chan string { return t.lines }
 
-
 // TFrameIO is the TUserIO of a job the service runs as a child process: it speaks
 // the service's protocol (the frames of service.go) as a job in the service does
 // (Erik, 2026-11-25: a question/answer protocol between client and server, not

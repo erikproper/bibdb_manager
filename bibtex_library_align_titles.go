@@ -245,7 +245,13 @@ func (l *TBibTeXLibrary) handleAlignHit(key string, h titleAlignHit, autoAccept 
 	}
 	messagef("Proposed: %s\n", h.proposed)
 	message("QUESTION: Action (a=accept, m=modify, s=skip, w=waive, q=quit): ")
+	q := &TQuestion{Kind: "choice", Key: key, Field: strings.Join(h.fields, ", "), Text: "Action?",
+		Warning: fmt.Sprintf("Title/booktitle alignment (%s) for %s", h.kind, key),
+		Values:  []TQuestionValue{{Role: "current", Value: h.original}, {Role: "proposed", Value: h.proposed}},
+		Options: []TQuestionOption{{Key: "a", Label: "accept"}, {Key: "m", Label: "modify"}, {Key: "s", Label: "skip"},
+			{Key: "w", Label: "waive"}, {Key: "q", Label: "stop"}}}
 	for {
+		sendQuestion(q)
 		option := readStdinLine()
 		switch option {
 		case "a":
@@ -346,7 +352,10 @@ func (l *TBibTeXLibrary) CheckAlignBooktitleCountries() {
 
 	// Phase 2: action.
 	message("QUESTION: Proceed? (a=accept all, i=interactive, q=quit): ")
+	q := &TQuestion{Kind: "choice", Text: "Proceed?", Warning: fmt.Sprintf("Found %d candidate(s)", len(allHits)),
+		Options: []TQuestionOption{{Key: "a", Label: "accept all"}, {Key: "i", Label: "one by one"}, {Key: "q", Label: "stop"}}}
 	for {
+		sendQuestion(q)
 		option := readStdinLine()
 		switch option {
 		case "a":

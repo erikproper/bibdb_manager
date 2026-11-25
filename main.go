@@ -55,7 +55,7 @@ var (
 	Reporting TInteraction
 )
 
-const AppVersion = "30.138"
+const AppVersion = "30.140"
 
 // Run-state flags consumed by the write tail in main.
 var (
@@ -1260,8 +1260,11 @@ outer:
 				Library.Progress("\nEntry: %s / field: %s\n  Current (fewer names):   %s\n  Superseded (more names): %s", p.key, p.field, winner, p.superseded)
 				ynOptions := TStringSetNew()
 				ynOptions.Add("y", "n")
-				switch Library.WarningQuestionGrouped("Adopt the fuller author/editor list?", ynOptions,
-					"Superseded %s value for %s has name(s) not present in the current value — looks like a missing co-author", p.field, p.key) {
+				about := TQuestion{Key: p.key, Field: p.field, Values: []TQuestionValue{
+					{Role: "current", Value: winner, Note: "fewer names"}, {Role: "superseded", Value: p.superseded, Note: "more names"}},
+					Options: []TQuestionOption{{Key: "y", Label: "adopt the fuller list"}, {Key: "n", Label: "keep the current list"}}}
+				switch Library.warningQuestionCore(&about, "Adopt the fuller author/editor list?", ynOptions,
+					"Superseded %s value for %s has name(s) not present in the current value — looks like a missing co-author", true, p.field, p.key) {
 				case "y":
 					Library.SetEntryFieldValue(p.key, p.field, p.superseded)
 					Library.Progress("Adopted fuller author/editor list for %s %s", p.key, p.field)
@@ -1387,7 +1390,8 @@ outer:
 			continue
 		}
 
-		answer := Library.WarningQuestion(
+		answer := Library.WarningQuestionAbout(TQuestion{Text: "Generalise the alias, or keep it local?",
+			Options: []TQuestionOption{{Key: "g", Label: "generalise"}, {Key: "k", Label: "keep local"}}},
 			"Generalise alias (g), keep local (k), quit (q)?",
 			options,
 			"Entry-specific alias %q → contributor %q (%d %s)",
@@ -3908,7 +3912,12 @@ func doEnrichOrcidProfilesCore() {
 		}
 		messagef("  e=edit\n")
 
-		answer := Library.WarningQuestion("", options,
+		labels := []TQuestionOption{{Key: "k", Label: fmt.Sprintf("keep %q", contrib.Name)},
+			{Key: "o", Label: fmt.Sprintf("use ORCID credit-name (%q)", person.CreditName)},
+			{Key: "d", Label: fmt.Sprintf("use declared (%q)", person.DeclaredName)},
+			{Key: "n", Label: fmt.Sprintf("natural order of declared (%q)", passportNatural)},
+			{Key: "i", Label: fmt.Sprintf("use inferred (%q)", inferredName)}, {Key: "e", Label: "edit"}}
+		answer := Library.WarningQuestionAbout(TQuestion{Text: "Which name?", Options: labels}, "", options,
 			"ORCID %s: credit-name %q differs from canonical %q for %s",
 			p.orcid, person.CreditName, contrib.Name, p.id)
 

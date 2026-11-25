@@ -570,7 +570,13 @@ func (l *TBibTeXLibrary) AskCandidateDblpKey(key string, candidates []string) st
 	for i := range candidates {
 		options.Add(fmt.Sprintf("%d", i+1))
 	}
-	answer := l.WarningQuestion(QuestionExtendDblpCoverageChoose, options,
+	about := TQuestion{Topic: "dblp_candidate", Key: key, Entries: []TQuestionEntry{l.questionEntryOf("Library entry", key)}}
+	var offered []*TQuestionEntry
+	for _, c := range candidates {
+		offered = append(offered, l.questionDblpCandidate(c))
+	}
+	about.Options = candidateOptions(offered)
+	answer := l.WarningQuestionAbout(about, QuestionExtendDblpCoverageChoose, options,
 		WarningExtendDblpCandidatesFound, key, len(candidates))
 	if answer == "k" {
 		if dblpKey, err := Reporting.AskForInput("DBLP key"); err == nil && dblpKey != "" {
