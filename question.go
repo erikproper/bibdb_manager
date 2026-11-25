@@ -8,9 +8,8 @@
  * A question a job puts to its user, as a message of the service's protocol
  * (Erik, 2026-11-25: "basically a question/answer protocol between a client and
  * server app"). The job sends it as a "question" frame right before it asks for
- * the answer ("ask"); a client shows it its own way: the terminal client by the
- * text the job prints, the web UI (the Actions tab) from the question's fields,
- * never by reading that text. The answer is a line, as from a terminal.
+ * the answer ("ask"); the web UI shows it (the Actions tab) and answers it. Only a
+ * command that runs on its own asks at the terminal, yes/no questions.
  *
  * Creator: Henderik A. Proper (e.proper@acm.org), Luxembourg, in collaboration with Claude.ai
  *
@@ -32,6 +31,7 @@ type TQuestion struct {
 	// Kind is "choice" (one of Options; "q" stops the job) or "text" (a line typed;
 	// Options, when given, are answers offered besides).
 	Kind string `json:"kind"`
+	ID   string `json:"id,omitempty"` // given by the service; an answer names it
 	// Topic tells what the question is about, for a client that lays it out:
 	// "dblp_candidate" (which DBLP entry matches a library entry: Options carry the
 	// candidates), "library_candidate" (which library entry matches a harvested
@@ -45,6 +45,9 @@ type TQuestion struct {
 	Key     string            `json:"key,omitempty"`     // the library entry it is about
 	Field   string            `json:"field,omitempty"`   // the field it is about
 	Values  []TQuestionValue  `json:"values,omitempty"`  // the values to choose between
+	Confirm bool              `json:"confirm,omitempty"` // a safety confirmation (asked even when silenced)
+	Tight   bool              `json:"tight,omitempty"`   // shown right under the line before it
+	Again   bool              `json:"again,omitempty"`   // asked again after an answer it does not take
 }
 
 // TQuestionOption is an answer the question offers.
@@ -52,6 +55,7 @@ type TQuestionOption struct {
 	Key   string          `json:"key"`             // what is answered ("y", "1", ...)
 	Label string          `json:"label,omitempty"` // what it means ("none", "enter key manually")
 	Entry *TQuestionEntry `json:"entry,omitempty"` // a candidate: the entry it stands for
+	Value string          `json:"value,omitempty"` // a value goes with it (what value: "DBLP key"): one answer, choice and text
 }
 
 // TQuestionEntry is an entry shown with a question.
@@ -77,44 +81,105 @@ type TQuestionValue struct {
 	Note  string `json:"note,omitempty"` // e.g. its lineage
 }
 
-// messageSender is a TUserIO that sends the job's messages as frames (a job of
-// the service, in it or a child process); the terminal has none. Besides its
-// text ("out", "err"), a job sends what a client shows in its own way:
-//
-//   - "question" (Q): the question it asks next, before "ask";
-//   - "warning", "error" (D): a warning or error, its first line the issue, the
-//     lines after it the details;
-//   - "step" (D): the step the job begins ("Opening the library");
-//   - "progress" (D): where it is within the step (a progress line, a counter).
-type messageSender interface {
-	SendMessage(f serviceFrame)
-}
-
-// sendMessage sends f to the job's client, when it takes messages as frames.
-func sendMessage(f serviceFrame) {
-	if s, ok := userIO.(messageSender); ok {
-		s.SendMessage(f)
-	}
-}
-
-// sendQuestion sends q to the job's client (see messageSender).
+// sendQuestion puts q to the user: as a message to the web UI, or (a yes/no
+// question) rendered to the terminal when the command runs on its own.
 func sendQuestion(q *TQuestion) {
-	if userIO.IsInteractive() {
-		sendMessage(serviceFrame{T: "question", Q: q})
-	}
-}
-
-func (s *TSocketIO) SendMessage(f serviceFrame) { s.out.send(f) } //nolint:errcheck
-func (t *TFrameIO) SendMessage(f serviceFrame)  { t.out.send(f) } //nolint:errcheck
-
-// announceStep shows the step a job begins: a heading in the text, a "step"
-// message to a client that takes them.
-func announceStep(heading string) {
-	if !isTTY {
+	if !userIO.IsInteractive() {
 		return
 	}
-	messagef("\n%s:\n", heading)
-	sendMessage(serviceFrame{T: "step", D: heading})
+	if s, ok := dialogueClient(); ok {
+		if l, ok := userIO.(*TLoggingIO); ok {
+			l.log(renderQuestion(q)) // -log keeps the questions too
+		}
+		s.SendMessage(serviceFrame{T: "question", Q: q})
+		return
+	}
+	if !q.yesNo() {
+		messagef("\nThis needs an answer in the web UI (%s). Start the service (-start) and run it again.\n", q.Text)
+		quitNow()
+		return
+	}
+	userIO.WriteMessage(renderQuestion(q))
+}
+
+// yesNo tells whether q is a yes/no question: the only kind asked at a terminal,
+// by a command that runs on its own (ARCHITECTURE.md §15.6).
+func (q *TQuestion) yesNo() bool {
+	if q.Kind != "choice" {
+		return false
+	}
+	for _, o := range q.Options {
+		if o.Key != "y" && o.Key != "n" && o.Key != "q" {
+			return false
+		}
+	}
+	return true
+}
+
+// renderQuestion is q as text for a terminal: its warning, the entries and values
+// it is about, the candidates, and the prompt with the answers it takes.
+func renderQuestion(q *TQuestion) string {
+	var b strings.Builder
+	keys := make([]string, 0, len(q.Options))
+	var meanings []string
+	for _, o := range q.Options {
+		keys = append(keys, o.Key)
+		if o.Label != "" && o.Entry == nil && !(o.Key == "y" && o.Label == "yes") && !(o.Key == "n" && o.Label == "no") && o.Key != "q" {
+			meanings = append(meanings, o.Key+" = "+o.Label)
+		}
+	}
+	prompt := q.Text
+	if len(meanings) > 0 {
+		prompt += " (" + strings.Join(meanings, ", ") + ")"
+	}
+	label := "QUESTION: "
+	if q.Confirm {
+		label = "CONFIRM:  "
+	}
+	if q.Kind == "text" {
+		prompt += " (q=quit)"
+		if len(keys) > 0 {
+			prompt += " (" + strings.Join(keys, "/") + ", or type)"
+		}
+	} else {
+		prompt += " (" + strings.Join(keys, "/") + ")"
+	}
+	if q.Again {
+		return "(" + strings.Join(keys, "/") + "): "
+	}
+	if !q.Tight {
+		b.WriteString("\n")
+	}
+	if q.Warning != "" {
+		b.WriteString("WARNING:  " + q.Warning + "\n")
+	}
+	for _, e := range q.Entries {
+		if e.Role != "" {
+			b.WriteString(e.Role + ":\n")
+		}
+		b.WriteString(renderEntry(&e, "  "))
+	}
+	for _, v := range q.Values {
+		fmt.Fprintf(&b, "- %-10s: %s\n", cases(v.Role), v.Value)
+		if v.Note != "" {
+			b.WriteString("    (" + v.Note + ")\n")
+		}
+	}
+	for _, o := range q.Options {
+		if o.Entry != nil {
+			b.WriteString("[" + o.Key + "]\n" + renderEntry(o.Entry, "  "))
+		}
+	}
+	b.WriteString(label + prompt + ": ")
+	return b.String()
+}
+
+// cases is s with its first letter in upper case.
+func cases(s string) string {
+	if s == "" {
+		return s
+	}
+	return strings.ToUpper(s[:1]) + s[1:]
 }
 
 // reOptionLabels finds the option meanings the question constants carry in their
@@ -167,6 +232,17 @@ func newChoiceQuestion(about *TQuestion, question string, keys []string, warning
 			o.Label = labels[k]
 		}
 		q.Options = append(q.Options, o)
+	}
+	return q
+}
+
+// questionEntryWithParent is questionEntryOf with the entry's crossref parent.
+func (l *TBibTeXLibrary) questionEntryWithParent(role, key string) TQuestionEntry {
+	q := l.questionEntryOf(role, key)
+	if crossref := l.EntryFieldValueity(key, "crossref"); crossref != "" {
+		if p := l.questionEntryOf("", l.MapEntryKey(crossref)); p.Type != "" {
+			q.Parent = &p
+		}
 	}
 	return q
 }

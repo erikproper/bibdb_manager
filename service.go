@@ -63,9 +63,11 @@ var (
 // serviceFrame is one message on the socket, one JSON object per line.
 //
 // Command line → service: "run" (args, cwd, interactive, version, base), "in"
-// (typed input), "eof" (input ended), "int" (Ctrl-C), "stop", "status".
-// Service → command line: "out" (stdout), "err" (stderr), "exit" (code), and
-// "info" (a reply to stop/status, or why a run was refused, then "exit").
+// (data for stdin, when no person is there), "eof" (input ended), "int" (Ctrl-C), "stop", "status".
+// Service → command line: "out" (output, to stdout), "err" (log text, to stderr),
+// "status" and "result" (the dialogue, ARCHITECTURE.md §15; the questions go to the
+// web UI), "open" (bring the web UI up), "exit" (code), and "info" (a reply to stop/status, or
+// why a run was refused, then "exit").
 type serviceFrame struct {
 	T           string     `json:"t"`
 	D           string     `json:"d,omitempty"`
@@ -76,6 +78,9 @@ type serviceFrame struct {
 	Base        string     `json:"base,omitempty"`
 	Code        int        `json:"code,omitempty"`
 	Q           *TQuestion `json:"q,omitempty"` // "question": the question the job asks next
+	V           string     `json:"v,omitempty"` // "in": the value that goes with the choice in D
+	S           *TStatus   `json:"s,omitempty"` // "status": where the job is
+	R           *TMessage  `json:"r,omitempty"` // "result": a part of its result
 }
 
 func serviceSocketPath() string { return localDBFolder + bibTeXBaseName + serviceSocketExtension }
@@ -128,18 +133,66 @@ func handleServiceCommands() bool {
 	if os.Getenv(envServiceJob) != "" {
 		return false // this is the service's job itself
 	}
-	// -harvest reading its bib data from stdin opens /dev/tty for its questions,
-	// which a job of the service has not: it runs on its own (the service holds
-	// the instance lock only while it runs a job).
-	if cmdHarvest && len(flag.Args()) == 0 {
-		return false
-	}
 	conn := dialService()
 	if conn == nil {
-		return false
+		// Questions are answered in the web UI (ARCHITECTURE.md §15.5): a command that
+		// may ask brings the service up. Recovery commands run on their own, as does
+		// one without a person there (a script: a question then fails).
+		if !userIO.IsInteractive() || runsWithoutService() {
+			return false
+		}
+		messagef("Starting the service for %s: this command may ask something, in the web UI.\n", bibTeXBaseName)
+		startService()
+		if conn = dialService(); conn == nil {
+			messageln("Cannot reach the service.")
+			endRun(1)
+		}
+	}
+	if cmdHarvest && len(flag.Args()) == 0 && userIO.IsInteractive() {
+		path, err := saveStdin()
+		if err != nil {
+			messagef("Harvest: cannot read stdin: %s\n", err)
+			endRun(1)
+		}
+		os.Args = append(os.Args, path)
 	}
 	endRun(relayToService(conn))
 	return true
+}
+
+// runsWithoutService tells whether the command runs on its own when no service
+// runs: one that only reads, the recovery commands (they may ask a yes/no
+// question, at the terminal), and some that never ask.
+func runsWithoutService() bool {
+	if cmdRestoreFromDump || cmdRestoreBackupName != "" || cmdRestoreKeyHints || cmdRestoreDblp || cmdPushDblp ||
+		cmdLoadDblpXml || cmdDeleteGarbage || cmdImport != "" || cmdImportAllCSV || cmdImportBib ||
+		cmdNewKey || cmdPush || cmdLoadLibrary {
+		return true
+	}
+	for _, name := range []string{"jobs_file", "version", "v"} {
+		if f := flag.Lookup(name); f != nil && f.Value.String() != "" && f.Value.String() != "false" {
+			return true
+		}
+	}
+	return selectCommand().kind == commandRead
+}
+
+// stdinFilePrefix marks a file holding what -harvest got on stdin: the harvest
+// removes it.
+const stdinFilePrefix = "harvest_stdin_"
+
+// saveStdin writes stdin to a file in the local DB folder, for the service.
+func saveStdin() (string, error) {
+	f, err := os.CreateTemp(localDBFolder, stdinFilePrefix+"*.bib")
+	if err != nil {
+		return "", err
+	}
+	_, err = io.Copy(f, os.Stdin)
+	if err = errors.Join(err, f.Close()); err != nil {
+		os.Remove(f.Name()) //nolint:errcheck
+		return "", err
+	}
+	return f.Name(), nil
 }
 
 // ---- the command line side ----
@@ -182,26 +235,10 @@ func relayToService(conn net.Conn) int {
 		}
 	}()
 
-	// Typed lines come from the one input pump (user_io.go), and only when the
-	// job asks ("ask"; a child-process job asks in frames too). Without a person,
-	// stdin is passed on as it is.
-	asks := make(chan struct{}, 16)
-	go func() {
-		if interactive {
-			for {
-				if _, ok := <-asks; !ok {
-					return
-				}
-				userIO.RequestInput()
-				line, ok := <-userIO.Input()
-				if !ok {
-					break
-				}
-				if out.send(serviceFrame{T: "in", D: line + "\n"}) != nil {
-					return
-				}
-			}
-		} else {
+	// Without a person, stdin is passed on as it is (data). With one, nothing is read:
+	// questions are answered in the web UI.
+	if !interactive {
+		go func() {
 			buf := make([]byte, 32*1024)
 			for {
 				n, err := os.Stdin.Read(buf)
@@ -212,22 +249,27 @@ func relayToService(conn net.Conn) int {
 					break
 				}
 			}
-		}
-		out.send(serviceFrame{T: "eof"}) //nolint:errcheck
-	}()
+			out.send(serviceFrame{T: "eof"}) //nolint:errcheck
+		}()
+	}
 
 	dec := json.NewDecoder(bufio.NewReader(conn))
+	counter := false // a counter is shown, on the line the cursor is on
 	for {
 		var f serviceFrame
 		if err := dec.Decode(&f); err != nil {
 			messageln("The service ended the connection.")
 			return 1
 		}
+		if counter && f.T != "status" && f.T != "result" && f.T != "question" && f.T != "ask" {
+			os.Stderr.WriteString("\r\033[K") //nolint:errcheck
+			counter = false
+		}
 		switch f.T {
-		case "ask":
-			select {
-			case asks <- struct{}{}:
-			default:
+		case "status": // only a counter: the rest is in the log text
+			if interactive && f.S != nil && f.S.Live {
+				os.Stderr.WriteString("\r\033[K" + f.S.Progress) //nolint:errcheck
+				counter = f.S.Progress != ""
 			}
 		case "out":
 			os.Stdout.WriteString(f.D) //nolint:errcheck
@@ -261,7 +303,11 @@ func startService() {
 		messagef("Cannot open %s: %s\n", serviceLogPath(), err)
 		endRun(1)
 	}
-	cmd := exec.Command(exe, "-base", libraryBase(), "-serve")
+	args := []string{"-base", libraryBase(), "-serve"}
+	if keyPrefixArg != "" { // a new library
+		args = append(args, "-key_prefix", keyPrefixArg)
+	}
+	cmd := exec.Command(exe, args...)
 	cmd.Stdout, cmd.Stderr = logFile, logFile
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true} // not stopped by the terminal's Ctrl-C or closing
 	if err := cmd.Start(); err != nil {
@@ -471,6 +517,7 @@ type TService struct {
 	mu      sync.Mutex
 	busy    bool   // a job runs
 	jobStop func() // stops the running job gracefully (as Ctrl-C)
+	job     *TJob  // the running job's dialogue
 	jobArgs []string
 	jobFrom time.Time
 
@@ -683,7 +730,10 @@ func (s *TService) runJob(req serviceFrame, dec *json.Decoder, out *frameSender)
 		}
 		if !toldAsking && dialogue.Asking() {
 			toldAsking = true
-			out.send(serviceFrame{T: "info", D: "It waits for an answer in the web UI's Actions tab (bib.check -ui).\n"}) //nolint:errcheck
+			out.send(serviceFrame{T: "info", D: "It waits for an answer in the web UI's Actions tab: " + s.web.URL() + "#dialogue\n"}) //nolint:errcheck
+			if req.Interactive {
+				out.send(serviceFrame{T: "open", D: s.web.URL() + "#dialogue"}) //nolint:errcheck
+			}
 		}
 		time.Sleep(300 * time.Millisecond)
 		s.mu.Lock()
@@ -709,7 +759,7 @@ func (s *TService) runJob(req serviceFrame, dec *json.Decoder, out *frameSender)
 			return
 		}
 		s.mu.Lock()
-		s.busy, s.jobStop, s.lastActive = false, nil, time.Now()
+		s.busy, s.jobStop, s.job, s.lastActive = false, nil, nil, time.Now()
 		s.mu.Unlock()
 	}()
 
@@ -768,6 +818,20 @@ func (s *TService) runJob(req serviceFrame, dec *json.Decoder, out *frameSender)
 		return
 	}
 
+	job := newJob(jobTitle(req.Args), "command line")
+	s.mu.Lock()
+	s.job = job
+	s.mu.Unlock()
+	sio.job = job
+	code := 1
+	defer func() {
+		job.finish(code)
+		dialogue.finishIf(job, code)
+	}()
+	if req.Interactive {
+		job.setReply(sio.answer)
+		job.onAsk = func() { s.bringQuestionUp(job, out) }
+	}
 	inService := runsInService()
 	where := "child process"
 	if inService {
@@ -776,13 +840,12 @@ func (s *TService) runJob(req serviceFrame, dec *json.Decoder, out *frameSender)
 	fmt.Fprintf(os.Stderr, "%s  job (%s): %s (in %s)\n", time.Now().Format(time.DateTime), where,
 		strings.Join(req.Args, " "), req.Cwd)
 
-	var code int
 	if inService {
 		s.mu.Lock()
-		s.jobStop = sio.interrupt
+		s.jobStop = func() { job.withdraw(); sio.interrupt() }
 		s.mu.Unlock()
 		deferServicePush = !cmdPush // -push pushes now
-		go relayInput(dec, sio)
+		go relayInput(dec, sio, job)
 		cwd, _ := os.Getwd()
 		if err := os.Chdir(req.Cwd); err != nil {
 			refuse(out, "The service cannot use the folder %s: %s\n", req.Cwd, err)
@@ -795,7 +858,7 @@ func (s *TService) runJob(req serviceFrame, dec *json.Decoder, out *frameSender)
 		}
 		os.Chdir(cwd) //nolint:errcheck
 	} else {
-		code = s.runChildJob(req, dec, out)
+		code = s.runChildJob(req, dec, out, job)
 		serviceLibraryLevel = libraryNotLoaded // the child may have changed the database
 	}
 	fmt.Fprintf(os.Stderr, "%s  job done (exit %d)\n", time.Now().Format(time.DateTime), code)
@@ -804,7 +867,7 @@ func (s *TService) runJob(req serviceFrame, dec *json.Decoder, out *frameSender)
 
 // runChildJob runs one command as a child process (the same binary, the same
 // arguments), relaying its frames, input and output, and returns its exit code.
-func (s *TService) runChildJob(req serviceFrame, dec *json.Decoder, out *frameSender) int {
+func (s *TService) runChildJob(req serviceFrame, dec *json.Decoder, out *frameSender, job *TJob) int {
 	c, err := startFrameChild(req.Args, req.Cwd, req.Interactive, func(kind, d string) {
 		webLog.write(d)
 		out.send(serviceFrame{T: kind, D: d}) //nolint:errcheck
@@ -813,32 +876,40 @@ func (s *TService) runChildJob(req serviceFrame, dec *json.Decoder, out *frameSe
 		out.send(serviceFrame{T: "err", D: fmt.Sprintf("The service cannot run the job: %s\n", err)}) //nolint:errcheck
 		return 1
 	}
+	stop := func() {
+		c.interrupt()
+		if job.withdraw() {
+			c.answer("q\n", "")
+		}
+	}
 	s.mu.Lock()
-	s.jobStop = c.interrupt
+	s.jobStop = stop
 	s.mu.Unlock()
+	if req.Interactive {
+		job.setReply(func(a TAnswer) { c.answer(a.line()+"\n", a.value()) })
+	}
 
-	// From the command line: answers (when a person is there; otherwise data for
-	// its stdin), end of input, Ctrl-C. When the command line goes away (terminal
+	// From the command line: data for its stdin (when no person is there), end of
+	// input, Ctrl-C. When the command line goes away (terminal
 	// closed), the job is stopped as with Ctrl-C.
 	go func() {
 		for {
 			var f serviceFrame
 			if err := dec.Decode(&f); err != nil {
+				job.withdraw()
 				c.interrupt()
 				c.endInput()
 				return
 			}
 			switch f.T {
 			case "in":
-				if req.Interactive {
-					c.answer(f.D)
-				} else {
+				if !req.Interactive {
 					io.WriteString(c.stdin, f.D) //nolint:errcheck
 				}
 			case "eof":
 				c.endInput()
 			case "int":
-				c.interrupt()
+				stop()
 			}
 		}
 	}()
@@ -846,8 +917,42 @@ func (s *TService) runChildJob(req serviceFrame, dec *json.Decoder, out *frameSe
 		if f.T == "out" || f.T == "err" {
 			webLog.write(f.D)
 		}
-		out.send(f) //nolint:errcheck
+		if f.T != "question" && f.T != "ask" {
+			out.send(f) //nolint:errcheck
+		}
+		job.take(f)
 	})
+}
+
+// bringQuestionUp brings a question of a job of a command line up in the web UI:
+// shown in the Actions tab, the browser opened for the first one.
+func (s *TService) bringQuestionUp(job *TJob, out *frameSender) {
+	if s.web == nil || s.web.server == nil {
+		out.send(serviceFrame{T: "info", D: "The job asks something, but the web UI is not running (see the service log): the job is stopped.\n"}) //nolint:errcheck
+		s.mu.Lock()
+		stop := s.jobStop
+		s.mu.Unlock()
+		if stop != nil {
+			go stop()
+		}
+		return
+	}
+	first := dialogue.show(job)
+	out.send(serviceFrame{T: "info", D: "A question waits for your answer in the web UI's Actions tab: " + s.web.URL() + "#dialogue\n"}) //nolint:errcheck
+	if first {
+		out.send(serviceFrame{T: "open", D: s.web.URL() + "#dialogue"}) //nolint:errcheck
+	}
+}
+
+// jobTitle is a command line as a job's title (without its -base).
+func jobTitle(args []string) string {
+	if len(args) >= 2 && args[0] == "-base" {
+		args = args[2:]
+	}
+	if len(args) == 0 {
+		return "check"
+	}
+	return strings.Join(args, " ")
 }
 
 // TFrameChild is a job run as a child process that speaks the service's frames
@@ -922,9 +1027,10 @@ func startFrameChild(args []string, dir string, interactive bool, raw func(kind,
 	return c, nil
 }
 
-// answer gives the child a line (with its newline) for the question it asks.
-func (c *TFrameChild) answer(text string) {
-	c.answers.send(serviceFrame{T: "in", D: text}) //nolint:errcheck
+// answer gives the child a line (with its newline) for the question it asks, and
+// the value that goes with it, if any.
+func (c *TFrameChild) answer(text, value string) {
+	c.answers.send(serviceFrame{T: "in", D: text, V: value}) //nolint:errcheck
 }
 
 // endInput ends the child's input: no more answers, end of its stdin.

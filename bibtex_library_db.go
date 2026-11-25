@@ -304,7 +304,7 @@ func loadBibTeXSettings() {
 		// prepareWorkingDatabase) is responsible for not calling loadBibTeXSettings at all
 		// when the working DB has not yet been populated from home — by the time we get
 		// here, the config table is assumed to genuinely lack a key_prefix.
-		keyPrefix = promptKeyPrefix()
+		keyPrefix = newKeyPrefix()
 		SetConfig("key_prefix", keyPrefix)
 	}
 	if v := GetConfig("csv_delimiter", ""); v != "" {

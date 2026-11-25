@@ -58,7 +58,7 @@ func loadHarvestIgnoreKeys(path string) {
 func writeDefaultHarvestIgnoreKeys(path string) {
 	f, err := os.Create(path)
 	if err != nil {
-		messagef("Warning: could not write harvest ignore-keys file %s: %s\n", path, err)
+		emit(TMessage{Kind: "warning", Text: fmt.Sprintf("Could not write the harvest ignore-keys file %s: %s", path, err)})
 		return
 	}
 	defer f.Close()
@@ -307,7 +307,7 @@ func (l *TBibTeXLibrary) askHarvestLibraryChoice(e TBibTeXEntry, keys []string) 
 	var offered []*TQuestionEntry
 	for i, k := range keys {
 		options.Add(fmt.Sprintf("%d", i+1))
-		c := l.questionEntryOf("", k)
+		c := l.questionEntryWithParent("", k)
 		offered = append(offered, &c)
 	}
 	about := TQuestion{Topic: "library_candidate", Entries: []TQuestionEntry{questionEntryOfFields("Source entry", e.Key, e.Fields)},
@@ -359,20 +359,6 @@ func (l *TBibTeXLibrary) harvestFindDblpCandidates(e TBibTeXEntry, excludeDblpKe
 	// being matched, especially since the candidates themselves can be only loosely
 	// related (the title hash ignores case/hyphenation on purpose, to still catch
 	// near-duplicate titles).
-	messagef("\nSource entry:\n")
-	printEntryFields(e.Fields[EntryTypeField], e.Key, e.Fields)
-	messagef("\n")
-	for i, c := range candidates {
-		messagef("  [%d] %s", i+1, c)
-		if entry := dblpEntryFromStore(c); entry != nil {
-			for _, field := range []string{"title", "year", "author", "booktitle", "journal"} {
-				if v := entry.Fields[field]; v != "" {
-					messagef("\n      %-12s: %s", field, v)
-				}
-			}
-		}
-		messageln()
-	}
 	options := TStringSetNew()
 	options.Add("0", "k")
 	for i := range candidates {
@@ -383,7 +369,7 @@ func (l *TBibTeXLibrary) harvestFindDblpCandidates(e TBibTeXEntry, excludeDblpKe
 	for _, c := range candidates {
 		offered = append(offered, l.questionDblpCandidate(c))
 	}
-	about.Options = candidateOptions(offered)
+	about.Options = append(candidateOptions(offered), TQuestionOption{Key: "k", Value: "DBLP key"})
 	answer := l.WarningQuestionAbout(about, QuestionHarvestDblpChoose, options,
 		WarningHarvestDblpCandidatesFound, e.Fields[TitleField], len(candidates))
 	if answer == "k" {
@@ -402,24 +388,11 @@ func (l *TBibTeXLibrary) harvestFindDblpCandidates(e TBibTeXEntry, excludeDblpKe
 
 // --- Display ---
 
-// printEntryFields prints all non-empty fields of a TBibTeXEntry to stderr.
-func printEntryFields(entryType, key string, fields map[string]string) {
-	messagef("  @%s{%s,\n", entryType, key)
-	sorted := make([]string, 0, len(fields))
-	for f := range fields {
-		if f != EntryTypeField {
-			sorted = append(sorted, f)
-		}
-	}
-	sort.Strings(sorted)
-	for _, field := range sorted {
-		if v := fields[field]; v != "" {
-			messagef("    %-*s = {%s},\n", BibTeXFieldColumnWidth, field, v)
-		}
-	}
-	messagef("  }\n")
+// showLibraryEntry shows a library entry under heading, as an "entry" message.
+func (l *TBibTeXLibrary) showLibraryEntry(heading, key string) {
+	e := l.questionEntryWithParent("", key)
+	emit(TMessage{Kind: "entry", Text: heading, Entry: &e})
 }
-
 
 // transferHarvestKey appends localKey;finalKey to the harvest_transfer target's keys file.
 func transferHarvestKey(localKey, finalKey string) {
@@ -473,9 +446,9 @@ func maybeCollectKeyHint(l *TBibTeXLibrary, sourceKey, finalKey string) {
 // with ':', ';', and '\' each escaped by '\'.
 func jabrefPDFPath(ref string) string {
 	// Temporarily replace escape sequences so we can split on bare delimiters.
-	safe := strings.ReplaceAll(ref, `\\`, "\x01")  // protect escaped backslash
-	safe = strings.ReplaceAll(safe, `\:`, "\x02")  // protect escaped colon
-	safe = strings.ReplaceAll(safe, `\;`, "\x03")  // protect escaped semicolon
+	safe := strings.ReplaceAll(ref, `\\`, "\x01") // protect escaped backslash
+	safe = strings.ReplaceAll(safe, `\:`, "\x02") // protect escaped colon
+	safe = strings.ReplaceAll(safe, `\;`, "\x03") // protect escaped semicolon
 
 	restore := func(s string) string {
 		s = strings.ReplaceAll(s, "\x03", ";")
@@ -743,6 +716,14 @@ func (l *TBibTeXLibrary) fixHowPublishedURLField(key string) {
 // Writes the outcome to syncState when non-nil (watch mode).
 // Returns the resolved canonical key (empty if not resolved) and whether the user quit.
 func (l *TBibTeXLibrary) runHarvestEntry(e TBibTeXEntry, syncState *TSyncState) (string, bool) {
+	// What became of the entry, told as an "outcome" message when it is done.
+	var action, target, how string
+	defer func() {
+		if action != "" {
+			emit(TMessage{Kind: "outcome", Indent: "  ", Key: e.Key, Action: action, Target: target, Text: how})
+		}
+	}()
+	done := func(act, finalKey, why string) { action, target, how = act, finalKey, why }
 	recordStatus := func(status string) {
 		if syncState != nil && e.Key != "" {
 			syncState.SetStatus(e.Key, status)
@@ -790,9 +771,8 @@ func (l *TBibTeXLibrary) runHarvestEntry(e TBibTeXEntry, syncState *TSyncState) 
 		return key, l.QuitWasRequested()
 	}
 
-	// Always show the source entry first.
-	messagef("\nSource entry:\n")
-	printEntryFields(e.Fields[EntryTypeField], e.Key, e.Fields)
+	// The source entry is named by its "item" message; a question about it carries
+	// the entry itself (shown with the question).
 
 	// Step 1: key hint / alias match.
 	// The entry is already in the library (matched via KeyToKey alias/oldie or a
@@ -808,8 +788,7 @@ func (l *TBibTeXLibrary) runHarvestEntry(e TBibTeXEntry, syncState *TSyncState) 
 	// content or plain field additions resolve without asking) but, unlike before,
 	// may occasionally prompt when the two sides genuinely conflict.
 	if keyMatch := l.harvestKeyMatch(e); keyMatch != "" {
-		messagef("Key match:\n")
-		message(l.entryDisplayString(keyMatch))
+		l.showLibraryEntry("Key match", keyMatch)
 		l.Progress("Already in library as %s", keyMatch)
 		finalKey := mergeAndCheck(addHarvestEntry(l, e), keyMatch)
 		l.fixMiscJournalField(finalKey, e.Fields)
@@ -823,6 +802,7 @@ func (l *TBibTeXLibrary) runHarvestEntry(e TBibTeXEntry, syncState *TSyncState) 
 		// "Automatic, no user interaction" no longer holds unconditionally — mergeAndCheck
 		// above may have prompted and been answered "q"; propagate that up so
 		// runHarvestLoop stops instead of moving on to the next entry.
+		done("merged into", finalKey, "key match")
 		return finalKey, l.QuitWasRequested()
 	}
 
@@ -836,8 +816,7 @@ func (l *TBibTeXLibrary) runHarvestEntry(e TBibTeXEntry, syncState *TSyncState) 
 	if dblpKey := e.Fields[DBLPField]; dblpKey != "" {
 		if canon := LookupDblpCanonical(dblpKey); canon != "" {
 			if matched := l.MapEntryKey(canon); l.EntryExists(matched) {
-				messagef("DBLP key match in library:\n")
-				message(l.entryDisplayString(matched))
+				l.showLibraryEntry("DBLP key match in library", matched)
 				finalKey := mergeAndCheck(addHarvestEntry(l, e), matched)
 				maybeCollectKeyHint(l, e.Key, finalKey)
 				l.maybeHarvestPDF(e, finalKey)
@@ -848,6 +827,7 @@ func (l *TBibTeXLibrary) runHarvestEntry(e TBibTeXEntry, syncState *TSyncState) 
 				// The DBLP key match itself needs no confirmation, but mergeAndCheck
 				// above may still have prompted for a conflicting field and been
 				// answered "q" — propagate that up.
+				done("merged into", finalKey, "DBLP key match")
 				return finalKey, l.QuitWasRequested()
 			}
 		}
@@ -855,12 +835,7 @@ func (l *TBibTeXLibrary) runHarvestEntry(e TBibTeXEntry, syncState *TSyncState) 
 
 	// Step 2: title match in library (may find multiple).
 	if titleMatches := l.harvestTitleMatches(e); len(titleMatches) > 0 {
-		messagef("Title match(es) in library:\n")
-		for i, k := range titleMatches {
-			messagef("[%d]\n", i+1)
-			message(l.entryDisplayString(k))
-		}
-		pick := l.askHarvestLibraryChoice(e, titleMatches)
+		pick := l.askHarvestLibraryChoice(e, titleMatches) // the matches are in the question
 		if l.QuitWasRequested() {
 			return "", true
 		}
@@ -872,6 +847,7 @@ func (l *TBibTeXLibrary) runHarvestEntry(e TBibTeXEntry, syncState *TSyncState) 
 			addToHarvestGroup(l, finalKey)
 			transferHarvestKey(e.Key, finalKey)
 			recordStatus(finalKey)
+			done("merged into", finalKey, "title match")
 			return finalKey, l.QuitWasRequested()
 		}
 		declinedTitleMatches = titleMatches
@@ -892,6 +868,7 @@ func (l *TBibTeXLibrary) runHarvestEntry(e TBibTeXEntry, syncState *TSyncState) 
 		if chosen != "" {
 			newKey := addHarvestEntry(l, e)
 			l.AssociateDblpKey(newKey, chosen)
+			defer func() { done("added as", l.MapEntryKey(newKey), "DBLP "+chosen) }()
 			finalKey := l.MapEntryKey(newKey)
 			l.Progress("Checking %s", finalKey)
 			doAllChecks(finalKey)
@@ -914,8 +891,11 @@ func (l *TBibTeXLibrary) runHarvestEntry(e TBibTeXEntry, syncState *TSyncState) 
 	// follow bib via the .sync DB weave table.
 	validActions := TStringSetNew()
 	validActions.Add("a").Add("k").Add("m").Add("s").Add("i").Add("q")
-	switch l.WarningQuestion(QuestionHarvestAction, validActions, "") {
+	switch l.WarningQuestionAbout(TQuestion{Entries: []TQuestionEntry{questionEntryOfFields("Source entry", e.Key, e.Fields)},
+		Options: []TQuestionOption{{Key: "k", Value: "DBLP key"}, {Key: "m", Value: "key to merge into"}}},
+		QuestionHarvestAction, validActions, "") {
 	case "q":
+		done("stopped", "", "")
 		return "", true
 	case "k":
 		typed, err := Reporting.AskForInput("DBLP key")
@@ -924,6 +904,7 @@ func (l *TBibTeXLibrary) runHarvestEntry(e TBibTeXEntry, syncState *TSyncState) 
 				newKey := addHarvestEntry(l, e)
 				l.AssociateDblpKey(newKey, dblpKey)
 				sessionManualDblpAssignments++
+				defer func() { done("added as", l.MapEntryKey(newKey), "DBLP "+dblpKey) }()
 				finalKey := l.MapEntryKey(newKey)
 				doAllChecks(finalKey)
 				finalKey = l.MapEntryKey(finalKey)
@@ -936,19 +917,26 @@ func (l *TBibTeXLibrary) runHarvestEntry(e TBibTeXEntry, syncState *TSyncState) 
 				return finish(finalKey)
 			}
 		}
+		if typed != "" {
+			done("skipped", "", "no DBLP entry "+typed)
+		} else {
+			done("skipped", "", "no DBLP key given")
+		}
 		return "", false
 	case "m":
 		for {
-			message("Merge into EP key: ")
-			sendQuestion(&TQuestion{Kind: "text", Text: "Merge into EP key"})
-			targetKey := readStdinLine()
+			targetKey, err := l.AskForInput("Merge into EP key")
+			if err != nil || l.QuitWasRequested() {
+				return "", true
+			}
 			canon := l.MapEntryKey(targetKey)
 			if !l.EntryExists(canon) {
-				messagef("  Entry %q not found in library — try again.\n", targetKey)
+				emit(TMessage{Kind: "warning", Text: fmt.Sprintf("Entry %q is not in the library: try again", targetKey), Tight: true})
 				continue
 			}
-			message(l.entryDisplayString(canon))
+			l.showLibraryEntry("Merging into", canon)
 			finalKey := mergeAndCheck(addHarvestEntry(l, e), canon)
+			done("merged into", finalKey, "chosen")
 			maybeCollectKeyHint(l, e.Key, finalKey)
 			l.maybeHarvestPDF(e, finalKey)
 			l.maybeHarvestGroups(e, finalKey, syncState)
@@ -960,12 +948,15 @@ func (l *TBibTeXLibrary) runHarvestEntry(e TBibTeXEntry, syncState *TSyncState) 
 	case "i":
 		recordStatus(SyncStatusIgnored + ":" + harvestContentFingerprint(e))
 		addToHarvestWeave(e)
+		done("ignored", "", "")
 		return "", false
 	case "s":
 		recordStatus("skip-content:" + harvestContentFingerprint(e))
+		done("skipped", "", "")
 		return "", false
 	default: // "a"
 		newKey := addHarvestEntry(l, e)
+		defer func() { done("added as", l.MapEntryKey(newKey), "") }()
 		l.Progress("  Checking %s", l.MapEntryKey(newKey))
 		doAllChecks(newKey)
 		finalKey := l.MapEntryKey(newKey)
@@ -1026,6 +1017,17 @@ func (l *TBibTeXLibrary) runHarvestLoop(entries []TBibTeXEntry, syncState *TSync
 		return
 	}
 
+	// Each source entry is an "item" message: "[3/12] krouwel2016…" (its outcome
+	// follows as an "outcome" message, from runHarvestEntry).
+	n := 0
+	item := func(e TBibTeXEntry) {
+		n++
+		text := e.Key
+		if t := e.Fields[TitleField]; t != "" {
+			text += ": " + t
+		}
+		emit(TMessage{Kind: "item", Text: text, Key: e.Key, N: n, Of: len(pending)})
+	}
 	var interactive []TBibTeXEntry
 	autoResolved := 0
 	for _, e := range pending {
@@ -1033,6 +1035,7 @@ func (l *TBibTeXLibrary) runHarvestLoop(entries []TBibTeXEntry, syncState *TSync
 			interactive = append(interactive, e)
 			continue
 		}
+		item(e)
 		if _, quit := l.runHarvestEntry(e, syncState); quit {
 			return
 		}
@@ -1044,6 +1047,7 @@ func (l *TBibTeXLibrary) runHarvestLoop(entries []TBibTeXEntry, syncState *TSync
 	}
 
 	for _, e := range interactive {
+		item(e)
 		if _, quit := l.runHarvestEntry(e, syncState); quit {
 			return
 		}
@@ -1055,38 +1059,31 @@ func (l *TBibTeXLibrary) runHarvestLoop(entries []TBibTeXEntry, syncState *TSync
 // doHarvest opens the library, parses the source bib, and runs the interactive
 // harvest loop. path="" reads from stdin; withLog=false for one-off / stdin runs.
 func doHarvest(sourcePath string) {
-	// When reading from stdin: drain bib data to a temp file first, then reopen
-	// /dev/tty as stdin so all subsequent interactive prompts work normally.
+	// From stdin with no person there: read here. With one, the command line saved
+	// stdin to a file for the service (saveStdin).
 	tmpPath := ""
 	if sourcePath == "" {
 		tmpFile, err := os.CreateTemp("", "harvest_*.bib")
 		if err != nil {
-			messageln("harvest: cannot create temp file:", err)
+			emit(TMessage{Kind: "error", Text: fmt.Sprintf("Harvest: cannot create a temporary file: %s", err)})
 			return
 		}
 		tmpPath = tmpFile.Name()
 		if _, err := io.Copy(tmpFile, os.Stdin); err != nil {
 			tmpFile.Close()
 			os.Remove(tmpPath)
-			messageln("harvest: cannot read stdin:", err)
+			emit(TMessage{Kind: "error", Text: fmt.Sprintf("Harvest: cannot read stdin: %s", err)})
 			return
 		}
 		tmpFile.Close()
 
-		// Reconnect stdin to the terminal so crash recovery and all interactive
-		// prompts can read from the user rather than the exhausted pipe.
-		if tty, err := os.Open("/dev/tty"); err == nil {
-			os.Stdin = tty
-		} else {
-			messageln("harvest: cannot open /dev/tty for interactive input:", err)
-			os.Remove(tmpPath)
-			return
-		}
+	} else if strings.HasPrefix(filepath.Base(sourcePath), stdinFilePrefix) && filepath.Dir(sourcePath) == filepath.Clean(localDBFolder) {
+		tmpPath = sourcePath // what a command line got on stdin (saveStdin)
 	}
 
 	if !openLibraryToUpdate() {
 		if tmpPath != "" {
-			os.Remove(tmpPath)
+			os.Remove(tmpPath) //nolint:errcheck
 		}
 		return
 	}
@@ -1095,8 +1092,8 @@ func doHarvest(sourcePath string) {
 	var entries []TBibTeXEntry
 
 	if tmpPath != "" {
-		defer os.Remove(tmpPath)
 		entries, _ = Library.parseHarvestBib(tmpPath)
+		os.Remove(tmpPath) //nolint:errcheck // now, not at the end: a run that is stopped does not get there
 	} else {
 		entries, _ = Library.parseHarvestBib(sourcePath)
 	}
@@ -1109,7 +1106,12 @@ func doHarvest(sourcePath string) {
 	if len(entries) == 1 {
 		plural = "y"
 	}
-	Library.Progress(ProgressHarvestParsed, len(entries), plural, sourcePath)
+	name := filepath.Base(sourcePath)
+	if tmpPath != "" {
+		name = "standard input"
+	}
+	announceStep("Harvest of " + name)
+	Library.Progress(ProgressHarvestParsed, len(entries), plural, name)
 
 	entries = Library.preDeduplicateHarvestEntries(entries)
 	entries = reorderHarvestCrossrefsFirst(entries)
@@ -1213,7 +1215,7 @@ func runHarvestSync(cfg TBibGetConfig, baseDir string) {
 			resolved++
 		}
 	}
-	printStatBlock("Harvest result: "+cfg.FileName, []statRow{
+	printStatBlock("Harvest result for "+cfg.FileName, []statRow{
 		{"Total source entries", fmt.Sprintf("%d", len(entries)), ""},
 		{"Resolved (merged/added)", fmt.Sprintf("%d", resolved), ""},
 		{"Ignored", fmt.Sprintf("%d", ignored), ""},

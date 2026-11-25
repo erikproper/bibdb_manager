@@ -799,14 +799,11 @@ func (l *TBibTeXLibrary) MergeEntries(sourceRAW, targetRAW string) string {
 				issues = append(issues, "Entries appear to be different publications")
 			}
 			if len(issues) > 0 {
-				block := issues[0]
-				for _, iss := range issues[1:] {
-					block += "\nWARNING:  " + iss
-				}
-				block += "\nEntry " + source + ":\n" + l.entryDisplayString(source)
-				block += "Entry " + target + ":\n" + l.entryDisplayString(target)
+				block := strings.Join(issues, "\n")
 				if isDifferent {
-					if !l.WarningYesNoQuestion(QuestionMergeAnyway, "%s", block) {
+					about := TQuestion{Topic: "merge", Warning: block,
+						Entries: []TQuestionEntry{l.questionEntryWithParent("Entry "+source, source), l.questionEntryWithParent("Entry "+target, target)}}
+					if !l.WarningYesNoQuestionAbout(about, QuestionMergeAnyway, "") {
 						return target
 					}
 				} else {
@@ -1157,22 +1154,9 @@ func (l *TBibTeXLibrary) MaybeMergeEntries(sourceRAW, targetRAW string) {
 			}
 		}
 		if source != target && !l.NonDoubleEntries[source].Set().Contains(target) && !l.EvidenceForBeingDifferentEntries(source, target) {
-			l.Warning("Found potential double entries")
-
-			sourceEntry := l.entryDisplayString(source)
-			targetEntry := l.entryDisplayString(target)
-
-			if sourceEntry == "" {
-				l.Warning("Empty source entry: %s", source)
-			}
-
-			if targetEntry == "" {
-				l.Warning("Empty target entry: %s", target)
-			}
-
 			about := TQuestion{Topic: "merge", Warning: "Found potential double entries",
-				Entries: []TQuestionEntry{l.questionEntryOf("First entry", source), l.questionEntryOf("Second entry", target)}}
-			if l.WarningYesNoQuestionAbout(about, "Merge these entries", "First entry:\n%s\nSecond entry:\n%s", sourceEntry, targetEntry) {
+				Entries: []TQuestionEntry{l.questionEntryWithParent("First entry", source), l.questionEntryWithParent("Second entry", target)}}
+			if l.WarningYesNoQuestionAbout(about, "Merge these entries", "") {
 				confirmed := true
 				// A "y" here is easy to fire off on autopilot when scanning a long
 				// run — differing years are the cheapest, most reliable signal that
@@ -1182,9 +1166,8 @@ func (l *TBibTeXLibrary) MaybeMergeEntries(sourceRAW, targetRAW string) {
 				sourceYear := l.EntryFieldValueity(source, "year")
 				targetYear := l.EntryFieldValueity(target, "year")
 				if sourceYear != "" && targetYear != "" && sourceYear != targetYear {
-					confirmed = l.WarningYesNoQuestion("The years differ — are you sure you want to merge these entries",
-						"First entry (year %s):\n%s\nSecond entry (year %s):\n%s",
-						sourceYear, sourceEntry, targetYear, targetEntry)
+					about.Warning = fmt.Sprintf("The years differ: %s and %s", sourceYear, targetYear)
+					confirmed = l.WarningYesNoQuestionAbout(about, "Are you sure you want to merge these entries", "")
 				}
 				if confirmed {
 					l.MergeEntries(source, target)

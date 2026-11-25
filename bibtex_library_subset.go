@@ -20,6 +20,7 @@ package main
 import (
 	"crypto/md5"
 	"encoding/hex"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -365,10 +366,9 @@ func applySubsetBibToDb(bibEntry TBibTeXEntry, canonicalKey string, trusted bool
 		}
 		if len(illegalFields) > 0 {
 			sort.Strings(illegalFields)
-			for _, f := range illegalFields {
-				messagef("WARNING: entry %s has field %q which is not allowed for entry type %q — it will be ignored during merge.\n", canonicalKey, f, entryType)
-			}
-			if !Library.ConfirmAction("Proceed anyway (illegal fields will be dropped)") {
+			about := TQuestion{Key: canonicalKey, Warning: fmt.Sprintf("Entry %s has fields that are not allowed for entry type %q; they will be ignored during the merge: %s",
+				canonicalKey, entryType, strings.Join(illegalFields, ", "))}
+			if !Library.ConfirmActionAbout(about, "Proceed anyway (illegal fields will be dropped)") {
 				subsetSyncBailOut()
 			}
 		}
@@ -377,15 +377,12 @@ func applySubsetBibToDb(bibEntry TBibTeXEntry, canonicalKey string, trusted bool
 	toClear := subsetFieldsToClear(cleanEntry.Fields, dbEntry)
 	newType := cleanEntry.Fields[EntryTypeField]
 
-	messagef("\nSubset bib entry (changed):\n")
-	printEntryFields(cleanEntry.Fields[EntryTypeField], cleanEntry.Key, cleanEntry.Fields)
-	messagef("Library entry:\n")
-	message(Library.entryDisplayString(canonicalKey))
+	about := TQuestion{Key: canonicalKey, Entries: []TQuestionEntry{
+		questionEntryOfFields("Subset bib entry (changed)", cleanEntry.Key, cleanEntry.Fields), Library.questionEntryWithParent("Library entry", canonicalKey)}}
 	if len(toClear) > 0 {
-		messagef("Fields to clear: %s\n", strings.Join(toClear, ", "))
+		about.Values = []TQuestionValue{{Role: "fields to clear", Value: strings.Join(toClear, ", ")}}
 	}
-
-	if !Library.ConfirmAction(QuestionSubsetBibChanged) {
+	if !Library.ConfirmActionAbout(about, QuestionSubsetBibChanged) {
 		return canonicalKey
 	}
 	// Apply type change before MergeEntries — otherwise priority logic silently
@@ -411,9 +408,8 @@ func applySubsetBibToDb(bibEntry TBibTeXEntry, canonicalKey string, trusted bool
 // moved to <stem>.trash/ alongside the local .files/ folder.
 func deleteSubsetEntry(canonicalKey, localFilesDir, outputKey string, trusted bool) bool {
 	if !trusted {
-		messagef("\nEntry deleted from subset bib:\n")
-		message(Library.entryDisplayString(canonicalKey))
-		if !Library.ConfirmAction(QuestionSubsetDeleteEntry) {
+		about := TQuestion{Key: canonicalKey, Entries: []TQuestionEntry{Library.questionEntryWithParent("Entry deleted from subset bib", canonicalKey)}}
+		if !Library.ConfirmActionAbout(about, QuestionSubsetDeleteEntry) {
 			return false
 		}
 	}
@@ -1093,12 +1089,9 @@ func runSubsetUpSync(cfg TBibGetConfig, sourcePath, keysBasePath string, syncSta
 			continue
 		}
 		if c.status == statusBothChanged && !cfg.TrustedSubset {
-			messagef("\nBoth bib and DB changed for %s.\n", c.canonicalKey)
-			messagef("DB entry:\n")
-			message(Library.entryDisplayString(c.canonicalKey))
-			messagef("Bib entry:\n")
-			printEntryFields(c.bibEntry.Fields[EntryTypeField], c.bibEntry.Key, c.bibEntry.Fields)
-			if !Library.ConfirmAction(QuestionSubsetBothChanged) {
+			about := TQuestion{Key: c.canonicalKey, Warning: fmt.Sprintf("Both bib and DB changed for %s", c.canonicalKey), Entries: []TQuestionEntry{
+				Library.questionEntryWithParent("DB entry", c.canonicalKey), questionEntryOfFields("Bib entry", c.bibEntry.Key, c.bibEntry.Fields)}}
+			if !Library.ConfirmActionAbout(about, QuestionSubsetBothChanged) {
 				continue // keep DB version
 			}
 		}

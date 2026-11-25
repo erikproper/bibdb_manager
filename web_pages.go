@@ -273,8 +273,9 @@ table.compare td.kept { box-shadow: inset 2px 0 0 var(--ok); }
         <button class="action danger" id="dlgstop" hidden title="Stop the job, as Ctrl-C does">Stop</button></div>
     </div>
     <div class="card" id="dlgstepcard" hidden><h2>Progress</h2>
-      <table class="list"><tr><td class="field">step</td><td id="dlgstep"></td></tr><tr><td class="field">sub-step</td><td id="dlgsub"></td></tr>
-        <tr><td class="field">now</td><td class="key" id="dlgnow"></td></tr></table></div>
+      <table class="list"><tr><td class="field">step</td><td id="dlgstep"></td></tr><tr><td class="field">item</td><td id="dlgsub"></td></tr>
+        <tr><td class="field">now</td><td id="dlgnow"></td></tr></table></div>
+    <div class="card" id="dlgoutcard" hidden><h2>Result</h2><div id="dlgout"></div></div>
     <div class="card" id="dlgnotescard" hidden><h2>Warnings</h2><div id="dlgnotes"></div></div>
     <div class="card" id="dlghistcard" hidden><h2>Answers</h2><table class="list" id="dlghist"></table></div>
   </div></section>
@@ -472,7 +473,6 @@ async function pollState() {
   // The Actions tab's light (amber): the current job waits for an answer, wherever
   // it was started; or the library could not load without one.
   const waitTitle = st.asking ? "A question waits for your answer here"
-    : (st.terminal && st.busy) ? "The running job (" + (st.job || "") + ") waits for your answer on the terminal it was started from"
     : (st.answer && !st.busy) ? "The library is not loaded: it needed an answer. Run Check here, or bib.check in a terminal." : "";
   const dlgTitle = waitTitle || "No question waiting";
   tabBtn.innerHTML = "Actions" + '<span class="' + (waitTitle ? "waiting" : "waiting idle") + '" title="' + esc(dlgTitle) + '"></span>';
@@ -498,7 +498,7 @@ setInterval(() => { if (!stopped) pollState(); }, 2000);
 // ---- Dialogue: actions, warnings, and questions as pop-ups (the output goes to the Log tab) ----
 let dlg = null, qOpen = false, qShown = ""; // qShown: the question the pop-up shows (its line and position)
 async function loadDialogue() {
-  try { dlg = await get("/api/dialogue?from=999999999", "json"); } catch (e) { lost(e); return; }
+  try { dlg = await get("/api/dialogue", "json"); } catch (e) { lost(e); return; }
   const d = dlg;
   $("dlgtitle").textContent = d.title || "No job yet";
   $("dlgstate").textContent = d.title ? (d.running ? (d.asking ? "Waits for your answer" : "Running since " + d.since) + " — its output is in the Log tab"
@@ -507,30 +507,30 @@ async function loadDialogue() {
   $("dlgdot").className = "dot " + (d.asking ? "warn" : d.running ? "busy" : "ok");
   $("dlgstop").hidden = !d.running;
   $("dlgopen").hidden = !d.asking;
-  $("dlgstepcard").hidden = !(d.running && (d.step || d.substep || d.current));
-  $("dlgstep").textContent = d.step || "—";
-  $("dlgsub").textContent = d.substep || "—";
-  $("dlgnow").textContent = (d.current || "").trim() || "—";
-  $("dlgnotescard").hidden = !(d.notes && d.notes.length);
-  $("dlgnotes").innerHTML = (d.notes || []).slice().reverse().map((n) => warnHTML(n.head, n.lines || [])).join("");
+  const st = d.status || {};
+  $("dlgstepcard").hidden = !(d.running && (st.step || st.item || st.progress));
+  $("dlgstep").textContent = st.step || "—";
+  $("dlgsub").textContent = st.item ? (st.of ? st.n + " of " + st.of + ": " : "") + st.item : "—";
+  $("dlgnow").textContent = st.progress || "—";
+  // The result so far: what became of each item, and the tables.
+  const outs = d.outcomes || [], tabs = d.tables || [];
+  $("dlgoutcard").hidden = !(outs.length || tabs.length);
+  $("dlgout").innerHTML = (outs.length ? '<table class="list">' + outs.slice().reverse().map((o) => '<tr><td class="key">' + esc(o.key) + "</td><td>" + esc(o.action) +
+      (o.text ? ' <span class="muted">(' + esc(o.text) + ")</span>" : "") + '</td><td class="key">' + (o.target ? '<a href="#" data-entry="' + esc(o.target) + '">' + esc(o.target) + "</a>" : "") + "</td></tr>").join("") + "</table>" : "") +
+    tabs.map((t) => '<div class="qtext">' + esc(t.text) + '</div><table class="list">' + (t.rows || []).map((r) => "<tr><td>" + esc(r.label) + '</td><td style="text-align:right">' + esc(r.value) +
+      '</td><td class="muted">' + esc(r.note || "") + "</td></tr>").join("") + "</table>").join("");
+  $("dlgnotescard").hidden = !(d.warnings && d.warnings.length);
+  $("dlgnotes").innerHTML = (d.warnings || []).slice().reverse().map((w) => { const ls = w.text.trim().split("\n"); return warnHTML((w.kind === "error" ? "Error: " : "") + ls[0], ls.slice(1)); }).join("");
   $("dlghistcard").hidden = !(d.history && d.history.length);
   $("dlghist").innerHTML = (d.history || []).map((h) => '<tr><td class="year">' + esc(h.at) + "</td><td>" + esc(h.question.replace(/^QUESTION:\s*/, "")) +
     '</td><td class="key">' + esc(h.answer) + "</td></tr>").join("");
   // The question pop-up: opened while the tab is shown; a new question re-uses it; when the
   // job goes on without asking, it waits (Confirm greyed); when the job ends, it says so.
-  // A key chosen in Lookup answers the question that asks for it ("DBLP key").
-  const asksText = d.asking && d.q && d.q.kind === "text";
-  if (asksText && pendingDblpKey && /key/i.test(d.q.text)) {
-    const k = pendingDblpKey; pendingDblpKey = ""; sendAnswer(k); return;
-  }
-  // A value typed in the pop-up (Edit) answers the question that asks for it.
-  if (asksText && pendingText !== null) {
-    const t = pendingText; pendingText = null; sendAnswer(t); return;
-  }
   const key = qKey(d);
   if (current === "dialogue") {
     if (d.asking && (!qOpen || key !== qShown) && (qOpen || !$("overlay").classList.contains("open"))) openQuestion();
     else if (qOpen && !d.asking && !d.running) qEnded(d);
+    else if (qOpen && !d.asking && qShown) { qShown = ""; qWaiting(); } // answered (in another tab, too): waits for the job
   }
 }
 // warnHTML renders a warning: its first line, value lines ("- Current : …") as a small
@@ -571,14 +571,14 @@ function showQuestion(d, html) {
   popup("Question — " + (d.title || ""), html, false);
   for (const b of $("mbody").querySelectorAll("button[data-qopt]")) b.onclick = () => sendAnswer(b.dataset.qopt);
 }
-function qKey(d) { return d.asking ? d.next + "|" + (d.q ? d.q.text + "|" + optKeys(d.q).join("/") : d.current) : ""; }
+function qKey(d) { return d.asking && d.q ? d.q.id : ""; }
 // editHTML: [Edit…] opens a field (prefilled); its value answers opt and then the question
 // that asks for the value.
 const editHTML = (prefill) => '<div class="qedit" hidden><input id="qeditin" value="' + esc(prefill || "") + '" autocomplete="off"><button class="action" id="qeditok">Use this value</button></div>';
 function wireEdit(opt) {
   const btn = $("qeditbtn"); if (!btn) return;
   btn.onclick = () => { $("mbody").querySelector(".qedit").hidden = false; $("qeditin").focus(); $("qeditin").select(); };
-  const go = () => { const v = $("qeditin").value.trim(); if (!v) return; pendingText = v; sendAnswer(opt); };
+  const go = () => { const v = $("qeditin").value.trim(); if (v) sendAnswer(opt, v); };
   $("qeditok").onclick = go;
   $("qeditin").onkeydown = (e) => { if (e.key === "Enter") go(); };
 }
@@ -587,14 +587,7 @@ function openQuestion() {
   const d = dlg;
   if (!d || !d.asking) return;
   const q = d.q;
-  if (!q) { // a line asked for without a question message
-    showQuestion(d, '<div class="qtext">' + esc((d.current || "").trim() || "Your answer?") + "</div>" +
-      '<div class="qactions"><input id="qtextin" placeholder="Your answer" autocomplete="off"><button class="action" id="qconfirm">Confirm</button></div>');
-    const t = $("qtextin"); t.focus();
-    t.onkeydown = (e) => { if (e.key === "Enter") sendAnswer(t.value); };
-    $("qconfirm").onclick = () => sendAnswer(t.value);
-    return;
-  }
+  if (!q) return;
   const keys = optKeys(q), has = (k) => keys.includes(k);
   const label = (k) => { const o = (q.options || []).find((x) => x.key === k); return o && o.label ? o.label : k; };
   const entries = q.entries || [];
@@ -647,10 +640,12 @@ function openQuestion() {
   if (q.kind === "text") {
     showQuestion(d, html + '<div class="qtext">' + esc(q.text || "Your answer?") + "</div>" +
       '<div class="qactions"><input id="qtextin" placeholder="Your answer" autocomplete="off"><button class="action" id="qconfirm">Confirm</button>' +
-      (q.options || []).map((o) => '<button class="plain" data-qopt="' + esc(o.key) + '">' + esc(cap(o.label || o.key)) + "</button>").join("") + "</div>");
+      (q.options || []).map((o) => '<button class="plain" data-qopt="' + esc(o.key) + '">' + esc(cap(o.label || o.key)) + "</button>").join("") +
+      '<button class="plain" id="qstoptext" title="Stop the job">Stop</button></div>');
+    $("qstoptext").onclick = () => { qWaiting(); $("dlgstop").onclick(); };
     const t = $("qtextin"); t.focus();
-    t.onkeydown = (e) => { if (e.key === "Enter") sendAnswer(t.value); };
-    $("qconfirm").onclick = () => sendAnswer(t.value);
+    t.onkeydown = (e) => { if (e.key === "Enter") sendAnswer("", t.value); };
+    $("qconfirm").onclick = () => sendAnswer("", t.value);
     return;
   }
   // A yes/no question: two buttons, named after what they do where the question says.
@@ -669,7 +664,8 @@ function openQuestion() {
   const single = radios.length === 1 && radios[0].entry && q.topic === "dblp_candidate";
   html += '<div class="qtext">' + (single ? "Possible DBLP entry match:" : esc(q.text || "Your answer?")) + "</div>" +
     '<div class="qopts">' + radios.map((o) => '<label><input type="radio" name="qopt" value="' + esc(o.key) + '"' + (single ? " checked" : "") + '><div style="flex:1">' +
-      (o.entry ? entryHTML(o.entry, false) : '<span class="qlabel">' + esc(cap(o.label || o.key)) + "</span>") + "</div></label>").join("") + "</div>" +
+      (o.entry ? entryHTML(o.entry, false) : '<span class="qlabel">' + esc(cap(o.label || o.key)) + "</span>") +
+      (o.value ? ' <input class="qval" data-for="' + esc(o.key) + '" placeholder="' + esc(cap(o.value)) + '" autocomplete="off" style="width:min(420px,90%);margin-top:4px;font:13px ui-monospace, Menlo, monospace;padding:4px 8px;border:1px solid var(--border);border-radius:6px;background:var(--card);color:var(--text)">' : "") + "</div></label>").join("") + "</div>" +
     '<div class="qactions">' + (radios.length ? '<button class="action" id="qconfirm"' + (single ? "" : " disabled") + ">Confirm</button>" : "") +
     (keyOpt ? '<button class="plain" id="qlookup" title="Find the key in the local DBLP data">Lookup</button>' : "") +
     (noneOpt ? '<button class="plain" data-qopt="0">' + esc(cap(label("0"))) + "</button>" : "") +
@@ -678,13 +674,19 @@ function openQuestion() {
   const confirmBtn = $("qconfirm");
   if (confirmBtn) {
     for (const r of $("mbody").querySelectorAll('input[name="qopt"]')) r.onchange = () => { confirmBtn.disabled = false; };
-    confirmBtn.onclick = () => { const r = $("mbody").querySelector('input[name="qopt"]:checked'); if (r) sendAnswer(r.value); };
+    for (const v of $("mbody").querySelectorAll("input.qval")) v.onfocus = () => { $("mbody").querySelector('input[name="qopt"][value="' + v.dataset.for + '"]').checked = true; confirmBtn.disabled = false; };
+    confirmBtn.onclick = () => {
+      const r = $("mbody").querySelector('input[name="qopt"]:checked');
+      if (!r) return;
+      const v = $("mbody").querySelector('input.qval[data-for="' + r.value + '"]');
+      if (v && !v.value.trim()) { v.focus(); return; }
+      sendAnswer(r.value, v ? v.value.trim() : "");
+    };
   }
   if ($("qlookup")) $("qlookup").onclick = () => openLookup(keyOpt, entries[0]);
 }
 // The Lookup pop-up: finds a DBLP key in the local DBLP data; "Use" answers the question
 // with "enter key manually" and then with that key.
-let pendingDblpKey = "", pendingText = null;
 function openLookup(keyOpt, entry, onUse) {
   const field = (name) => { const f = ((entry && entry.fields) || []).find((x) => x.name === name); return f ? f.value.replace(/[{}]/g, "") : ""; };
   const title = field("title"), firstAuthor = (field("author").split(" and ")[0] || "").trim();
@@ -709,7 +711,7 @@ function openLookup(keyOpt, entry, onUse) {
       : '<p class="muted">Nothing found.' + ($("lka").value.trim() ? "" : " Try with the author, or part of the key.") + "</p>";
     for (const b of $("lkres").querySelectorAll("button[data-use]")) b.onclick = () => {
       if (onUse) { onUse(b.dataset.use); return; } // the Add section: the key into its field
-      pendingDblpKey = b.dataset.use; sendAnswer(keyOpt);
+      sendAnswer(keyOpt, b.dataset.use);
     };
   };
   $("lkgo").onclick = search;
@@ -735,11 +737,17 @@ function qEnded(d) {
   if (b) { b.dataset.ended = "1"; b.textContent = "Done"; }
   $("qclose").onclick = () => { qOpen = false; closePopup(); };
 }
-async function sendAnswer(text) {
+// sendAnswer answers the question shown: a choice, with the value that goes with it, or a
+// text. It names the question: one answered already (in another tab) is refused.
+async function sendAnswer(choice, text) {
+  const d = dlg;
+  if (!d || !d.q) return;
+  const id = qShown; // the question in the pop-up, not one that came meanwhile
   qWaiting();
   try {
-    const r = await fetch(BASE + "/api/dialogue/answer", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }) });
-    if (!r.ok && r.status !== 409) alert(await r.text());
+    const r = await fetch(BASE + "/api/job/" + d.job + "/answer", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question: id, choice: choice || "", text: text || "" }) });
+    if (!r.ok) { toast(await r.text()); qShown = ""; } // not taken: shown again when it is still open
   } catch (e) { lost(e); }
   setTimeout(loadDialogue, 400);
 }
@@ -753,7 +761,7 @@ $("dblplookup").onclick = () => openLookup(null, null, async (key) => {
   } catch (e) { lost(e); }
   setTimeout(loadDialogue, 300);
 });
-$("dlgstop").onclick = async () => { try { await fetch(BASE + "/api/dialogue/stop", { method: "POST" }); } catch (e) {} setTimeout(loadDialogue, 300); };
+$("dlgstop").onclick = async () => { try { if (dlg && dlg.job) await fetch(BASE + "/api/job/" + dlg.job + "/stop", { method: "POST" }); } catch (e) {} setTimeout(loadDialogue, 300); };
 for (const b of document.querySelectorAll("[data-action]")) b.onclick = async () => {
   try {
     const r = await fetch(BASE + "/api/dialogue/start", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: b.dataset.action }) });

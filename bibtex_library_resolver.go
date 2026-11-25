@@ -84,6 +84,13 @@ func (l *TBibTeXLibrary) ResolveFieldValue(key, challengeKey, field, challengeRa
 		if challenge == "" {
 			return current
 		}
+		// A crossref may name its parent by a former key or an alias (e.g. a
+		// harvested bib file's key, the preferred alias): the same parent is no
+		// conflict (Erik, 2026-11-25: "aveiro2016…" against its own EP key).
+		current, challenge = l.entryKeyOf(current), l.entryKeyOf(challenge)
+		if current == challenge {
+			return current
+		}
 		// If the two crossrefs are in a parent-child relationship they are
 		// definitely different entries — merging them is wrong. The crossref
 		// should always point to the parent, so accept the one that is not
@@ -103,7 +110,10 @@ func (l *TBibTeXLibrary) ResolveFieldValue(key, challengeKey, field, challengeRa
 		}
 		sourceEntry := l.EntryString(current, "", "  ")
 		targetEntry := l.EntryString(challenge, "", "  ")
-		if l.WarningYesNoQuestion("Shall I merge the crossreferenced entries as well?",
+		about := TQuestion{Topic: "merge", Key: key,
+			Warning: fmt.Sprintf("Different crossrefs (%s, %s) for entries (%s, %s) that you want to merge", current, challenge, key, challengeKey),
+			Entries: []TQuestionEntry{l.questionEntryOf("First crossref", current), l.questionEntryOf("Second crossref", challenge)}}
+		if l.WarningYesNoQuestionAbout(about, "Shall I merge the crossreferenced entries as well?",
 			"Different crossrefs (%s, %s) for entries (%s, %s) that you want to merge.\nFirst crossref:\n%s\nSecond crossref:\n%s",
 			current, challenge, key, challengeKey, sourceEntry, targetEntry) {
 			return l.MergeEntries(challenge, current)
@@ -358,7 +368,7 @@ func (l *TBibTeXLibrary) ResolveFieldValue(key, challengeKey, field, challengeRa
 	if challengeSource != "" {
 		l.setSourceFieldSignature(key, field, challengeSource, challenge)
 	}
-	about := TQuestion{Topic: "field_challenge", Key: key, Field: field, Text: "Keep the value as is?",
+	about := TQuestion{Topic: "field_challenge", Options: []TQuestionOption{{Key: "e", Value: "the value"}}, Key: key, Field: field, Text: "Keep the value as is?",
 		Warning: "For entry " + key + " and field " + field + ": needs to be resolved",
 		Values: []TQuestionValue{{Role: "current", Value: current, Note: "lineage: " + currentLineageDisplay},
 			{Role: "challenger", Value: challenge, Note: "source: " + challengerLineageDisplay}},
@@ -657,7 +667,8 @@ func (l *TBibTeXLibrary) resolveNamePair(key, field string, namePos, nameTotal, 
 		challengerDisplay += " [" + challengerORCID + "]"
 	}
 
-	about := TQuestion{Topic: "name_pair", Key: key, Field: field,
+	about := TQuestion{Topic: "name_pair", Options: []TQuestionOption{{Key: "e", Value: "the canonical name"}}, Key: key, Field: field,
+		Warning: fmt.Sprintf("Name %d of %d (difference %d of %d) for entry %s field %s", namePos, nameTotal, diffIdx, diffTotal, key, field),
 		Values: []TQuestionValue{{Role: "current", Value: currentDisplay}, {Role: "challenger", Value: challengerDisplay}}}
 	answer := l.WarningQuestionOrderedAbout(about,
 		"Keep current name? (Y/N = everywhere, y/n = this entry only, e = edit canonical name, d = different people)",

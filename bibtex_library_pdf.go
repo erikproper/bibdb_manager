@@ -663,8 +663,11 @@ func (l *TBibTeXLibrary) CheckPDFHealth() {
 			continue
 		}
 
-		l.Warning(WarningDuplicateFileContent, remaining.String())
-		switch l.WarningQuestion(QuestionDoublePdfWaive, validAnswers, "") {
+		var sharing []TQuestionEntry
+		for _, k := range remaining.ElementsSorted() {
+			sharing = append(sharing, l.questionEntryOf("", k))
+		}
+		switch l.WarningQuestionAbout(TQuestion{Entries: sharing}, QuestionDoublePdfWaive, validAnswers, WarningDuplicateFileContent, remaining.String()) {
 		case "w":
 			for key := range remaining.Elements() {
 				l.SetMetadata(key, MetaPropWaivedDoublePdf, md5hash)

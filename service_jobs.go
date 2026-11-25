@@ -165,45 +165,44 @@ func runsInService() bool {
 // UI shows when it waits for an answer, wherever it was started.
 var currentJobIO atomic.Pointer[TSocketIO]
 
-// jobAsksOnTerminal tells whether the running job, started from a command line,
-// waits for an answer on its terminal.
-func jobAsksOnTerminal() bool {
-	sio := currentJobIO.Load()
-	if sio == nil {
-		return false
-	}
-	if _, web := sio.out.(teeSink); web {
-		return false // a job of the web UI: it asks in the Actions tab
-	}
-	return sio.asked.Load()
-}
-
 // TSocketIO is the TUserIO of a job run for a command line over the socket.
 type TSocketIO struct {
 	out         frameSink
 	interactive bool
 	lines       chan string
-	closeOnce   sync.Once
+	inputMu     sync.Mutex
+	inputEnded  bool
 	finished    atomic.Bool // the job is over: its connection ending is no Ctrl-C for the next job
-	asked       atomic.Bool // the command line was asked for a line, not yet answered
+	job         *TJob       // its dialogue as retained by the service
+	asked       atomic.Bool // the job waits for an answer
 }
 
 // interrupt stops the job gracefully, as Ctrl-C: a question waiting for its
 // answer gets "q" (plan 22.1: a stop while a question is pending counts as "q").
 func (s *TSocketIO) interrupt() {
 	interrupted.Store(true)
-	if s.asked.CompareAndSwap(true, false) {
-		select {
-		case s.lines <- "q":
-		default:
-		}
+	s.answer(TAnswer{Choice: "q"})
+}
+
+// answer gives the job the answer it waits for (nothing when it does not, or not
+// any more).
+func (s *TSocketIO) answer(a TAnswer) {
+	s.inputMu.Lock()
+	defer s.inputMu.Unlock()
+	if s.inputEnded || !s.asked.CompareAndSwap(true, false) {
+		return
+	}
+	setAnswerValue(a.value())
+	select {
+	case s.lines <- a.line():
+	default:
 	}
 }
 
-// RequestInput asks the command line to read one line from its terminal.
+// RequestInput marks that the job waits for the answer to its question.
 func (s *TSocketIO) RequestInput() {
 	if s.interactive && s.asked.CompareAndSwap(false, true) {
-		s.out.send(serviceFrame{T: "ask"}) //nolint:errcheck
+		s.job.take(serviceFrame{T: "ask"})
 	}
 }
 
@@ -217,7 +216,14 @@ func (s *TSocketIO) WriteResult(m string) {
 	s.out.send(serviceFrame{T: "out", D: m}) //nolint:errcheck
 }
 func (s *TSocketIO) Input() <-chan string { return s.lines }
-func (s *TSocketIO) endInput()            { s.closeOnce.Do(func() { close(s.lines) }) }
+func (s *TSocketIO) endInput() {
+	s.inputMu.Lock()
+	defer s.inputMu.Unlock()
+	if !s.inputEnded {
+		s.inputEnded = true
+		close(s.lines)
+	}
+}
 
 // toWebLog adds a job's output to the log page; the service's own jobs write to
 // the service log, which reaches it already.
@@ -226,7 +232,7 @@ func (s *TSocketIO) toWebLog(m string) {
 		return
 	}
 	if _, dlg := s.out.(dialogueSink); dlg {
-		return // the Actions tab's job: it writes to the log itself (summaries for its questions)
+		return // the Actions tab's job: it writes to the service log itself
 	}
 	if t, tee := s.out.(teeSink); tee {
 		if _, own := t.a.(logSink); own {
@@ -254,17 +260,20 @@ func (logSink) send(f serviceFrame) error {
 // person), with its output to sink. The caller holds the job slot.
 func (s *TService) runOwnJob(args []string, sink frameSink) int {
 	req := serviceFrame{T: "run", Args: append([]string{"-base", libraryBase()}, args...), Version: AppVersion, Base: libraryBase()}
-	sio := &TSocketIO{out: sink, lines: make(chan string)}
+	job := newJob(jobTitle(args), "service")
+	sio := &TSocketIO{out: sink, lines: make(chan string), job: job}
 	sio.endInput()
 	flag.CommandLine.SetOutput(flagOutput{sio})
 	positional, ok := parseJobArguments(req.Args)
 	if !ok {
+		job.finish(2)
 		return 2
 	}
 	req.Cwd, _ = os.Getwd()
 	deferServicePush = false // the service's own jobs (the push) push themselves
 	code := s.runJobInService(req, positional, sio)
 	sio.finished.Store(true)
+	job.finish(code)
 	return code
 }
 
@@ -394,35 +403,27 @@ func (s *TService) runJobInService(req serviceFrame, positional []string, sio *T
 	if db == nil {
 		connectToDatabase()
 	}
+	resetStatus()
 	command = selectCommand()
 	serviceJobCommand = command.name
 	runJob(command, positional)
 	return 0
 }
 
-// relayInput feeds a job's input from the command line: typed lines, end of
-// input, Ctrl-C. When the command line goes away, the job is stopped as with
+// relayInput takes what a command line sends during its job: end of input, Ctrl-C. When the command line goes away, the job is stopped as with
 // Ctrl-C. It returns when the connection ends.
-func relayInput(dec interface{ Decode(any) error }, sio *TSocketIO) {
+func relayInput(dec interface{ Decode(any) error }, sio *TSocketIO, job *TJob) {
 	for {
 		var f serviceFrame
 		if err := dec.Decode(&f); err != nil {
 			if !sio.finished.Load() {
 				interrupted.Store(true)
 			}
+			job.withdraw()
 			sio.endInput()
 			return
 		}
 		switch f.T {
-		case "in":
-			sio.asked.Store(false)
-			if sio.interactive {
-				for _, line := range strings.SplitAfter(f.D, "\n") {
-					if line != "" {
-						sio.lines <- strings.TrimSuffix(line, "\n")
-					}
-				}
-			}
 		case "eof":
 			sio.endInput()
 		case "int":
@@ -430,6 +431,7 @@ func relayInput(dec interface{ Decode(any) error }, sio *TSocketIO) {
 				if sio.interactive {
 					sio.WriteMessage("\nInterrupted — finishing the current step, then committing and saving...\n")
 				}
+				job.withdraw()
 				sio.interrupt()
 			}
 		}

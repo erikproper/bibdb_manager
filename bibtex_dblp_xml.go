@@ -713,8 +713,8 @@ func doLoadDblpXml(args []string) error {
 				pct := float64(cr.n.Load()) * 100.0 / float64(totalBytes)
 				mbRead := float64(cr.n.Load()) / 1e6
 				mbTotal := float64(totalBytes) / 1e6
-				messagef("\r  %d entries processed (%.0fs elapsed, %.0f%%, %.1f/%.0f MB)...",
-					n, elapsed, pct, mbRead, mbTotal)
+				emit(TMessage{Kind: "progress", Indent: "  ", Live: true, Text: fmt.Sprintf("%d entries processed (%.0fs elapsed, %.0f%%, %.1f/%.0f MB)...",
+					n, elapsed, pct, mbRead, mbTotal)})
 			case <-pass2Done:
 				return
 			}
@@ -725,7 +725,8 @@ func doLoadDblpXml(args []string) error {
 		processed.Store(int64(n))
 	})
 	close(pass2Done)
-	messagef("\r\033[K  %d entries processed (%.0fs).\n", count, time.Since(pass2Start).Seconds())
+	clearCounter()
+	emit(TMessage{Kind: "progress", Indent: "  ", Text: fmt.Sprintf("%d entries processed (%.0fs).", count, time.Since(pass2Start).Seconds())})
 	if err != nil {
 		builder.abort()
 		if errors.Is(err, errDblpImportInterrupted) {

@@ -1781,15 +1781,16 @@ func runFullPhase1(cfg TBibGetConfig, baseDir string) bool {
 	// The sync bib was edited externally (e.g. BibDesk): ask before re-importing;
 	// in non-interactive mode (scripted / piped) skip re-import and just overwrite.
 	if !Reporting.InteractionIsOff() {
+		var about TQuestion
 		// Warn when the DB has also been modified since the last export.
 		if mdateData, errMD := os.ReadFile(mdatePath); errMD == nil {
 			if storedUnix, parseErr := strconv.ParseInt(strings.TrimSpace(string(mdateData)), 10, 64); parseErr == nil {
 				if tableModTime("bib_entries") > storedUnix*1_000_000 {
-					dbInteraction.Warning("DB has been modified since the last sync export — re-importing will overwrite those changes.")
+					about.Warning = "The DB has been modified since the last sync export: re-importing will overwrite those changes"
 				}
 			}
 		}
-		if !Reporting.ConfirmAction(fmt.Sprintf("Sync bib was edited externally — re-import %s?", outPath)) {
+		if !Reporting.ConfirmActionAbout(about, fmt.Sprintf("Sync bib was edited externally — re-import %s?", outPath)) {
 			return true
 		}
 	} else {

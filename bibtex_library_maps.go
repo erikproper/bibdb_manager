@@ -134,6 +134,22 @@ func (l *TBibTeXLibrary) MapEntryKey(key string) string {
 	return key
 }
 
+// entryKeyOf is the key of the entry that k names: k itself, or the entry a
+// former key (key_oldies) or another key it is known by (key_hints: a preferred
+// alias, a harvested file's key) maps to. Unknown: k.
+func (l *TBibTeXLibrary) entryKeyOf(k string) string {
+	if l.EntryExists(k) {
+		return k
+	}
+	if c := l.MapEntryKey(k); c != k {
+		return c
+	}
+	if c := l.HintToKey.GetValue(k); c != "" {
+		return l.MapEntryKey(c)
+	}
+	return k
+}
+
 // LookupDBLPKey resolves a DBLP key to the library key that absorbed it, if any.
 func (l *TBibTeXLibrary) LookupDBLPKey(DBLPkey string) string {
 	return l.KeyOldies.Get(KeyForDBLP(DBLPkey))

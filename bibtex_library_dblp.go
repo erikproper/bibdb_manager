@@ -21,7 +21,6 @@ import (
 	"net/http"
 	"os"
 	"regexp"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -504,78 +503,17 @@ func (l *TBibTeXLibrary) AssociateDblpKey(key, dblpKey string) {
 // entry and asks the user to choose one (0 = none of them match).
 // Returns the chosen DBLP key, or "" when the user picks 0.
 func (l *TBibTeXLibrary) AskCandidateDblpKey(key string, candidates []string) string {
-	messagef("\nLibrary entry:\n%s\n", l.entryDisplayString(key))
-	for i, dblpKey := range candidates {
-		messagef("[%d] %s", i+1, dblpKey)
-		if entry := dblpEntryFromStore(dblpKey); entry != nil {
-			if entryType := entry.EntryType(); entryType != "" {
-				messagef(" (%s)", entryType)
-			}
-			priorityFields := []string{
-				"title", "booktitle", "journal", "year",
-				"author", "editor", "school", "publisher", "series",
-			}
-			shown := TStringSetNew()
-			shown.Add(EntryTypeField)
-			for _, field := range priorityFields {
-				shown.Add(field)
-				if v := entry.Fields[field]; v != "" {
-					messagef("\n    %-12s: %s", field, v)
-				}
-			}
-			remaining := []string{}
-			for field := range entry.Fields {
-				if !shown.Contains(field) && entry.Fields[field] != "" {
-					remaining = append(remaining, field)
-				}
-			}
-			sort.Strings(remaining)
-			for _, field := range remaining {
-				messagef("\n    %-12s: %s", field, entry.Fields[field])
-			}
-			// Show children count to let the user estimate cascading work on acceptance.
-			// For bookish candidates (proceedings/book): show their own children count.
-			// For non-bookish (inproceedings etc.): show the parent's context + children.
-			showChildrenCount := func(dblpKey string) {
-				children := readDblpCrossrefChildren(dblpKey)
-				if len(children) > 0 {
-					alreadyIn := 0
-					for _, child := range children {
-						if l.LookupDBLPKey(child) != "" {
-							alreadyIn++
-						}
-					}
-					messagef("\n    %-12s: %d total, %d already in library, %d new",
-						"children", len(children), alreadyIn, len(children)-alreadyIn)
-				}
-			}
-			if BibTeXBookish.Contains(entry.EntryType()) {
-				showChildrenCount(dblpKey)
-			} else if crossref := entry.Fields["crossref"]; crossref != "" {
-				if parent := dblpEntryFromStore(crossref); parent != nil {
-					messagef("\n  Parent: %s", crossref)
-					for _, field := range []string{"title", "booktitle", "year", "editor", "publisher", "series"} {
-						if v := parent.Fields[field]; v != "" {
-							messagef("\n    %-12s: %s", field, v)
-						}
-					}
-					showChildrenCount(crossref)
-				}
-			}
-		}
-		messagef("\n")
-	}
 	options := TStringSetNew()
 	options.Add("0", "k")
 	for i := range candidates {
 		options.Add(fmt.Sprintf("%d", i+1))
 	}
-	about := TQuestion{Topic: "dblp_candidate", Key: key, Entries: []TQuestionEntry{l.questionEntryOf("Library entry", key)}}
+	about := TQuestion{Topic: "dblp_candidate", Key: key, Entries: []TQuestionEntry{l.questionEntryWithParent("Library entry", key)}}
 	var offered []*TQuestionEntry
 	for _, c := range candidates {
 		offered = append(offered, l.questionDblpCandidate(c))
 	}
-	about.Options = candidateOptions(offered)
+	about.Options = append(candidateOptions(offered), TQuestionOption{Key: "k", Value: "DBLP key"})
 	answer := l.WarningQuestionAbout(about, QuestionExtendDblpCoverageChoose, options,
 		WarningExtendDblpCandidatesFound, key, len(candidates))
 	if answer == "k" {

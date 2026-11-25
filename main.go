@@ -55,7 +55,7 @@ var (
 	Reporting TInteraction
 )
 
-const AppVersion = "30.149"
+const AppVersion = "30.155"
 
 // Run-state flags consumed by the write tail in main.
 var (
@@ -405,7 +405,7 @@ func printSessionStats() {
 	if total > 0 {
 		pct = float64(dblpKeys) * 100.0 / float64(total)
 	}
-	printStatBlock("Library statistics:", []statRow{
+	logStatBlock("Library statistics:", []statRow{
 		{StatEntries, fmt.Sprintf("%d", total), ""},
 		{StatGroups, fmt.Sprintf("%d", len(Library.GroupEntries)), ""},
 		{StatPDFFiles, fmt.Sprintf("%d", len(Library.PDFFiles)), ""},
@@ -435,6 +435,7 @@ func openLibraryToUpdate() bool {
 		return true
 	}
 	announceStep("Opening the library")
+	defer endStep()
 	if !prepareWorkingDatabase() {
 		return false
 	}
@@ -1257,7 +1258,6 @@ outer:
 				// (e.g. a DBLP challenge with an extra author that was previously
 				// rejected/left unresolved). Silently keeping the incomplete list
 				// forever is exactly the "missing co-author" gap; ask instead.
-				Library.Progress("\nEntry: %s / field: %s\n  Current (fewer names):   %s\n  Superseded (more names): %s", p.key, p.field, winner, p.superseded)
 				ynOptions := TStringSetNew()
 				ynOptions.Add("y", "n")
 				about := TQuestion{Key: p.key, Field: p.field, Values: []TQuestionValue{
@@ -1463,29 +1463,6 @@ outer:
 		if current == nil {
 			continue
 		}
-		Library.Progress("Entry %s %s pos %d: name %q is an alias for %d contributors:",
-			r.key, r.role, r.position, r.alias, len(candidates))
-		for i, candID := range candidates {
-			cand := Library.ContributorByID[candID]
-			if cand == nil {
-				continue
-			}
-			var entryCount int
-			db.QueryRow(`SELECT COUNT(*) FROM contributor_roles WHERE contributor_id = ?`, candID).Scan(&entryCount) //nolint:errcheck
-			marker := ""
-			if candID == r.id {
-				marker = "  ← current"
-			}
-			details := fmt.Sprintf("  %d: %s  [id: %s", i+1, cand.Name, candID)
-			if cand.ORCID != "" {
-				details += "  orcid: " + cand.ORCID
-			}
-			if cand.DblpKey != "" {
-				details += "  dblp: " + cand.DblpKey
-			}
-			details += fmt.Sprintf("  entries: %d]%s", entryCount, marker)
-			Library.Progress("%s", details)
-		}
 		// Before offering the choice, check whether any candidate without a DblpKey
 		// has entries with potential DBLP matches. Resolving those first may
 		// automatically collapse the ambiguity via absorbDblpNamesCore.
@@ -1529,8 +1506,9 @@ outer:
 				"Resolving these first may eliminate this ambiguity automatically.",
 				candID, len(entriesWithCandidates))
 			Library.ResetQuestionFlag()
-			yn, _ := Library.AskForInput("Fix DBLP for these entries now? (y=yes, n=skip)")
-			if strings.TrimSpace(yn) != "y" {
+			if !Library.WarningYesNoQuestion("Fix DBLP for these entries now?",
+				"Contributor %s has %d entry/ies with potential DBLP match(es); resolving these first may eliminate the ambiguity of %q",
+				candID, len(entriesWithCandidates), r.alias) {
 				continue
 			}
 			exclusions := TStringSetNew()
@@ -1589,11 +1567,18 @@ outer:
 			}
 		}
 		Library.ResetQuestionFlag()
-		raw, inputErr := Library.AskForInput(fmt.Sprintf("Pick (1-%d), k=keep, m=merge all into #%d, q=quit", len(candidates), bestIdx))
-		if inputErr != nil {
-			break outer
+		about := TQuestion{Text: "Which contributor?", Key: r.key}
+		var keys []string
+		for i, candID := range candidates {
+			k := strconv.Itoa(i + 1)
+			keys = append(keys, k)
+			about.Options = append(about.Options, TQuestionOption{Key: k, Label: contributorLabel(candID, candID == r.id)})
 		}
-		switch strings.TrimSpace(raw) {
+		about.Options = append(about.Options, TQuestionOption{Key: "k", Label: "keep the current one"},
+			TQuestionOption{Key: "m", Label: "merge all into " + contributorLabel(candidates[bestIdx-1], false)})
+		raw := Library.WarningQuestionOrderedAbout(about, "Which contributor?", append(keys, "k", "m"),
+			"Entry %s %s pos %d: name %q is an alias for %d contributors", r.key, r.role, r.position, r.alias, len(candidates))
+		switch raw {
 		case "q":
 			break outer
 		case "k":
@@ -1630,9 +1615,8 @@ outer:
 				}
 			}
 		default:
-			n, convErr := strconv.Atoi(strings.TrimSpace(raw))
+			n, convErr := strconv.Atoi(raw)
 			if convErr != nil || n < 1 || n > len(candidates) {
-				Library.Warning("Invalid choice %q — skipping.", raw)
 				continue
 			}
 			chosenID := candidates[n-1]
@@ -1894,6 +1878,28 @@ func doCheckPDFs() {
 		Library.ReadURLsIgnoreFile()
 		Library.CheckPDFHealth()
 	}
+}
+
+// contributorLabel names a contributor in a question: name, id, ORCID, DBLP key,
+// number of entries.
+func contributorLabel(id string, current bool) string {
+	label := id
+	if c := Library.ContributorByID[id]; c != nil {
+		label = fmt.Sprintf("%s [%s", c.Name, id)
+		if c.ORCID != "" {
+			label += ", ORCID " + c.ORCID
+		}
+		if c.DblpKey != "" {
+			label += ", DBLP " + c.DblpKey
+		}
+		var n int
+		bibQueryRow(`SELECT COUNT(*) FROM contributor_roles WHERE contributor_id = ?`, id).Scan(&n) //nolint:errcheck
+		label += fmt.Sprintf(", %d entries]", n)
+	}
+	if current {
+		label += " (current)"
+	}
+	return label
 }
 
 func doAddFailedURLs() {
@@ -3438,17 +3444,12 @@ func doCorrectName(args []string) {
 	var newID string
 	bibQueryRow(`SELECT id FROM contributors WHERE name = ?`, newName).Scan(&newID) //nolint:errcheck
 
-	Library.Progress("Correcting name:")
-	Library.Progress("  bad:     %s", oldName)
-	Library.Progress("  correct: %s", newName)
-
+	about := TQuestion{Values: []TQuestionValue{{Role: "bad name", Value: oldName}, {Role: "correct name", Value: newName}}}
 	needMerge := newID != "" && newID != oldID
 	if needMerge {
-		Library.Progress("New name is already the canonical of a different contributor — merging.")
+		about.Warning = "The correct name is the canonical name of a different contributor: they are merged"
 	}
-
-	messageln("")
-	if !Reporting.ConfirmAction("Proceed?") {
+	if !Reporting.ConfirmActionAbout(about, "Correct this name?") {
 		return
 	}
 
@@ -3877,39 +3878,23 @@ func doEnrichOrcidProfilesCore() {
 			options.Add("i")
 		}
 		options.Add("e")
-		messagef("ORCID %s  %s\n  Current name      : %q\n  ORCID credit-name : %q\n",
-			p.orcid, p.id, contrib.Name, person.CreditName)
+		values := []TQuestionValue{{Role: "current name", Value: contrib.Name}, {Role: "ORCID credit-name", Value: person.CreditName}}
 		if person.DeclaredName != "" {
-			messagef("  Declared name     : %q\n", person.DeclaredName)
-		}
-		if surnameBoundaryDiffers {
-			messagef("  ^ surname boundary differs from current canonical\n")
-		}
-		if offerInferred {
-			messagef("  Inferred name     : %q  (credit-name parsed using declared surname)\n", inferredName)
-		}
-		messagef("  k=keep %q  o=use ORCID credit-name (%q)", contrib.Name, person.CreditName)
-		if offerDeclared {
-			if person.DeclaredName == contrib.Name {
-				messagef("  d=use declared (%q = current)", person.DeclaredName)
-			} else {
-				messagef("  d=use declared (%q)", person.DeclaredName)
+			v := TQuestionValue{Role: "declared name", Value: person.DeclaredName}
+			if surnameBoundaryDiffers {
+				v.Note = "surname boundary differs from the current name"
 			}
-		}
-		if options.Contains("n") {
-			messagef("  n=natural order of declared (%q)", passportNatural)
+			values = append(values, v)
 		}
 		if offerInferred {
-			messagef("  i=use inferred (%q)", inferredName)
+			values = append(values, TQuestionValue{Role: "inferred name", Value: inferredName, Note: "credit-name parsed using the declared surname"})
 		}
-		messagef("  e=edit\n")
-
 		labels := []TQuestionOption{{Key: "k", Label: fmt.Sprintf("keep %q", contrib.Name)},
 			{Key: "o", Label: fmt.Sprintf("use ORCID credit-name (%q)", person.CreditName)},
 			{Key: "d", Label: fmt.Sprintf("use declared (%q)", person.DeclaredName)},
 			{Key: "n", Label: fmt.Sprintf("natural order of declared (%q)", passportNatural)},
-			{Key: "i", Label: fmt.Sprintf("use inferred (%q)", inferredName)}, {Key: "e", Label: "edit"}}
-		answer := Library.WarningQuestionAbout(TQuestion{Text: "Which name?", Options: labels}, "", options,
+			{Key: "i", Label: fmt.Sprintf("use inferred (%q)", inferredName)}, {Key: "e", Label: "edit", Value: "the canonical name"}}
+		answer := Library.WarningQuestionAbout(TQuestion{Text: "Which name?", Options: labels, Values: values}, "", options,
 			"ORCID %s: credit-name %q differs from canonical %q for %s",
 			p.orcid, person.CreditName, contrib.Name, p.id)
 
@@ -4031,16 +4016,15 @@ func doUpgradeWatchActions() {
 			if !known {
 				// Check for ambiguity.
 				if ids, ambig := Library.AmbiguousNameToContributorIDs[e.Value]; ambig {
-					Library.Warning("Ambiguous name %q — which contributor?", e.Value)
+					about := TQuestion{Text: "Which contributor?"}
+					var keys []string
 					for i, cid := range ids {
-						name := cid
-						if contrib, ok := Library.ContributorByID[cid]; ok {
-							name = contrib.Name
-						}
-						Library.Progress("  %d) %s (%s)", i+1, name, cid)
+						k := strconv.Itoa(i + 1)
+						keys = append(keys, k)
+						about.Options = append(about.Options, TQuestionOption{Key: k, Label: contributorLabel(cid, false)})
 					}
-					Library.Progress("  0) keep as name entry")
-					choice, _ := Library.AskForInput("Enter number (0=keep as name entry)")
+					about.Options = append(about.Options, TQuestionOption{Key: "0", Label: "keep as name entry"})
+					choice := Library.WarningQuestionOrderedAbout(about, "Which contributor?", append(keys, "0"), "Watch: the name %q is ambiguous", e.Value)
 					n := 0
 					fmt.Sscan(choice, &n)
 					if n >= 1 && n <= len(ids) {
@@ -4262,6 +4246,7 @@ func main() {
 		interrupted.Store(true)
 	}()
 
+	flag.StringVar(&keyPrefixArg, "key_prefix", "", "the key prefix of a new library: two letters (e.g. -key_prefix EP)")
 	baseFlag := flag.String("base", "", "path/basename of the library (required)")
 	jobsFile := flag.String("jobs_file", "", "(test) run the commands in a file, one job per line, in one process")
 	flag.BoolVar(&forceWrite, "force_write", false, "force write even if unchanged")

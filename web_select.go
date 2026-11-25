@@ -544,7 +544,9 @@ func (s *TService) runWebJobs(cmds [][]string, dir string, out frameSink, done f
 		s.mu.Unlock()
 		return fmt.Errorf("The service is busy (%s); try again when it is done", running)
 	}
+	job := newJob(jobTitle(cmds[0]), "web UI")
 	s.busy, s.ownJob, s.jobStop, s.jobArgs, s.jobFrom = true, false, nil, cmds[0], time.Now()
+	s.job = job
 	s.mu.Unlock()
 	var sink frameSink = logSink{}
 	if out != nil {
@@ -559,12 +561,12 @@ func (s *TService) runWebJobs(cmds [][]string, dir string, out frameSink, done f
 			fmt.Fprintf(os.Stderr, "%s  job (web UI): %s (in %s)\n", time.Now().Format(time.DateTime), strings.Join(args, " "), dir)
 			req := serviceFrame{T: "run", Args: append([]string{"-base", libraryBase()}, args...), Version: AppVersion,
 				Base: libraryBase(), Cwd: dir}
-			sio := &TSocketIO{out: sink, lines: make(chan string)}
+			sio := &TSocketIO{out: sink, lines: make(chan string), job: job}
 			sio.endInput()
 			code := 2
 			if positional, ok := parseJobArguments(req.Args); ok {
 				s.mu.Lock()
-				s.jobStop = sio.interrupt
+				s.jobStop = func() { job.withdraw(); sio.interrupt() }
 				s.mu.Unlock()
 				deferServicePush = true
 				cwd, _ := os.Getwd()
@@ -586,8 +588,9 @@ func (s *TService) runWebJobs(cmds [][]string, dir string, out frameSink, done f
 			s.schedulePush()
 		}
 		s.mu.Lock()
-		s.busy, s.jobStop, s.lastActive = false, nil, time.Now()
+		s.busy, s.jobStop, s.job, s.lastActive = false, nil, nil, time.Now()
 		s.mu.Unlock()
+		job.finish(codes[len(codes)-1])
 		done(codes)
 	}()
 	return nil
@@ -608,11 +611,12 @@ type collectSink struct {
 }
 
 func (c *collectSink) send(f serviceFrame) error {
-	if f.T == "out" || f.T == "err" || f.T == "info" {
-		c.mu.Lock()
-		c.b.WriteString(f.D)
-		c.mu.Unlock()
+	if f.T != "out" && f.T != "err" && f.T != "info" {
+		return nil
 	}
+	c.mu.Lock()
+	c.b.WriteString(f.D)
+	c.mu.Unlock()
 	return nil
 }
 

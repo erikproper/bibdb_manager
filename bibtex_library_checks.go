@@ -1747,8 +1747,6 @@ func (l *TBibTeXLibrary) CheckDBLP(keyRAW string) {
 					msg := fmt.Sprintf(WarningNoDblpKeyForChild, key, entryDBLP)
 					l.ReportEntryWarning(childKey, "%s", msg)
 					l.EntryInvolvedInWarning(key)
-					messagef("\nChild entry:\n%s\nParent entry:\n%s\n",
-						l.entryDisplayString(childKey), l.entryDisplayString(key))
 					// First offer unassigned DBLP children of the parent as candidates.
 					var candidates []string
 					for _, c := range readDblpCrossrefChildren(entryDBLP) {
@@ -1773,7 +1771,9 @@ func (l *TBibTeXLibrary) CheckDBLP(keyRAW string) {
 						childOptions := TStringSetNew()
 						childOptions.Add("k", "y", "n", "s", "S")
 						for {
-							answer := l.WarningQuestion(QuestionNoDblpKeyForChildAction, childOptions, "")
+							answer := l.WarningQuestionAbout(TQuestion{Key: childKey, Warning: msg, Entries: []TQuestionEntry{l.questionEntryWithParent("Entry", childKey)},
+								Options: []TQuestionOption{{Key: "k", Value: "DBLP key"}, {Key: "S", Value: "DBLP key to look up"}}},
+								QuestionNoDblpKeyForChildAction, childOptions, "")
 							if answer == "s" {
 								l.displayDblpChildrenToC(entryDBLP, key)
 								continue
@@ -2249,12 +2249,8 @@ func (l *TBibTeXLibrary) CheckLoneProceedings() {
 			}
 		}
 
-		message("\n")
-		l.printWarningLine(WarningLoneProceedings, key)
-		message(l.entryDisplayString(key))
-
 		about := TQuestion{Key: key, Warning: fmt.Sprintf(WarningLoneProceedings, key),
-			Entries: []TQuestionEntry{l.questionEntryOf("", key)}}
+			Entries: []TQuestionEntry{l.questionEntryWithParent("", key)}, Options: []TQuestionOption{{Key: "k", Value: "DBLP key"}}}
 		switch l.WarningQuestionAbout(about, QuestionLoneProceedings, validAnswers, "") {
 		case "k":
 			if typed, err := Reporting.AskForInput("DBLP key"); err == nil && typed != "" {

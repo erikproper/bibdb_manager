@@ -154,6 +154,7 @@ func newFrameIO() *TFrameIO {
 			}
 			if f.T == "in" {
 				t.asked.Store(false)
+				setAnswerValue(f.V)
 				t.lines <- strings.TrimSuffix(f.D, "\n")
 			}
 		}

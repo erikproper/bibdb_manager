@@ -232,23 +232,19 @@ func (l *TBibTeXLibrary) handleAlignHit(key string, h titleAlignHit, autoAccept 
 		l.applyAlignHit(key, h, h.proposed)
 		return false
 	}
-	l.printWarningLine("Title/booktitle alignment (%s) for %s", h.kind, key)
-	messagef("Field(s): %s\n", strings.Join(h.fields, ", "))
-	messagef("Current:  %s\n", h.original)
+	values := []TQuestionValue{{Role: "field(s)", Value: strings.Join(h.fields, ", ")}, {Role: "current", Value: h.original}}
 	if h.kind != "country" {
-		label := strings.ToUpper(h.kind[:1]) + h.kind[1:]
 		value := h.extracted
 		if h.targetField != "" && strings.Trim(h.targetField, "{}") != h.extracted {
 			value += fmt.Sprintf(" (%s field: %s)", h.kind, h.targetField)
 		}
-		messagef("%-9s %s\n", label+":", value)
+		values = append(values, TQuestionValue{Role: h.kind, Value: value})
 	}
-	messagef("Proposed: %s\n", h.proposed)
-	message("QUESTION: Action (a=accept, m=modify, s=skip, w=waive, q=quit): ")
+	values = append(values, TQuestionValue{Role: "proposed", Value: h.proposed})
 	q := &TQuestion{Kind: "choice", Key: key, Field: strings.Join(h.fields, ", "), Text: "Action?",
 		Warning: fmt.Sprintf("Title/booktitle alignment (%s) for %s", h.kind, key),
-		Values:  []TQuestionValue{{Role: "current", Value: h.original}, {Role: "proposed", Value: h.proposed}},
-		Options: []TQuestionOption{{Key: "a", Label: "accept"}, {Key: "m", Label: "modify"}, {Key: "s", Label: "skip"},
+		Values:  values,
+		Options: []TQuestionOption{{Key: "a", Label: "accept"}, {Key: "m", Label: "modify", Value: "the new title"}, {Key: "s", Label: "skip"},
 			{Key: "w", Label: "waive"}, {Key: "q", Label: "stop"}}}
 	for {
 		sendQuestion(q)
@@ -276,7 +272,7 @@ func (l *TBibTeXLibrary) handleAlignHit(key string, h titleAlignHit, autoAccept 
 			quitNow()
 			return true
 		default:
-			message("(a/m/s/w/q): ")
+			q.Again = true
 		}
 	}
 }
@@ -351,7 +347,6 @@ func (l *TBibTeXLibrary) CheckAlignBooktitleCountries() {
 	messagef("Found %d candidate(s)\n", len(allHits))
 
 	// Phase 2: action.
-	message("QUESTION: Proceed? (a=accept all, i=interactive, q=quit): ")
 	q := &TQuestion{Kind: "choice", Text: "Proceed?", Warning: fmt.Sprintf("Found %d candidate(s)", len(allHits)),
 		Options: []TQuestionOption{{Key: "a", Label: "accept all"}, {Key: "i", Label: "one by one"}, {Key: "q", Label: "stop"}}}
 	for {
@@ -377,7 +372,7 @@ func (l *TBibTeXLibrary) CheckAlignBooktitleCountries() {
 			quitNow()
 			return
 		default:
-			message("(a/i/q): ")
+			q.Again = true
 		}
 	}
 }

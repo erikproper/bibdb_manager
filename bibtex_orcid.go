@@ -368,41 +368,18 @@ func doUpdateOrcidCache() {
 	}
 	stale := len(entries) - missing
 
-	quitCh := make(chan struct{}, 1)
-	stopCh := make(chan struct{})
-	defer close(stopCh)
-	go func() {
-		for {
-			userIO.RequestInput() // "q+Enter to stop": read while the refresh runs
-			select {
-			case line, ok := <-userIO.Input():
-				if !ok || strings.TrimSpace(line) == "q" {
-					select {
-					case quitCh <- struct{}{}:
-					default:
-					}
-					return
-				}
-			case <-stopCh:
-				return
-			}
-		}
-	}()
-
 	// Person pass — also fetches works for each entry in the same iteration.
 	if len(entries) > 0 {
-		Library.Progress("Refreshing ORCID cache: %d person(s) to fetch (%d missing, %d stale); %d fresh, skipped. q+Enter to stop.",
+		Library.Progress("Refreshing ORCID cache: %d person(s) to fetch (%d missing, %d stale); %d fresh, skipped. Ctrl-C (or Stop in the web UI) to stop.",
 			len(entries), missing, stale, fresh)
 		ticker := Library.NewProgressTicker("Refreshing ORCID cache", len(entries))
 		fetched, failed, deprecated, consecutiveFails := 0, 0, 0, 0
 		for i, e := range entries {
-			select {
-			case <-quitCh:
+			if Library.QuitWasRequested() {
 				ticker.Done()
 				Library.Progress("ORCID cache refresh stopped after %d/%d; %d fetched, %d failed.",
 					i, len(entries), fetched, failed)
 				return
-			default:
 			}
 			ticker.Step()
 			result, status := fetchORCIDPersonWithStatus(e.orcid)
@@ -457,13 +434,11 @@ func doUpdateOrcidCache() {
 		ticker := Library.NewProgressTicker("Backfilling works cache", len(worksEntries))
 		fetched, failed := 0, 0
 		for i, orcid := range worksEntries {
-			select {
-			case <-quitCh:
+			if Library.QuitWasRequested() {
 				ticker.Done()
 				Library.Progress("Works backfill stopped after %d/%d; %d fetched, %d failed.",
 					i, len(worksEntries), fetched, failed)
 				return
-			default:
 			}
 			ticker.Step()
 			works, wStatus := fetchORCIDWorks(orcid)

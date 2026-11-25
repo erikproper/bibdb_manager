@@ -409,8 +409,8 @@ func init() {
 						messagef("Entry not found: %s\n", rawKey)
 						continue
 					}
-					messagef("\nEntry to delete:\n%s\n", Library.entryDisplayString(key))
-					if !Library.ConfirmAction(fmt.Sprintf("Delete %s?", key)) {
+					about := TQuestion{Key: key, Entries: []TQuestionEntry{Library.questionEntryWithParent("Entry to delete", key)}}
+					if !Library.ConfirmActionAbout(about, fmt.Sprintf("Delete %s?", key)) {
 						continue
 					}
 					Library.DeleteEntry(key)

@@ -21,63 +21,17 @@ import (
 	"time"
 )
 
-// TDialogue is the job of the Actions tab: its output, and whether it waits
-// for an answer.
+// TDialogue is the job the Actions tab shows, and the questions answered in it. Its
+// status, open question and results are the job's (service_dialogue.go); its log
+// text goes to the service log.
 type TDialogue struct {
-	mu       sync.Mutex
-	title    string
-	lines    []string
-	ended    int // lines ended so far (the kept ones are the last)
-	current  strings.Builder
-	running  bool
-	code     int
-	asking   bool
-	sio      *TSocketIO
-	reply    func(string) // gives an answer to the job: a line for its questions (in the service, or a child's stdin)
-	started  time.Time
-	since    int              // the line number after the last answer: a question's context starts there
-	notes    []TDialogueNote  // the warnings of this job (shown in the tab)
-	pending  []string         // finished lines not in the log yet: a question's context stays out of it
-	settled  int              // pending lines up to the job's last message (step, progress, warning): not a question's context
-	step     string           // the current step ("Opening the library:", "Step 3: …")
-	substep  string           // the last sub-step line (indented) after it
-	history  []TDialogueReply // the questions answered in this job
-	question *TQuestion       // the question the job asks (its "question" frame), until answered
-}
-
-// flushLog writes the pending lines to the log: those up to the job's last
-// message (all: force; the job ended). The lines after it may still be the
-// context of a question (the entries, the candidates), printed right before it
-// asks: the log then gets the issue and the action taken instead (Erik, 2026-11-24).
-func (d *TDialogue) flushLog(force bool) {
-	d.mu.Lock()
-	n := d.settled
-	if force {
-		n = len(d.pending)
-	}
-	lines := d.logLines(n)
-	d.mu.Unlock()
-	for _, l := range lines {
-		fmt.Fprintln(os.Stderr, l)
-	}
-}
-
-// logLines takes the first n pending lines off for the log (called with d.mu held).
-func (d *TDialogue) logLines(n int) []string {
-	lines := append([]string{}, d.pending[:n]...)
-	d.pending = append([]string{}, d.pending[n:]...)
-	d.settled -= n
-	if d.settled < 0 {
-		d.settled = 0
-	}
-	return lines
-}
-
-// TDialogueNote is a warning: its first line and the lines that belong to it
-// ("- Current : …", "needs to be resolved").
-type TDialogueNote struct {
-	Head  string   `json:"head"`
-	Lines []string `json:"lines"`
+	mu      sync.Mutex
+	title   string
+	running bool
+	code    int
+	job     *TJob
+	started time.Time
+	history []TDialogueReply // the questions answered in this job
 }
 
 // TDialogueReply is a question answered in the Actions tab.
@@ -87,133 +41,74 @@ type TDialogueReply struct {
 	At       string `json:"at"`
 }
 
-const dialogueLines = 5000
-
 var dialogue = &TDialogue{}
 
-func (d *TDialogue) start(title string, sio *TSocketIO) {
+func (d *TDialogue) start(title string, job *TJob) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	d.title, d.sio, d.running, d.asking, d.code, d.started = title, sio, true, false, 0, time.Now()
-	d.reply = nil
-	if sio != nil {
-		d.reply = func(text string) {
-			sio.asked.Store(false)
-			select {
-			case sio.lines <- text:
-			default:
-			}
-		}
+	d.title, d.job, d.running, d.code, d.started, d.history = title, job, true, 0, time.Now(), nil
+}
+
+// show shows a command line's job that asks something; it tells whether it was not
+// shown yet.
+func (d *TDialogue) show(job *TJob) bool {
+	d.mu.Lock()
+	shown := d.job == job
+	d.mu.Unlock()
+	if !shown {
+		d.start(job.title, job)
 	}
-	d.lines, d.ended, d.since, d.notes, d.history, d.step, d.substep = nil, 0, 0, nil, nil, "", ""
-	d.pending, d.settled = nil, 0
-	d.question = nil
-	d.current.Reset()
+	return !shown
+}
+
+// finishIf is finish, when job is the one shown.
+func (d *TDialogue) finishIf(job *TJob, code int) {
+	d.mu.Lock()
+	shown := d.job == job
+	d.mu.Unlock()
+	if shown {
+		d.finish(code)
+	}
 }
 
 func (d *TDialogue) finish(code int) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	d.running, d.asking, d.code, d.sio, d.reply, d.question = false, false, code, nil, nil, nil
-}
-
-// write adds output: "\r" restarts the current line (a progress line shows its
-// latest state), "\n" ends it.
-func (d *TDialogue) write(s string) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	for _, r := range reANSIEscape.ReplaceAllString(s, "") {
-		switch r {
-		case '\r':
-			d.current.Reset()
-		case '\n':
-			line := d.current.String()
-			d.pending = append(d.pending, line)
-			d.lines = append(d.lines, line)
-			d.ended++
-			d.current.Reset()
-			if len(d.lines) > dialogueLines {
-				d.lines = d.lines[len(d.lines)-dialogueLines:]
-			}
-		default:
-			d.current.WriteRune(r)
-		}
-	}
-}
-
-func (d *TDialogue) setAsking(asking bool) {
-	d.mu.Lock()
-	d.asking = asking
-	d.mu.Unlock()
+	d.running, d.code = false, code
 }
 
 // Asking tells whether the dialogue's job waits for an answer.
 func (d *TDialogue) Asking() bool {
 	d.mu.Lock()
-	defer d.mu.Unlock()
-	return d.asking
+	job := d.job
+	d.mu.Unlock()
+	return job.isAsking()
 }
 
-// dialogueSink is the frame sink of a dialogue's job.
+// answered notes that the job shown got its answer a to q: the log gets the issue
+// and the action taken (the question itself is no log line).
+func (d *TDialogue) answered(q *TQuestion, a TAnswer) {
+	shown := a.line()
+	if v := a.value(); v != "" {
+		shown += " " + v
+	}
+	d.mu.Lock()
+	d.history = append(d.history, TDialogueReply{Question: q.Text, Answer: shown, At: time.Now().Format("15:04:05")})
+	d.mu.Unlock()
+	for _, line := range summariseAnswer(q, a) {
+		fmt.Fprintln(os.Stderr, line)
+	}
+}
+
+// dialogueSink is the frame sink of the Actions tab's job: its log text (and
+// output) goes to the service log. Its dialogue frames are taken by its TJob.
 type dialogueSink struct{}
 
 func (dialogueSink) send(f serviceFrame) error {
-	switch f.T {
-	case "out", "err", "info":
-		dialogue.write(f.D)
-	case "question":
-		dialogue.mu.Lock()
-		dialogue.question = f.Q
-		dialogue.mu.Unlock()
-	case "warning", "error", "step", "progress":
-		dialogue.message(f)
-	case "ask":
-		dialogue.mu.Lock()
-		dialogueSink{}.markAsking()
-		dialogue.mu.Unlock()
+	if f.T == "out" || f.T == "err" || f.T == "info" {
+		os.Stderr.WriteString(f.D) //nolint:errcheck
 	}
 	return nil
-}
-
-// message takes a message of the job (see messageSender): a warning or error
-// (the Warnings card), the step it begins, its progress. The output so far is
-// then no question's context: it goes to the log.
-func (d *TDialogue) message(f serviceFrame) {
-	d.mu.Lock()
-	switch f.T {
-	case "warning", "error":
-		head, rest, _ := strings.Cut(strings.TrimSpace(f.D), "\n")
-		if f.T == "error" {
-			head = "Error: " + head
-		}
-		note := TDialogueNote{Head: head}
-		if rest != "" {
-			note.Lines = strings.Split(rest, "\n")
-		}
-		d.notes = append(d.notes, note)
-	case "step":
-		d.step, d.substep = f.D, ""
-	case "progress":
-		d.substep, _, _ = strings.Cut(f.D, "\n")
-	}
-	d.settled = len(d.pending)
-	lines := d.logLines(d.settled)
-	d.mu.Unlock()
-	for _, l := range lines {
-		fmt.Fprintln(os.Stderr, l)
-	}
-}
-
-// markAsking marks the dialogue as asking (called with dialogue.mu held): the
-// output since the job's last message is the question's context (shown in its
-// pop-up from the question message) and stays out of the log; what came before
-// goes there.
-func (dialogueSink) markAsking() {
-	for _, l := range dialogue.logLines(dialogue.settled) {
-		fmt.Fprintln(os.Stderr, l)
-	}
-	dialogue.pending, dialogue.settled = nil, 0
-	dialogue.asking = true
 }
 
 // runDialogueJob runs commands one after the other as the dialogue's job, in
@@ -229,23 +124,22 @@ func (s *TService) runDialogueJob(title string, cmds [][]string, own bool, done 
 	}
 	s.busy, s.ownJob, s.jobStop, s.jobArgs, s.jobFrom = true, own, nil, []string{"(" + title + ")"}, time.Now()
 	s.ownWhat = strings.ToLower(title[:1]) + title[1:]
+	from := "web UI"
+	if own {
+		from = "service"
+	} else if len(dir) > 0 {
+		from = "command line"
+	}
+	job := newJob(title, from)
+	s.job = job
 	s.mu.Unlock()
 	run := func() {
 		code := 0
 		for _, args := range cmds {
-			sio := &TSocketIO{out: dialogueSink{}, interactive: true, lines: make(chan string, 16)}
-			dialogue.start(title, sio)
-			flushDone := make(chan struct{})
-			go func() {
-				for {
-					select {
-					case <-flushDone:
-						return
-					case <-time.After(150 * time.Millisecond):
-						dialogue.flushLog(false)
-					}
-				}
-			}()
+			sio := &TSocketIO{out: dialogueSink{}, interactive: true, lines: make(chan string, 16), job: job}
+			setAnswerValue("")
+			job.setReply(sio.answer)
+			dialogue.start(title, job)
 			fmt.Fprintf(os.Stderr, "%s  job (Actions tab): %s\n", time.Now().Format(time.DateTime), strings.Join(append([]string{title + ":"}, args...), " "))
 			req := serviceFrame{T: "run", Args: append([]string{"-base", libraryBase()}, args...), Version: AppVersion, Base: libraryBase()}
 			flag.CommandLine.SetOutput(flagOutput{sio})
@@ -258,13 +152,13 @@ func (s *TService) runDialogueJob(title string, cmds [][]string, own bool, done 
 				if len(dir) > 0 {
 					childDir = dir[0]
 				}
-				code = s.runDialogueChild(req.Args, childDir)
+				code = s.runDialogueChild(req.Args, childDir, job)
 				ok = false
 			}
 			if ok {
 				req.Cwd, _ = os.Getwd()
 				s.mu.Lock()
-				s.jobStop = sio.interrupt
+				s.jobStop = func() { job.withdraw(); sio.interrupt() }
 				s.mu.Unlock()
 				deferServicePush = len(args) == 0 || args[0] != "-push" // -push pushes now
 				if len(dir) > 0 && dir[0] != "" {                       // a job from a command line: its folder
@@ -280,9 +174,7 @@ func (s *TService) runDialogueJob(title string, cmds [][]string, own bool, done 
 			}
 			sio.finished.Store(true)
 			sio.endInput()
-			close(flushDone)
-			dialogue.write(fmt.Sprintf("\n[ended with code %d]\n", code))
-			dialogue.flushLog(true)
+			fmt.Fprintf(os.Stderr, "\n[ended with code %d]\n", code)
 			dialogue.finish(code)
 			if code != 0 {
 				break
@@ -292,8 +184,9 @@ func (s *TService) runDialogueJob(title string, cmds [][]string, own bool, done 
 			s.schedulePush()
 		}
 		s.mu.Lock()
-		s.busy, s.ownJob, s.jobStop, s.lastActive = false, false, nil, time.Now()
+		s.busy, s.ownJob, s.jobStop, s.job, s.lastActive = false, false, nil, nil, time.Now()
 		s.mu.Unlock()
+		job.finish(code)
 		if done != nil {
 			done(code)
 		}
@@ -335,30 +228,27 @@ var dialogueActions = map[string]struct {
 	"push":           {"Push", []string{"-push"}},
 }
 
-// handleDialogue answers the dialogue (GET /api/dialogue?from=N: its lines
-// after N, whether it runs, asks, the options), or acts on it (POST
-// /api/dialogue/start {action}, /answer {text}, /stop).
+// handleDialogue answers what the Actions tab shows (GET /api/dialogue: the job, its
+// status, question, results), or acts on it (POST
+// /api/dialogue/start {action}). Answers and stop: /api/job/<id>/… (service_dialogue.go).
 func (w *TWebUI) handleDialogue(rw http.ResponseWriter, r *http.Request) {
 	action := strings.TrimPrefix(r.URL.Path, "/"+w.token+"/api/dialogue")
 	action = strings.TrimPrefix(action, "/")
 	if r.Method == http.MethodGet && action == "" {
-		from := 0
-		fmt.Sscan(r.URL.Query().Get("from"), &from) //nolint:errcheck
 		d := dialogue
 		d.mu.Lock()
-		first := d.ended - len(d.lines)
-		if from < first || from > d.ended {
-			from = first
-		}
 		out := map[string]any{
-			"title": d.title, "running": d.running, "asking": d.asking, "code": d.code,
-			"lines": append([]string{}, d.lines[from-first:]...), "next": d.ended, "current": d.current.String(),
-			"since": d.started.Format("15:04:05"),
-			"notes": append([]TDialogueNote{}, d.notes...), "history": append([]TDialogueReply{}, d.history...),
-			"step": d.step, "substep": d.substep,
+			"title": d.title, "running": d.running, "asking": false, "code": d.code,
+			"since": d.started.Format("15:04:05"), "history": append([]TDialogueReply{}, d.history...),
 		}
-		if d.asking {
-			out["q"] = d.question // nil: a line is asked for without a question message
+		if d.job != nil {
+			out["job"], out["status"] = d.job.id, d.job.currentStatus()
+			out["warnings"] = d.job.lastResults(200, "warning", "error")
+			out["outcomes"] = d.job.lastResults(200, "outcome")
+			out["tables"] = d.job.lastResults(20, "table")
+			if q := d.job.openQuestion(); q != nil {
+				out["asking"], out["q"] = true, q
+			}
 		}
 		d.mu.Unlock()
 		writeJSON(rw, out)
@@ -370,7 +260,6 @@ func (w *TWebUI) handleDialogue(rw http.ResponseWriter, r *http.Request) {
 	}
 	var req struct {
 		Action string `json:"action"`
-		Text   string `json:"text"`
 		Arg    string `json:"arg"` // add_dblp: the DBLP key
 	}
 	json.NewDecoder(http.MaxBytesReader(rw, r.Body, 1<<16)).Decode(&req) //nolint:errcheck
@@ -399,43 +288,6 @@ func (w *TWebUI) handleDialogue(rw http.ResponseWriter, r *http.Request) {
 			return
 		}
 		rw.WriteHeader(http.StatusAccepted)
-	case "answer":
-		d := dialogue
-		d.mu.Lock()
-		reply, asking := d.reply, d.asking
-		d.asking = false
-		d.mu.Unlock()
-		if reply == nil || !asking {
-			http.Error(rw, "no question is waiting", http.StatusConflict)
-			return
-		}
-		d.mu.Lock()
-		q := d.question
-		d.question = nil
-		asked := strings.TrimSpace(d.current.String())
-		if q != nil {
-			asked = q.Text
-		}
-		d.history = append(d.history, TDialogueReply{Question: asked, Answer: req.Text, At: time.Now().Format("15:04:05")})
-		d.mu.Unlock()
-		d.write(req.Text + "\n") // as a terminal echoes it
-		d.mu.Lock()
-		d.since = d.ended
-		d.pending, d.settled = nil, 0 // the question line and the echoed answer: the log gets the summary below
-		d.mu.Unlock()
-		for _, line := range summariseAnswer(q, req.Text) {
-			fmt.Fprintln(os.Stderr, line)
-		}
-		reply(req.Text)
-		rw.WriteHeader(http.StatusNoContent)
-	case "stop":
-		w.service.mu.Lock()
-		stop := w.service.jobStop
-		w.service.mu.Unlock()
-		if stop != nil {
-			stop()
-		}
-		rw.WriteHeader(http.StatusNoContent)
 	default:
 		http.NotFound(rw, r)
 	}
@@ -580,14 +432,9 @@ func refreshActionCounts(busy bool) {
 // tab (Erik, 2026-11-24), instead of the question's context (the entries, the
 // candidates): "ISSUE: …" (its warning) or "CHALLENGE: …" (with the current and
 // challenging values), then "ACTION: …" (what the answer does). Made from the
-// question message; q is nil for a line asked for without one.
-func summariseAnswer(q *TQuestion, answer string) []string {
-	if q == nil {
-		if answer == "q" {
-			return []string{"ACTION: Stopped"}
-		}
-		return []string{"ACTION: Answered " + answer}
-	}
+// question message.
+func summariseAnswer(q *TQuestion, a TAnswer) []string {
+	answer := a.line()
 	var out []string
 	value := func(role string) string {
 		for _, v := range q.Values {
@@ -629,6 +476,8 @@ func summariseAnswer(q *TQuestion, answer string) []string {
 		action = "Entered DBLP key " + answer
 	case q.Kind == "text":
 		action = "Entered: " + answer
+	case a.value() != "":
+		action = "Entered " + chosen.Value + ": " + a.value()
 	case chosen != nil && chosen.Entry != nil:
 		action = "Selected " + chosen.Entry.Key
 	case q.Topic == "dblp_candidate" && answer == "0":
@@ -660,25 +509,23 @@ func summariseAnswer(q *TQuestion, answer string) []string {
 // its own: -update_dblp, -harvest, ...) as the Actions tab's job. It speaks the
 // same frames as a job in the service (TFrameIO): its output goes through the
 // dialogue, its questions are put to the page, the answers go back as frames.
-func (s *TService) runDialogueChild(args []string, dir string) int {
-	c, err := startFrameChild(args, dir, true, func(_, d string) { dialogue.write(d) })
+func (s *TService) runDialogueChild(args []string, dir string, job *TJob) int {
+	c, err := startFrameChild(args, dir, true, func(_, d string) { os.Stderr.WriteString(d) }) //nolint:errcheck
 	if err != nil {
-		dialogue.write("The service cannot run the job: " + err.Error() + "\n")
+		fmt.Fprintf(os.Stderr, "The service cannot run the job: %s\n", err)
 		return 1
 	}
 	s.mu.Lock()
 	s.jobStop = func() {
 		c.interrupt()
-		dialogue.mu.Lock()
-		asking := dialogue.asking
-		dialogue.mu.Unlock()
-		if asking { // a question waiting: answered "q", as a Ctrl-C would
-			c.answer("q\n")
+		if job.withdraw() { // a question waiting: answered "q", as a Ctrl-C would
+			c.answer("q\n", "")
 		}
 	}
 	s.mu.Unlock()
-	dialogue.mu.Lock()
-	dialogue.reply = func(text string) { c.answer(text + "\n") }
-	dialogue.mu.Unlock()
-	return c.run(func(f serviceFrame) { dialogueSink{}.send(f) }) //nolint:errcheck
+	job.setReply(func(a TAnswer) { c.answer(a.line()+"\n", a.value()) })
+	return c.run(func(f serviceFrame) {
+		dialogueSink{}.send(f) //nolint:errcheck
+		job.take(f)
+	})
 }

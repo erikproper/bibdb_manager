@@ -31,6 +31,7 @@ var isTTY = userIO.IsInteractive()
 // whitespace (including any stray \r). Closed stdin (end of input, Ctrl-D) quits
 // as "q" would: returning "" made the question loops ask again forever.
 func readStdinLine() string {
+	setAnswerValue("") // a value with the previous answer, not taken: not for a later question
 	userIO.RequestInput()
 	if inServiceJob {
 		libraryLock.Unlock() // the web UI may read the library while the job waits
@@ -84,7 +85,7 @@ func SpinnerInterrupt() {
 		return
 	}
 	if activeTicker != nil {
-		message("\r\033[K")
+		clearCounter()
 		activeTicker.rendered = false
 	}
 }
@@ -97,7 +98,9 @@ func SpinnerCommit() {
 		return
 	}
 	if activeTicker != nil && activeTicker.rendered {
-		message("\n")
+		if _, ok := dialogueClient(); !ok {
+			message("\n")
+		}
 		activeTicker.rendered = false
 	}
 }
@@ -152,6 +155,7 @@ func (t *TProgressTicker) render() {
 	if t == nil {
 		return
 	}
+	text := t.label + ": ..."
 	if t.total > 0 {
 		// total is a snapshot taken before the loop starts, not a true ceiling —
 		// callers that also drain newly-created entries or count nested sub-items
@@ -162,27 +166,13 @@ func (t *TProgressTicker) render() {
 		if pct > 100 {
 			pct = 100
 		}
-		messagef("\r\033[K%s:  %*d/%d (%.0f%%)",
-			t.label, t.totalWidth, t.current, t.total, pct)
+		text = fmt.Sprintf("%s:  %*d/%d (%.0f%%)", t.label, t.totalWidth, t.current, t.total, pct)
 	} else if t.current > 0 {
-		messagef("\r\033[K%s: %d", t.label, t.current)
-	} else {
-		messagef("\r\033[K%s: ...", t.label)
+		text = fmt.Sprintf("%s: %d", t.label, t.current)
 	}
-	t.sendProgress()
+	emit(TMessage{Kind: "progress", Text: text, Live: true})
 	t.rendered = true
 	t.lastRender = time.Now()
-}
-
-// sendProgress sends the counter as a "progress" message (see messageSender).
-func (t *TProgressTicker) sendProgress() {
-	text := strings.TrimSpace(t.label) + ": ..."
-	if t.total > 0 {
-		text = fmt.Sprintf("%s: %d/%d", strings.TrimSpace(t.label), t.current, t.total)
-	} else if t.current > 0 {
-		text = fmt.Sprintf("%s: %d", strings.TrimSpace(t.label), t.current)
-	}
-	sendMessage(serviceFrame{T: "progress", D: text})
 }
 
 // Step increments the count by one, redraws the line, and non-blockingly checks
@@ -251,9 +241,9 @@ func (t *TProgressTicker) Done() {
 		return
 	}
 	if t.rendered {
-		message("\r\033[K")
+		clearCounter()
 	}
-	messagef("%s: done\n", t.label)
+	emit(TMessage{Kind: "progress", Text: t.label + ": done"})
 	t.rendered = false
 	activeTicker = nil
 }
@@ -269,7 +259,10 @@ func (t *TProgressTicker) DoneQuiet() {
 		return
 	}
 	if t.rendered {
-		message("\r\033[K")
+		clearCounter()
+		if _, ok := dialogueClient(); ok {
+			emit(TMessage{Kind: "progress", Live: true})
+		}
 	}
 	t.rendered = false
 	activeTicker = nil
@@ -315,17 +308,17 @@ func (r *TInteraction) AskForInput(prompt string) (string, error) {
 		quitNow()
 		return "", nil
 	}
+	if v, ok := takeAnswerValue(); ok { // it came with the choice that leads here
+		return v, nil
+	}
 	SpinnerInterrupt()
-	messagef("\nQUESTION: %s (q=quit): ", prompt)
 	sendQuestion(&TQuestion{Kind: "text", Text: prompt})
 	line := readStdinLine()
 	if line == "q" {
 		r.quitRequested = true
-		messageln()
 		quitNow()
 		return "", nil
 	}
-	messageln()
 	return line, nil
 }
 
@@ -356,8 +349,7 @@ func (r *TInteraction) printWarningLine(warning string, context ...any) {
 		return
 	}
 	SpinnerInterrupt()
-	messagef("\nWARNING:  "+warning+"\n", context...)
-	sendMessage(serviceFrame{T: "warning", D: sprintfIfArgs(warning, context...)})
+	emit(TMessage{Kind: "warning", Text: sprintfIfArgs(warning, context...)})
 }
 
 // printWarningLineGrouped is printWarningLine without the leading blank line — for a
@@ -369,8 +361,7 @@ func (r *TInteraction) printWarningLineGrouped(warning string, context ...any) {
 		return
 	}
 	SpinnerInterrupt()
-	messagef("WARNING:  "+warning+"\n", context...)
-	sendMessage(serviceFrame{T: "warning", D: sprintfIfArgs(warning, context...)})
+	emit(TMessage{Kind: "warning", Text: sprintfIfArgs(warning, context...), Tight: true})
 }
 
 // printErrorLine prints an ERROR line immediately, bypassing any deferral.
@@ -379,8 +370,7 @@ func (r *TInteraction) printErrorLine(errorMessage string, context ...any) {
 		return
 	}
 	SpinnerInterrupt()
-	messagef("\nERROR:    "+errorMessage+"\n", context...)
-	sendMessage(serviceFrame{T: "error", D: sprintfIfArgs(errorMessage, context...)})
+	emit(TMessage{Kind: "error", Text: sprintfIfArgs(errorMessage, context...)})
 }
 
 // BeginDeferringMessages enables warning/error deferral and clears any buffered messages.
@@ -404,21 +394,13 @@ func (r *TInteraction) FlushDeferredMessages() {
 		return
 	}
 	if len(r.deferredWarnings) > 0 {
-		messagef("\nWarnings:\n")
-		for _, w := range r.deferredWarnings {
-			messagef("  - %s\n", w)
-			sendMessage(serviceFrame{T: "warning", D: w})
-		}
+		emit(TMessage{Kind: "list", Text: "Warnings", Items: r.deferredWarnings})
 	}
 	if len(r.deferredErrors) > 0 {
-		messagef("\nErrors:\n")
-		for _, e := range r.deferredErrors {
-			messagef("  - %s\n", e)
-			sendMessage(serviceFrame{T: "error", D: e})
-		}
+		emit(TMessage{Kind: "list", Text: "Errors", Items: r.deferredErrors})
 	}
 	if len(r.deferredWarnings) > 0 || len(r.deferredErrors) > 0 {
-		messagef("\n")
+		emit(TMessage{Kind: "note"})
 	}
 	r.deferredWarnings = nil
 	r.deferredErrors = nil
@@ -502,47 +484,25 @@ func (r *TInteraction) warningQuestionCore(about *TQuestion, question string, op
 	}
 	r.questionsAnswered++
 
-	optionSet := "("
-	separator := ""
 	keys := options.ElementsSorted()
-	for _, option := range keys {
-		optionSet += separator + option
-		separator = "/"
-	}
 	if !options.Contains("q") {
-		optionSet += separator + "q"
 		keys = append(keys, "q")
 	}
-	optionSet += "): "
 	q := newChoiceQuestion(about, question, keys, sprintfIfArgs(warning, context...))
-
-	if warning != "" {
-		// The warning is shown with the question (in its message): no warning message.
-		SpinnerInterrupt()
-		if !grouped {
-			messageln()
-		}
-		messagef("WARNING:  "+warning+"\n", context...)
-		message("QUESTION: " + question + " " + optionSet)
-	} else {
-		SpinnerInterrupt()
-		message("\nQUESTION: " + question + " " + optionSet)
-	}
-
+	q.Tight = grouped && warning != ""
+	SpinnerInterrupt()
 	for {
 		sendQuestion(q)
 		option := readStdinLine()
 		if option == "q" {
 			r.quitRequested = true
-			messageln()
 			quitNow()
 			return "q"
 		}
 		if options.Contains(option) {
-			messageln()
 			return option
 		}
-		message(optionSet)
+		q.Again = true
 	}
 }
 
@@ -562,50 +522,28 @@ func (r *TInteraction) WarningQuestionOrderedAbout(about TQuestion, question str
 		return "q"
 	}
 	valid := TStringSetNew()
-	hasQ := false
-	optionSet := "("
-	separator := ""
+	keys := append([]string{}, ordered...)
 	for _, opt := range ordered {
 		valid.Add(opt)
-		if opt == "q" {
-			hasQ = true
-		}
-		optionSet += separator + opt
-		separator = "/"
 	}
-	keys := append([]string{}, ordered...)
-	if !hasQ {
-		optionSet += separator + "q"
+	if !valid.Contains("q") {
 		keys = append(keys, "q")
 	}
-	optionSet += "): "
 	q := newChoiceQuestion(&about, question, keys, sprintfIfArgs(warning, context...))
-
 	r.questionsAnswered++
-
-	if warning != "" {
-		SpinnerInterrupt()
-		messagef("\nWARNING:  "+warning+"\n", context...)
-		message("QUESTION: " + question + " " + optionSet)
-	} else {
-		SpinnerInterrupt()
-		message("\nQUESTION: " + question + " " + optionSet)
-	}
-
+	SpinnerInterrupt()
 	for {
 		sendQuestion(q)
 		option := readStdinLine()
 		if option == "q" {
 			r.quitRequested = true
-			messageln()
 			quitNow()
 			return "q"
 		}
 		if valid.Contains(option) {
-			messageln()
 			return option
 		}
-		message(optionSet)
+		q.Again = true
 	}
 }
 
@@ -636,34 +574,35 @@ type statRow struct {
 	comment string
 }
 
-// printStatBlock prints header then rows with labels left-aligned and values
-// right-aligned so all columns line up regardless of label/value widths.
-// An optional comment is appended after two spaces.
-// No-op in non-TTY sessions.
+// statTable is rows under header as a table message.
+func statTable(header string, rows []statRow) TMessage {
+	m := TMessage{Kind: "table", Text: strings.TrimSuffix(header, ":")}
+	for _, r := range rows {
+		m.Rows = append(m.Rows, TMessageRow{Label: r.label, Value: r.value, Note: r.comment})
+	}
+	return m
+}
+
+// logStatBlock writes rows of label, value and comment under header to the log.
+func logStatBlock(header string, rows []statRow, trailingBlank bool) {
+	if !isTTY {
+		return
+	}
+	message(renderMessage(statTable(header, rows)))
+	if trailingBlank {
+		messageln()
+	}
+}
+
+// printStatBlock shows rows of label, value and comment under header: a table of
+// the function's result (and in the log).
 func printStatBlock(header string, rows []statRow, trailingBlank bool) {
 	if !isTTY {
 		return
 	}
-	maxLabelLen := 0
-	maxValLen := 0
-	for _, r := range rows {
-		if n := len(r.label) + 1; n > maxLabelLen { // +1 for the colon
-			maxLabelLen = n
-		}
-		if n := len(r.value); n > maxValLen {
-			maxValLen = n
-		}
-	}
-	messagef("\n%s\n", header)
-	for _, r := range rows {
-		if r.comment != "" {
-			messagef("  %-*s  %*s  %s\n", maxLabelLen, r.label+":", maxValLen, r.value, r.comment)
-		} else {
-			messagef("  %-*s  %*s\n", maxLabelLen, r.label+":", maxValLen, r.value)
-		}
-	}
+	emit(statTable(header, rows))
 	if trailingBlank {
-		messagef("\n")
+		emit(TMessage{Kind: "note"})
 	}
 }
 
@@ -672,6 +611,12 @@ func printStatBlock(header string, rows []statRow, trailingBlank bool) {
 // by batch-mode callers. "q" quits immediately (see quitNow) and never returns.
 // In non-TTY sessions, quits immediately (see quitNow) and never returns.
 func (r *TInteraction) ConfirmAction(prompt string) bool {
+	return r.ConfirmActionAbout(TQuestion{}, prompt)
+}
+
+// ConfirmActionAbout is ConfirmAction with what the caller knows about the question
+// (see WarningQuestionAbout).
+func (r *TInteraction) ConfirmActionAbout(about TQuestion, prompt string) bool {
 	if !isTTY {
 		r.quitRequested = true
 		quitNow()
@@ -679,22 +624,20 @@ func (r *TInteraction) ConfirmAction(prompt string) bool {
 	}
 	r.questionsAnswered++
 	SpinnerInterrupt()
-	messagef("\nCONFIRM:  %s (y/n/q): ", prompt)
-	q := newChoiceQuestion(nil, prompt, []string{"y", "n", "q"}, "")
+	q := newChoiceQuestion(&about, prompt, []string{"y", "n", "q"}, "")
+	q.Confirm = true
 	for {
 		sendQuestion(q)
 		answer := readStdinLine()
 		if answer == "y" || answer == "n" {
-			messageln()
 			return answer == "y"
 		}
 		if answer == "q" {
 			r.quitRequested = true
-			messageln()
 			quitNow()
 			return false
 		}
-		message("(y/n/q): ")
+		q.Again = true
 	}
 }
 
@@ -703,8 +646,7 @@ func (r *TInteraction) ConfirmAction(prompt string) bool {
 func (r *TInteraction) Progress(progress string, context ...any) bool {
 	if isTTY && !r.silenced && !r.progressSuppressed {
 		SpinnerInterrupt()
-		messagef(r.progressPrefix+progress+"\n", context...)
-		sendMessage(serviceFrame{T: "progress", D: strings.TrimSpace(sprintfIfArgs(progress, context...))})
+		emit(TMessage{Kind: "progress", Indent: r.progressPrefix, Text: sprintfIfArgs(progress, context...)})
 	}
 	return true
 }

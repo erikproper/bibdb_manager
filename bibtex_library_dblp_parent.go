@@ -142,20 +142,17 @@ func (l *TBibTeXLibrary) checkSiblingConsistency(crossrefLibKey, candidateDblpKe
 // askUserForDblpParent shows the candidates and asks the user to choose one.
 // Returns "" when the user cannot or does not choose.
 func (l *TBibTeXLibrary) askUserForDblpParent(childDBLPKey string, candidates []string) string {
-	l.Warning("Multiple parent candidates for DBLP entry %s:", childDBLPKey)
-	for i, c := range candidates {
-		title := ""
-		if je := readDblpJSONEntry(c); je != nil {
-			title = je.Fields["title"]
-		}
-		l.Warning("  %d: %s  (%s)", i+1, c, title)
-	}
-
 	options := TStringSetNew()
-	for i := range candidates {
+	var offered []*TQuestionEntry
+	for i, c := range candidates {
 		options.Add(strconv.Itoa(i + 1))
+		offered = append(offered, l.questionDblpCandidate(c))
 	}
-	choice := l.WarningQuestion("Which parent should be used?", options, "Choose parent for %s", childDBLPKey)
+	about := TQuestion{Options: candidateOptions(offered)}
+	if child := dblpEntryFromStore(childDBLPKey); child != nil {
+		about.Entries = []TQuestionEntry{*l.questionDblpCandidate(childDBLPKey)}
+	}
+	choice := l.WarningQuestionAbout(about, "Which parent should be used?", options, "Multiple parent candidates for DBLP entry %s", childDBLPKey)
 	idx, err := strconv.Atoi(choice)
 	if err != nil || idx < 1 || idx > len(candidates) {
 		return ""

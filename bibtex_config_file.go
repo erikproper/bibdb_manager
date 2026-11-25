@@ -123,21 +123,20 @@ func writeBibTeXFolders(foldersPath string, f TBibTeXFolders) {
 	}
 }
 
-// promptKeyPrefix asks the user for a two-uppercase-letter key prefix and
-// loops until a valid answer is given. Exits if stdin is not interactive.
-func promptKeyPrefix() string {
-	for {
-		raw, err := Reporting.AskForInput("Enter a two-uppercase-letter key prefix for this library (e.g. EP)")
-		if err != nil {
-			messageln("Error: stdin is not interactive; set key_prefix in the folders file.")
-			endRun(1)
-		}
-		s := strings.ToUpper(raw)
-		if len(s) == 2 && s[0] >= 'A' && s[0] <= 'Z' && s[1] >= 'A' && s[1] <= 'Z' {
-			return s
-		}
-		messageln("Key prefix must be exactly two uppercase letters.")
+// keyPrefixArg is -key_prefix: the key prefix of a new library.
+var keyPrefixArg string
+
+// newKeyPrefix is the key prefix given for a library that has none yet (-key_prefix
+// or key_prefix in its settings file, two upper-case letters); the run ends when
+// there is none (no question: ARCHITECTURE.md §15.7).
+func newKeyPrefix() string {
+	s := strings.ToUpper(keyPrefixArg)
+	if len(s) == 2 && s[0] >= 'A' && s[0] <= 'Z' && s[1] >= 'A' && s[1] <= 'Z' {
+		return s
 	}
+	messageln("This library has no key prefix yet. Give one of two letters: -key_prefix EP")
+	endRun(1)
+	return ""
 }
 
 func expandHome(path string) string {
