@@ -103,6 +103,7 @@ select.groupadd { font-size: 13px; padding: 3px 6px; border: 1px solid var(--bor
 .tabs button .tabx { margin-left: 8px; opacity: .7; padding: 0 2px; border-radius: 4px; }
 .tabs button .tabx:hover { opacity: 1; background: rgba(0,0,0,.15); }
 .tabs button.seltab { font-style: italic; }
+.tablehelp { margin: 4px 0 10px; padding: 8px 12px; border-left: 3px solid var(--chosen); background: var(--card); border-radius: 4px; font-size: 13.5px; line-height: 1.45; }
 .selbar { flex: none; display: flex; gap: 10px; align-items: center; margin-bottom: 8px; font-size: 13px; flex-wrap: wrap; }
 .selbar button.action, .editbar button.action { padding: 4px 12px; font-size: 13px; } /* the size of the other small buttons */
 .selbar .selmsg { color: var(--muted); }
@@ -283,9 +284,10 @@ table.compare td.kept { box-shadow: inset 2px 0 0 var(--ok); }
       <button class="plain" id="logend">To the end</button></h2><pre class="log" id="log"></pre></div></section>
 </main>
 <template id="tabletpl">
+  <div class="tablehelp thelp"></div>
   <div class="searchbar"><input type="search" class="tq" placeholder="Filter: words in any column" autocomplete="off">
     <button class="action tadd" title="Add a row">+</button></div>
-  <div class="searchinfo"><span class="tcount muted"></span><span class="muted hint thelp"></span></div>
+  <div class="searchinfo"><span class="tcount muted"></span></div>
   <div class="gridbox tbox"><table class="list ttable"><thead><tr></tr></thead><tbody></tbody></table><div class="loading muted tmore"></div></div>
 </template>
 <template id="searchtpl">
