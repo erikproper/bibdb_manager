@@ -34,6 +34,43 @@ func splitKeysLine(line string) (local, canonical, preferred string, paired bool
 	return strings.TrimSpace(local), strings.TrimSpace(canonical), strings.TrimSpace(preferred), paired
 }
 
+// keysLine is a line of a .keys file: local;canonical;preferred, without the last
+// when the entry has no preferred alias.
+func keysLine(local, canonical, preferred string) string {
+	line := local + csvDelimiter + canonical
+	if preferred != "" {
+		line += csvDelimiter + preferred
+	}
+	return line
+}
+
+// keysFilePreferred are the preferred aliases a .keys file has, by canonical key.
+func keysFilePreferred(path string) map[string]string {
+	out := map[string]string{}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return out
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if _, canonical, preferred, paired := splitKeysLine(line); paired && preferred != "" {
+			out[canonical] = preferred
+		}
+	}
+	return out
+}
+
+// preferredOutOfDate tells whether a preferred alias in the .keys file differs from
+// the library's, or is missing from it.
+func preferredOutOfDate(path string, pairs []TBibGetPair) bool {
+	have := keysFilePreferred(path)
+	for _, p := range pairs {
+		if now := Library.PreferredKey(p.canonicalKey); now != "" && now != have[p.canonicalKey] {
+			return true
+		}
+	}
+	return false
+}
+
 // lookupLocalKey returns the library key that a .keys file in dir maps
 // localKey to, or "" when there is none. It reads only file_names from
 // dir/bib.config and does not write anything back.

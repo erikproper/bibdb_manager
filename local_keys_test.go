@@ -7,6 +7,23 @@ import (
 )
 
 // The .keys files have two columns, or three (the preferred alias).
+func TestKeysLine(t *testing.T) {
+	oldDelimiter := csvDelimiter
+	csvDelimiter = ";"
+	defer func() { csvDelimiter = oldDelimiter }()
+	if got := keysLine("a", "EP-1", "x2020"); got != "a;EP-1;x2020" {
+		t.Error(got)
+	}
+	if got := keysLine("a", "EP-1", ""); got != "a;EP-1" {
+		t.Error(got)
+	}
+	path := filepath.Join(t.TempDir(), "refs.keys")
+	os.WriteFile(path, []byte("a;EP-1;x2020\nb;EP-2\nEP-3\n"), 0o644) //nolint:errcheck
+	if got := keysFilePreferred(path); len(got) != 1 || got["EP-1"] != "x2020" {
+		t.Errorf("%v", got)
+	}
+}
+
 func TestKeysColumns(t *testing.T) {
 	oldDelimiter := csvDelimiter
 	csvDelimiter = ";"

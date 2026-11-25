@@ -368,10 +368,11 @@ func readKeysFile(fileName string) (pairs []TBibGetPair, modified bool, ok bool)
 }
 
 // rewriteKeysFile writes pairs back to <fileName>.keys.
-// When keyMapping is true, each line is localKey;canonicalKey.
+// When keyMapping is true, each line is localKey;canonicalKey;preferredAlias.
 // When keyMapping is false, each line is canonicalKey only.
 func rewriteKeysFile(fileName string, pairs []TBibGetPair, keyMapping bool) {
 	path := fileName + KeysFileExtension
+	known := keysFilePreferred(path) // kept for an entry the library does not know
 	FileRename(path, path+".old")
 	f, err := os.Create(path)
 	if err != nil {
@@ -382,7 +383,11 @@ func rewriteKeysFile(fileName string, pairs []TBibGetPair, keyMapping bool) {
 	w := bufio.NewWriter(f)
 	for _, p := range pairs {
 		if keyMapping {
-			w.WriteString(p.localKey + csvDelimiter + p.canonicalKey + "\n")
+			preferred := Library.PreferredKey(p.canonicalKey)
+			if preferred == "" && !bibEntryExists(p.canonicalKey) {
+				preferred = known[p.canonicalKey]
+			}
+			w.WriteString(keysLine(p.localKey, p.canonicalKey, preferred) + "\n")
 		} else {
 			w.WriteString(p.canonicalKey + "\n")
 		}
@@ -1133,6 +1138,9 @@ func writePullSync(cfg TBibGetConfig, baseDir string) []TBibGetPair {
 		}
 	}
 
+	if cfg.KeyMapping && !keysModified {
+		keysModified = preferredOutOfDate(mapFilePath+KeysFileExtension, pairs)
+	}
 	if keysModified {
 		rewriteKeysFile(mapFilePath, pairs, cfg.KeyMapping)
 	}
@@ -2038,14 +2046,14 @@ func resolveHarvestTransferPath(harvestCfg TBibGetConfig, cfgs []TBibGetConfig) 
 	return ""
 }
 
-// appendPairToKeysFile appends localKey;canonicalKey to keysFilePath if neither the
+// appendPairToKeysFile appends localKey;canonicalKey;preferredAlias to keysFilePath if neither the
 // exact pair nor the canonical key (with any local key) is already present.
 // Creates the file if absent.
 func appendPairToKeysFile(keysFilePath, localKey, canonicalKey string) {
 	if keysFilePath == "" || localKey == "" || canonicalKey == "" {
 		return
 	}
-	line := localKey + csvDelimiter + canonicalKey
+	line := keysLine(localKey, canonicalKey, Library.PreferredKey(canonicalKey))
 	if data, err := os.ReadFile(keysFilePath); err == nil {
 		for _, existing := range strings.Split(string(data), "\n") {
 			// Skip if this canonical key is already mapped (possibly with a different
@@ -2064,7 +2072,7 @@ func appendPairToKeysFile(keysFilePath, localKey, canonicalKey string) {
 	fmt.Fprintln(f, line)
 }
 
-// appendToKeysFile appends alias;canonicalKey to the .keys file named in bib.config.
+// appendToKeysFile appends alias;canonicalKey;preferredAlias to the .keys file named in bib.config.
 func appendToKeysFile(alias, canonicalKey string) {
 	if canonicalKey == "" {
 		messageln("-map: key not found in library, cannot add to keys file")
@@ -2104,5 +2112,5 @@ func appendToKeysFile(alias, canonicalKey string) {
 		return
 	}
 	defer f.Close()
-	fmt.Fprintf(f, "%s%s%s\n", alias, csvDelimiter, canonicalKey)
+	fmt.Fprintln(f, keysLine(alias, canonicalKey, Library.PreferredKey(canonicalKey)))
 }

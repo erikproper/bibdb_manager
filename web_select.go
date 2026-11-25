@@ -257,6 +257,23 @@ func preferredAlias(key string) string {
 	return alias
 }
 
+// preferredAliases are the preferred aliases of these entries.
+func preferredAliases(keys []string) map[string]string {
+	out := map[string]string{}
+	ro, err := openReadOnly()
+	if err != nil {
+		return out
+	}
+	defer ro.Close()
+	for _, key := range keys {
+		var alias string
+		if ro.QueryRow(`SELECT value FROM bib_entries WHERE entry_key = ? AND field = 'preferredalias'`, key).Scan(&alias) == nil {
+			out[key] = alias
+		}
+	}
+	return out
+}
+
 // newLocal is the local key an entry gets when it is added: its preferred
 // alias, or its own key when there is none or key_mapping is off.
 func (s *TSelectSession) newLocal(key string) string {
@@ -348,6 +365,7 @@ func (s *TSelectSession) save() error {
 	defer s.mu.Unlock()
 	var b strings.Builder
 	var order []string
+	preferred := preferredAliases(s.order)
 	for _, key := range s.order {
 		e := s.entries[key]
 		if e == nil {
@@ -359,7 +377,7 @@ func (s *TSelectSession) save() error {
 		}
 		order = append(order, key)
 		if s.File.KeyMapping {
-			b.WriteString(e.Local + csvDelimiter + key + "\n")
+			b.WriteString(keysLine(e.Local, key, preferred[key]) + "\n")
 		} else {
 			b.WriteString(key + "\n")
 		}
