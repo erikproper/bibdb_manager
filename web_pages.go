@@ -70,7 +70,7 @@ td.num { text-align: right; font-variant-numeric: tabular-nums; }
 td.field { color: var(--muted); width: 160px; white-space: nowrap; }
 td.year { width: 4em; color: var(--muted); }
 a { color: var(--primary); }
-input[type=search] { width: 100%; padding: 10px 12px; font: inherit; border: 1px solid var(--border); /* the page's font */
+input[type=search] { width: 100%; padding: 8px 12px; font: inherit; font-size: 13px; border: 1px solid var(--border); /* as the list and the lines around it */
                      border-radius: 8px; background: var(--card); color: var(--text); }
 button.action { background: var(--primary); color: var(--primary-text); border: 0; border-radius: 8px;
                 padding: 8px 16px; font-size: 14px; cursor: pointer; }
