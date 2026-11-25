@@ -1213,6 +1213,10 @@ func writePullSync(cfg TBibGetConfig, baseDir string) []TBibGetPair {
 		extraPairs = append(extraPairs, TBibGetPair{outputKey, canonical})
 		canonicalToLocal[canonical] = outputKey
 	}
+	sort.Slice(extraPairs, func(i, j int) bool { // by key: the same file at every sync
+		a, b := extraPairs[i], extraPairs[j]
+		return a.localKey < b.localKey || a.localKey == b.localKey && a.canonicalKey < b.canonicalKey
+	})
 
 	// Follow mode: build entryGroups from managed groups (Library.GroupEntries) plus
 	// local groups mirrored into the follow bib's .sync DB by the harvest phase.
@@ -1261,6 +1265,11 @@ func writePullSync(cfg TBibGetConfig, baseDir string) []TBibGetPair {
 		autoParentLocal[resolvedCrossref] = localKey
 		autoParents = append(autoParents, autoParent{localKey, resolvedCrossref})
 	}
+	// By key: the same file at every sync (they were collected over a map).
+	sort.Slice(autoParents, func(i, j int) bool {
+		a, b := autoParents[i], autoParents[j]
+		return a.localKey < b.localKey || a.localKey == b.localKey && a.canonicalKey < b.canonicalKey
+	})
 
 	// effectiveLocalKey returns the output key for a canonical used in a crossref field.
 	effectiveLocalKey := func(canonical string) string {
@@ -1687,7 +1696,13 @@ func buildSyncBibContent(label string, entryTypes map[string]string) []byte {
 	var buf bytes.Buffer
 	w := bufio.NewWriter(&buf)
 
-	for entry, entryType := range entryTypes {
+	entries := make([]string, 0, total) // by key: the same file at every sync
+	for entry := range entryTypes {
+		entries = append(entries, entry)
+	}
+	sort.Strings(entries)
+	for _, entry := range entries {
+		entryType := entryTypes[entry]
 		if ticker.WasAborted() {
 			break
 		}
@@ -1697,7 +1712,8 @@ func buildSyncBibContent(label string, entryTypes map[string]string) []byte {
 			ticker.Step()
 		}
 	}
-	for entry, entryType := range entryTypes {
+	for _, entry := range entries {
+		entryType := entryTypes[entry]
 		if ticker.WasAborted() {
 			break
 		}

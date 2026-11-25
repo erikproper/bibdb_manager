@@ -150,10 +150,11 @@ table.grid tbody tr.dropping { outline: 2px dashed var(--primary); outline-offse
 table.grid tbody tr, #mbody table.list tr[data-key] { cursor: pointer; }
 #mbody table.list tr[data-key]:hover { background: var(--hover); }
 table.grid td.inh { color: var(--muted); font-style: italic; }
-table.grid th.op { padding: 4px 5px; overflow: visible; }
-table.grid th.op svg { vertical-align: -2px; }
-table.grid th .headtick { display: inline-block; width: 16px; height: 16px; line-height: 16px; border-radius: 4px; text-align: center;
-                          font-size: 12px; background: var(--ok); color: #fff; }
+table.grid th.op { padding: 4px 3px; overflow: visible; } /* in line with the cells below */
+table.grid th.op svg { vertical-align: -2px; margin-left: 2px; }
+table.grid th .headtick { display: inline-block; width: 16px; height: 16px; border: 1.5px solid var(--muted); border-radius: 4px;
+        vertical-align: middle; cursor: pointer; margin-right: 4px; text-align: center; line-height: 13px; font-size: 12px; color: transparent;
+  color: var(--text); cursor: pointer; } /* as a box of an entry: no colour, the tick as the text (white in dark mode) */
 table.grid td.op { padding: 2px 3px; text-align: left; white-space: nowrap; }
 table.grid td.op .tick { margin-right: 3px; }
 table.grid td.op button.copykey, table.grid td.op button.rowpdf { border: 0 !important; padding: 0 2px !important; margin: 0 2px 0 0; vertical-align: middle; }
