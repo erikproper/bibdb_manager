@@ -223,9 +223,9 @@ func (dialogueSink) markAsking() {
 func (s *TService) runDialogueJob(title string, cmds [][]string, own bool, done func(int), dir ...string) error {
 	s.mu.Lock()
 	if s.busy || s.stopping.Load() {
-		running := strings.Join(s.jobArgs, " ")
+		running := s.runningJob()
 		s.mu.Unlock()
-		return fmt.Errorf("the service is busy (%s); try again when it is done", running)
+		return fmt.Errorf("The service is busy (%s); try again when it is done", running)
 	}
 	s.busy, s.ownJob, s.jobStop, s.jobArgs, s.jobFrom = true, own, nil, []string{"(" + title + ")"}, time.Now()
 	s.ownWhat = strings.ToLower(title[:1]) + title[1:]

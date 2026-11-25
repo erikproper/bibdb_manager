@@ -328,6 +328,20 @@ func serviceRuns() bool {
 	return true
 }
 
+// runningJob names the job the service runs (called with s.mu held): its
+// command, or the title of a job it gives itself ("Loading the library"; kept in
+// jobArgs in parentheses), or "stopping".
+func (s *TService) runningJob() string {
+	job := strings.Join(s.jobArgs, " ")
+	if strings.HasPrefix(job, "(") && strings.HasSuffix(job, ")") {
+		job = job[1 : len(job)-1]
+	}
+	if job == "" {
+		job = "stopping"
+	}
+	return job
+}
+
 func stopService() {
 	if !askService("stop") {
 		messagef("No service runs for %s.\n", bibTeXBaseName)
@@ -633,7 +647,7 @@ func (s *TService) statusText() string {
 		fmt.Fprintf(&b, "Push to %s pending (due %s).\n", sharedDBFolder, s.pushDue.Format("15:04:05"))
 	}
 	if s.busy {
-		fmt.Fprintf(&b, "Running since %s: %s\n", s.jobFrom.Format("15:04:05"), strings.Join(s.jobArgs, " "))
+		fmt.Fprintf(&b, "Running since %s: %s\n", s.jobFrom.Format("15:04:05"), s.runningJob())
 	} else {
 		b.WriteString("No job running.\n")
 	}
@@ -680,7 +694,7 @@ func (s *TService) runJob(req serviceFrame, dec *json.Decoder, out *frameSender)
 		return
 	}
 	if s.busy {
-		running := strings.Join(s.jobArgs, " ")
+		running := s.runningJob()
 		s.mu.Unlock()
 		refuse(out, "The service is running another job (%s); try again when it is done.\n", running)
 		return

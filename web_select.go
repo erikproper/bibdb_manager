@@ -540,12 +540,9 @@ func (s *TService) runWebJobs(cmds [][]string, dir string, out frameSink, done f
 	}
 	s.mu.Lock()
 	if s.busy || s.stopping.Load() {
-		running := strings.Join(s.jobArgs, " ")
+		running := s.runningJob()
 		s.mu.Unlock()
-		if running == "" {
-			running = "stopping"
-		}
-		return fmt.Errorf("the service is busy (%s); try again when it is done", running)
+		return fmt.Errorf("The service is busy (%s); try again when it is done", running)
 	}
 	s.busy, s.ownJob, s.jobStop, s.jobArgs, s.jobFrom = true, false, nil, cmds[0], time.Now()
 	s.mu.Unlock()
