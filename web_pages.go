@@ -352,12 +352,13 @@ $("tabs").addEventListener("click", (e) => {
 });
 // ---- the order of the tabs: the fixed ones can be dragged (the order is kept in the
 // preferences); the Select, edit and author tabs always follow Search, in their order.
-const linkedTab = (name) => /^(sel|edit|author|merge)-/.test(name);
+const linkedTab = (name) => /^(sel|edit|author|merge|tbl)-/.test(name);
 function arrangeTabs() {
   const bar = $("tabs");
   const all = [...bar.querySelectorAll("button[data-tab]")];
   const fixed = all.filter((b) => !linkedTab(b.dataset.tab));
-  const linked = all.filter((b) => linkedTab(b.dataset.tab));
+  const linked = all.filter((b) => linkedTab(b.dataset.tab) && !/^tbl-/.test(b.dataset.tab));
+  const tables = all.filter((b) => /^tbl-/.test(b.dataset.tab)); // follow the Tables tab, in the order chosen there
   const rank = (b) => /^sel-/.test(b.dataset.tab) ? 0 : 1; // the Select tabs first, then the edit tabs
   linked.sort((a, b) => rank(a) - rank(b));
   const order = load("taborder", []);
@@ -368,6 +369,7 @@ function arrangeTabs() {
   for (const b of fixed) {
     bar.appendChild(b);
     if (b.dataset.tab === "search") for (const l of linked) bar.appendChild(l);
+    if (b.dataset.tab === "tables") for (const t of tables) bar.appendChild(t);
   }
 }
 let draggedTab = "";
@@ -1264,12 +1266,14 @@ function addTableTab(name) {
   const def = tableDefs.find((t) => t.name === name);
   if (!def || $("panel-tbl-" + name)) return;
   const b = document.createElement("button");
-  b.dataset.tab = "tbl-" + name; b.textContent = def.title; b.draggable = true;
-  $("tabs").insertBefore(b, document.querySelector('.tabs button[data-tab="dialogue"]'));
+  b.dataset.tab = "tbl-" + name; b.className = "seltab";
+  b.innerHTML = esc(def.title) + '<span class="tabx" title="Close this tab (it can be opened again in the Tables tab)">×</span>';
+  $("tabs").appendChild(b); // arrangeTabs puts it after the Tables tab
   const panel = document.createElement("section");
   panel.className = "panel fill"; panel.id = "panel-tbl-" + name; panel.hidden = true;
   $("panel-tables").parentNode.appendChild(panel);
   const v = new TableView(panel, name);
+  v.closeSelect = () => { save("tables", shownTables().filter((n) => n !== name)); dropTableTab(name); renderTablesTab(); };
   views["tbl-" + name] = v;
   onShow["tbl-" + name] = () => v.show();
 }
@@ -1295,6 +1299,7 @@ function renderTablesTab() {
 async function setupTables() {
   try { tableDefs = await get("/api/tables", "json") || []; } catch (e) { lost(e); return; }
   for (const name of shownTables()) addTableTab(name);
+  arrangeTabs();
   renderTablesTab();
 }
 
