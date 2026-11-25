@@ -233,9 +233,9 @@ table.compare td.kept { box-shadow: inset 2px 0 0 var(--ok); }
 <main>
   <section class="panel" id="panel-status" hidden><div class="narrow" id="status"><p class="muted">Loading…</p></div></section>
   <section class="panel fill" id="panel-search" hidden></section>
-  <section class="panel" id="panel-tables" hidden><div class="narrow"><div class="card"><h2>Tables</h2>
-    <p class="muted" style="font-size:13px;margin-top:0">Each table can have a tab of its own: choose the ones to show in the tab bar.</p>
-    <div id="tablelist"><p class="muted">Loading…</p></div></div></div></section>
+  <section class="panel" id="panel-tables" hidden><div class="narrow">
+    <p class="muted" style="font-size:13px;margin:0 0 12px">Each table can have a tab of its own: choose the ones to show in the tab bar.</p>
+    <div id="tablelist"><p class="muted">Loading…</p></div></div></section>
   <section class="panel" id="panel-dialogue" hidden><div class="narrow">
     <div class="card">
       <div class="line" style="margin:0 0 8px">
@@ -1289,8 +1289,9 @@ function dropTableTab(name) {
 function renderTablesTab() {
   const shown = new Set(shownTables()), groups = [];
   for (const t of tableDefs) { if (!groups.length || groups[groups.length - 1].name !== t.group) groups.push({ name: t.group, list: [] }); groups[groups.length - 1].list.push(t); }
-  $("tablelist").innerHTML = groups.map((g) => '<div class="line" style="margin:0 0 10px;flex-wrap:wrap;gap:6px"><span class="label" style="min-width:10em">' + esc(g.name) + "</span>" +
-    g.list.map((t) => '<button class="toggle' + (shown.has(t.name) ? " on" : "") + '" data-tbl="' + esc(t.name) + '" title="' + esc(t.help) + '">' + esc(t.title) + "</button>").join("") + "</div>").join("");
+  // A card per group, its name on a line of its own: the buttons wrap within it.
+  $("tablelist").innerHTML = groups.map((g) => '<div class="card"><h2>' + esc(g.name) + '</h2><div style="display:flex;flex-wrap:wrap;gap:6px">' +
+    g.list.map((t) => '<button class="toggle' + (shown.has(t.name) ? " on" : "") + '" data-tbl="' + esc(t.name) + '" title="' + esc(t.help) + '">' + esc(t.title) + "</button>").join("") + "</div></div>").join("");
   for (const b of $("tablelist").querySelectorAll("button[data-tbl]")) b.onclick = () => {
     const list = shownTables().filter((n) => n !== b.dataset.tbl);
     if (!b.classList.contains("on")) { list.push(b.dataset.tbl); addTableTab(b.dataset.tbl); arrangeTabs(); } else dropTableTab(b.dataset.tbl);
