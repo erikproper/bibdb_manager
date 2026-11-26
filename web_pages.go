@@ -518,7 +518,8 @@ async function pollState() {
   for (const b of document.querySelectorAll("[data-action]")) {
     if (!b.dataset.label) b.dataset.label = b.textContent;
     const n = st.counts ? st.counts[b.dataset.action] : undefined;
-    b.textContent = b.dataset.label + (n !== undefined ? " (" + n.toLocaleString() + ")" : "");
+    const pct = b.dataset.action === "check_pdfs" && st.counts ? st.counts.check_pdfs_done : undefined; // where the PDF check goes on
+    b.textContent = b.dataset.label + (n !== undefined ? " (" + n.toLocaleString() + ")" : "") + (pct !== undefined ? " (" + pct + " % done)" : "");
   }
   if (seenIndex >= 0 && st.index !== seenIndex) { // a new index: refresh the tables shown
     for (const v of Object.values(views)) if (v instanceof SearchView && v.started) v.refreshRows();

@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -473,11 +474,39 @@ func refreshActionCounts(busy bool) {
 			(SELECT 1 FROM contributor_orcid_seen s WHERE s.contributor_id = contributors.id AND s.canonical != '')`).Scan(&n) == nil {
 			counts["enrich"] = n
 		}
+		// How far the PDF check is (its pointer), as a percentage of the PDFs.
+		var next string
+		if ro.QueryRow(`SELECT value FROM config WHERE key = ?`, configPDFCheckNext).Scan(&next) == nil && next != "" {
+			if p, ok := pdfCheckPercent(next); ok {
+				counts["check_pdfs_done"] = p
+			}
+		}
 		ro.Close()
 	}
 	actionCountsMu.Lock()
 	actionCountsValue, actionCountsVersion = counts, version
 	actionCountsMu.Unlock()
+}
+
+// pdfCheckPercent is how much of the PDFs a check that goes on at next has done.
+func pdfCheckPercent(next string) (int, bool) {
+	entries, err := os.ReadDir(filepath.Dir(entryPDFPath("x")))
+	if err != nil {
+		return 0, false
+	}
+	done, all := 0, 0
+	for _, e := range entries {
+		if strings.HasSuffix(strings.ToLower(e.Name()), ".pdf") {
+			all++
+			if e.Name() < next {
+				done++
+			}
+		}
+	}
+	if all == 0 {
+		return 0, false
+	}
+	return done * 100 / all, true
 }
 
 // summariseAnswer is what the log says about a question answered in the Actions
