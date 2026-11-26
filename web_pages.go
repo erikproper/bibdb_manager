@@ -460,9 +460,11 @@ async function downloadPDF(key) {
     if (!r.ok) { alert(await r.text()); return; }
   } catch (e) { lost(e); return; }
   toast("Downloading the PDF of " + key + " …");
-  for (let i = 0; i < 120; i++) {
+  let asked = false;
+  for (let i = 0; i < 1800; i++) { // a browser download (JSTOR) waits for the user
     await new Promise((res) => setTimeout(res, 1000));
     let d; try { d = await get("/api/actions", "json"); } catch (e) { return; }
+    if (d.asking && !asked) { asked = true; closePopup(); showTab("actions"); loadActions(); } // its question (logged in? wait longer?)
     if (!d.running) {
       await pdfChanged(key);
       toast(d.code ? "No PDF for " + key + ": the download failed (see the Log tab)." : "Downloaded the PDF of " + key + ".");
@@ -1818,14 +1820,15 @@ $("mbody").addEventListener("change", (e) => {
   const count = $("mbody").querySelector(".rolecount");
   if (count) count.textContent = n;
 });
-// A PDF dropped on an entry's pop-up, or on a row of an author's list.
-$("mbody").addEventListener("dragover", (e) => {
-  if (!draggingFiles(e)) return;
+// A PDF dropped on an entry's pop-up (anywhere on it, its title too), or on a row of
+// an author's list.
+$("overlay").addEventListener("dragover", (e) => {
+  if (!draggingFiles(e) || !e.target.closest(".modal")) return;
   const top = stack[stack.length - 1];
   if (e.target.closest("table.list tr[data-key]") || (top && top.kind === "entry")) { e.preventDefault(); $("mbody").classList.add("dropping"); }
 });
-$("mbody").addEventListener("dragleave", (e) => { if (!$("mbody").contains(e.relatedTarget)) $("mbody").classList.remove("dropping"); });
-$("mbody").addEventListener("drop", async (e) => {
+$("overlay").addEventListener("dragleave", (e) => { if (!$("overlay").contains(e.relatedTarget)) $("mbody").classList.remove("dropping"); });
+$("overlay").addEventListener("drop", async (e) => {
   $("mbody").classList.remove("dropping");
   if (!draggingFiles(e)) return;
   const row = e.target.closest("table.list tr[data-key]"), top = stack[stack.length - 1];
@@ -1833,6 +1836,17 @@ $("mbody").addEventListener("drop", async (e) => {
   if (!key) return;
   e.preventDefault();
   if (await uploadPDF(key, e.dataTransfer.files[0])) show(top); // read the pop-up again: its PDF button
+});
+// A PDF dropped on an entry's edit tab (Erik, 2026-11-26).
+document.addEventListener("dragover", (e) => {
+  if (draggingFiles(e) && e.target.closest('section.panel[id^="panel-edit-"]')) e.preventDefault();
+});
+document.addEventListener("drop", async (e) => {
+  const p = draggingFiles(e) && e.target.closest('section.panel[id^="panel-edit-"]');
+  if (!p) return;
+  e.preventDefault();
+  const key = p.id.slice("panel-edit-".length);
+  if (await uploadPDF(key, e.dataTransfer.files[0])) pdfChanged(key);
 });
 $("mback").onclick = () => { if (stack.length > 1) { stack.pop(); show(stack[stack.length - 1]); } };
 $("overlay").addEventListener("mousedown", (e) => { if (e.target === $("overlay")) closePopup(); });

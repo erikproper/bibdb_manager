@@ -586,10 +586,11 @@ func webPDFSource(ro *sql.DB, key string) string {
 		}
 		rows.Close()
 	}
-	return pdfSourceURL(func(f string) string { return fields[f] }, func(u string) bool {
+	u, _ := pdfSourceURL(func(f string) string { return fields[f] }, func(u string) bool {
 		var one int
 		return ro.QueryRow(`SELECT 1 FROM urls_ignore WHERE url = ?`, u).Scan(&one) == nil
 	})
+	return u
 }
 
 // entryPDFPath is where an entry's PDF lives: <base>.files/<key>.pdf.
