@@ -236,7 +236,46 @@ func (l *TBibTeXLibrary) pdfTitleMismatch(key, path string) string {
 	if l.GetMetadata(key, MetaPropPdfTitleWaived) == t {
 		return ""
 	}
+	// A child's PDF cut from its crossref parent's carries the parent's metadata: its
+	// title fits the parent's, or a title waived for the parent (Erik, 2026-11-26).
+	if parent := l.crossrefParent(key); parent != "" {
+		if pt := l.EntryFieldValueity(parent, "title"); pt != "" && titlesPlausible(pt, t) {
+			return ""
+		}
+		if l.GetMetadata(parent, MetaPropPdfTitleWaived) == t {
+			return ""
+		}
+	}
 	return t
+}
+
+// crossrefParent is key's crossref parent in the library, or "".
+func (l *TBibTeXLibrary) crossrefParent(key string) string {
+	c := l.EntryFieldValueity(key, "crossref")
+	if c == "" {
+		return ""
+	}
+	if p := l.MapEntryKey(c); p != "" {
+		return p
+	}
+	return c
+}
+
+// askPDFTitleOrParent asks about a PDF of key whose title t does not match: when its
+// crossref parent's PDF has that same title (the child's was cut from it), about the
+// parent's PDF first, whose waiver then holds for all its children; else about key's.
+func (l *TBibTeXLibrary) askPDFTitleOrParent(key, path, t string) {
+	if parent := l.crossrefParent(key); parent != "" {
+		pp := l.FilesRoot + l.FilesFolder + parent + ".pdf"
+		if FileExists(pp) && pdfTitle(pp) == t && l.pdfTitleMismatch(parent, pp) == t {
+			l.askPDFTitle(parent, pp, t, "The PDF of "+parent+" (the crossref parent of "+key+", whose PDF has the same title)",
+				"yes: its metadata is wrong (waive, also for its children)", "skip")
+			if l.pdfTitleMismatch(key, path) == "" || l.QuitWasRequested() {
+				return
+			}
+		}
+	}
+	l.askPDFTitle(key, path, t, "The PDF of "+key, "yes: its metadata is wrong (waive)", "skip")
 }
 
 // askPDFTitle asks what to do with a PDF of key whose title (pdfT) does not match

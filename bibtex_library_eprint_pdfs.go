@@ -256,7 +256,7 @@ func (l *TBibTeXLibrary) getPDFInBrowser(key, eprintType, u, browser, filePath s
 }
 
 // answerOf puts q to the user and answers the option chosen ("" when nobody can
-// be asked, or the job stops).
+// be asked, or the job stops: "q", Stop, which also stops the job's loop).
 func answerOf(q *TQuestion) string {
 	if !isTTY {
 		return ""
@@ -272,7 +272,9 @@ func answerOf(q *TQuestion) string {
 			return a
 		}
 		if a == "q" {
-			quitNow()
+			// Stop: as Ctrl-C, which the job's loop checks (QuitWasRequested); quitNow
+			// would do nothing for a job of the service after its first stop.
+			interrupted.Store(true)
 			return ""
 		}
 		q.Again = true
