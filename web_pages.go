@@ -15,19 +15,15 @@ const webPages = `
 <title>{{.Library}} — bibdb</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%2303a9f4'/%3E%3Cpath d='M5 9.5c3.5-1.8 7.5-1.6 10.4 1.2v14c-2.9-2.6-6.9-2.8-10.4-1.2z' fill='%23fff'/%3E%3Cpath d='M27 9.5c-3.5-1.8-7.5-1.6-10.4 1.2v14c2.9-2.6 6.9-2.8 10.4-1.2z' fill='%23fff'/%3E%3Cpath d='M8 13.5h4.5M8 16.5h4.5M8 19.5h4.5M19.5 13.5H24M19.5 16.5H24M19.5 19.5H24' stroke='%2303a9f4' stroke-width='1.2' stroke-linecap='round'/%3E%3C/svg%3E">
 <style>
-:root {
-  --bg: #fafafa; --card: #ffffff; --text: #212121; --muted: #727272;
-  --primary: #03a9f4; --primary-text: #ffffff; --border: #e0e0e0; --hover: #f0f7fc;
-  /* Colours, one meaning each (Erik, 2026-11-24): blue (--primary, --chosen) the interface
-     itself and active filters; green (--ok) fine / in place; amber (--warn) pending, not
-     final yet; red (--danger) busy changing data, or a dangerous action; orange (--edit)
-     editing. */
-  --ok: #43a047; --warn: #ffa600; --busy: #db4437; --danger: #db4437; --chosen: #01579b; --edit: #e65100; --editbg: #fff3e0;
+/* Colours, one meaning each (Erik, 2026-11-24), from the settings' "colours" (light, dark):
+   blue (primary, chosen) the interface itself and active filters; green (ok) fine / in
+   place; amber (warn) pending, not final yet; red (busy: the LEDs; danger) busy changing
+   data, or a dangerous action; orange (edit, editbg) editing. */
+:root { {{.ColoursLight}}
   --shadow: 0 2px 2px rgba(0,0,0,.14), 0 1px 5px rgba(0,0,0,.12);
 }
 @media (prefers-color-scheme: dark) {
-  :root { --bg: #111111; --card: #1c1c1c; --text: #e1e1e1; --muted: #9b9b9b; --hover: #1f2a33;
-          --primary: #0288d1; --border: #2f2f2f; --shadow: 0 2px 2px rgba(0,0,0,.5); --editbg: #2a1c10; --edit: #ffb74d; }
+  :root { {{.ColoursDark}} --shadow: 0 2px 2px rgba(0,0,0,.5); }
 }
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
@@ -44,7 +40,7 @@ header .ver { font-size: 12px; opacity: .75; white-space: nowrap; }
 header .conn { margin-left: auto; font-size: 13px; } /* pushes the version to the far right */
 header .led { display: inline-block; margin: 0 0 0 7px; vertical-align: 0; width: 9px; height: 9px; border-radius: 50%; flex: none; background: var(--ok);
               box-shadow: 0 0 0 2px rgba(255,255,255,.6); }
-header .led.busy { background: var(--danger); animation: ledpulse 1s ease-in-out infinite alternate; }
+header .led.busy { background: var(--busy); animation: ledpulse 1s ease-in-out infinite alternate; }
 @keyframes ledpulse { from { opacity: 1; } to { opacity: .45; } }
 .tabs { display: flex; flex-wrap: wrap; gap: 2px 4px; min-width: 0; padding-top: 4px; } /* a second line when the first is full */
 .tabs button { background: transparent; color: var(--primary-text); border: 0; border-radius: 8px 8px 0 0;
@@ -519,7 +515,7 @@ async function pollState() {
     if (!b.dataset.label) b.dataset.label = b.textContent;
     const n = st.counts ? st.counts[b.dataset.action] : undefined;
     const pct = b.dataset.action === "check_pdfs" && st.counts ? st.counts.check_pdfs_done : undefined; // where the PDF check goes on
-    b.textContent = b.dataset.label + (n !== undefined ? " (" + n.toLocaleString() + ")" : "") + (pct !== undefined ? " (" + pct + " % done)" : "");
+    b.textContent = b.dataset.label + (n !== undefined ? " (" + n.toLocaleString() + ")" : "") + (pct !== undefined ? " (" + pct + "% done)" : "");
   }
   if (seenIndex >= 0 && st.index !== seenIndex) { // a new index: refresh the tables shown
     for (const v of Object.values(views)) if (v instanceof SearchView && v.started) v.refreshRows();

@@ -88,11 +88,16 @@ func newWebUI(s *TService) *TWebUI {
 		port = defaultServicePort
 	}
 	return &TWebUI{service: s, token: hex.EncodeToString(b), port: port,
-		pages: template.Must(template.New("").Funcs(template.FuncMap{
-			"esc":   url.PathEscape,
-			"given": givenArguments,
-			"tex":   texToText, // TeX markup to plain text ({\"o} → ö), for text outside the BibTeX layout
-		}).Parse(webPages))}
+		pages: template.Must(template.New("").Funcs(webTemplateFuncs()).Parse(webPages))}
+}
+
+// webTemplateFuncs are the functions the page templates use.
+func webTemplateFuncs() template.FuncMap {
+	return template.FuncMap{
+		"esc":   url.PathEscape,
+		"given": givenArguments,
+		"tex":   texToText, // TeX markup to plain text ({\"o} → ö), for text outside the BibTeX layout
+	}
 }
 
 // URL is the address of the main page.
@@ -257,7 +262,7 @@ func (w *TWebUI) handleShell(rw http.ResponseWriter, r *http.Request) {
 		http.NotFound(rw, r)
 		return
 	}
-	w.render(rw, "shell", map[string]any{"Version": AppVersion})
+	w.render(rw, "shell", map[string]any{"Version": AppVersion, "ColoursLight": colourCSS(webColours.Light), "ColoursDark": colourCSS(webColours.Dark)})
 }
 
 // ---- status ----

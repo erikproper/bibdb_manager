@@ -69,6 +69,10 @@ type TBibTeXFolders struct {
 	// "jstor": {"url": "https://www.jstor.org/stable/pdf/$.pdf", "browser": "Firefox",
 	// "noauto": true}. Added to (and may override) the built-in ones (builtinEprintPDF).
 	EprintPDF map[string]TEprintPDF `json:"eprint_pdf,omitempty"`
+	// Colours are the web UI's colours (Erik, 2026-11-26), by daylight and by night
+	// (the OS's dark mode): name → CSS colour; see colours.go. Written with the
+	// defaults when absent.
+	Colours *TColours `json:"colours,omitempty"`
 	// WebBrowser opens the web UI (-ui) instead of the default browser: on macOS
 	// an application name ("Firefox"), otherwise a command ("firefox"); see
 	// openInBrowser.
@@ -261,6 +265,11 @@ func loadBibTeXFolders(settingsPath string) {
 	servicePort = f.ServicePort
 	fieldURLs = f.FieldURLs
 	eprintPDF = f.EprintPDF
+	if f.Colours == nil {
+		f.Colours = defaultColours()
+		needsWrite = true
+	}
+	webColours = *f.Colours
 	webBrowser = f.WebBrowser
 	nrOfBackups = defaultNrOfBackups
 	if f.NrOfBackups != nil {
