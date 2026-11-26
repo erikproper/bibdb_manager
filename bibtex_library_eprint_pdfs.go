@@ -229,6 +229,11 @@ func (l *TBibTeXLibrary) getPDFInBrowser(key, eprintType, u, browser, filePath s
 				l.Warning("Entry %s: %s in Downloads is no PDF; left there.", key, name)
 				return false
 			}
+			if t := l.pdfTitleMismatch(key, from); t != "" &&
+				!l.askPDFTitle(key, from, t, "The new PDF in Downloads ("+name+")", "yes: its metadata is wrong (take it)", "no: leave it in Downloads") {
+				messagef("Not downloaded: %s (%s left in Downloads).\n", key, name)
+				return false
+			}
 			if err := moveFile(from, filePath); err != nil {
 				l.Warning("Entry %s: could not move %s: %v", key, name, err)
 				return false

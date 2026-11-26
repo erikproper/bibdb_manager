@@ -55,7 +55,7 @@ var (
 	Reporting TInteraction
 )
 
-const AppVersion = "30.173"
+const AppVersion = "30.175"
 
 // Run-state flags consumed by the write tail in main.
 var (
@@ -4069,6 +4069,7 @@ var (
 	cmdRenderAsHTML             bool
 	cmdRenderAsText             bool
 	cmdCheckPdfs                bool
+	cmdPdfCheckFromStart        bool // -pdf_check_from_start: -check_pdfs begins at the first PDF again
 	cmdAlignBooktitleCountries  bool
 	cmdUpdateOrcidCache         bool
 	cmdLoadDblpXml              bool
@@ -4202,7 +4203,8 @@ func main() {
 	flag.BoolVar(&cmdRenderAsTex, "render_as_tex", false, "render entry as TeX bibliography reference")
 	flag.BoolVar(&cmdRenderAsHTML, "render_as_html", false, "render entry as HTML bibliography reference")
 	flag.BoolVar(&cmdRenderAsText, "render_as_text", false, "render entry as plain-text bibliography reference")
-	flag.BoolVar(&cmdCheckPdfs, "check_pdfs", false, "check PDF health, orphan files, and duplicates in the files folder")
+	flag.BoolVar(&cmdCheckPdfs, "check_pdfs", false, "check PDF health, orphan files, and duplicates in the files folder (going on where the last one stopped)")
+	flag.BoolVar(&cmdPdfCheckFromStart, "pdf_check_from_start", false, "with -check_pdfs: begin at the first PDF, not where the last check stopped")
 	flag.BoolVar(&cmdAlignBooktitleCountries, "align_booktitle_countries", false, "detect and fix unbraced country names in booktitle fields")
 	flag.BoolVar(&cmdUpdateOrcidCache, "update_orcid", false, "refresh the ORCID disk cache for all known contributors (oldest-first; Ctrl-C to stop)")
 	flag.BoolVar(&cmdLoadDblpXml, "load_dblp_xml", false, "load a DBLP .xml.gz export into the local DBLP store")

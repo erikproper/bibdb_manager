@@ -31,14 +31,18 @@ type TEntryMetadata map[string]map[string]string
 
 // Metadata property name constants.
 const (
-	MetaPropPdfConfirmedOk    = "pdf_confirmed_ok"
-	MetaPropDblpKeyMissing    = "dblp_key_missing"
+	MetaPropPdfConfirmedOk     = "pdf_confirmed_ok"
+	MetaPropDblpKeyMissing     = "dblp_key_missing"
 	MetaPropAlignVolumeWaived  = "align_volume_waived"
 	MetaPropAlignEditionWaived = "align_edition_waived"
 	MetaPropAlignCountryWaived = "align_country_waived"
-	MetaPropUrlCheckDate      = "url_check_date"   // ISO date of last URL plausibility check
-	MetaPropUrlCheckStatus    = "url_check_status" // "ok" or "dead"
-	MetaPropWaivedDoublePdf   = "waived_double_pdf" // MD5 of shared PDF content — waives duplicate-PDF warning
+	MetaPropUrlCheckDate       = "url_check_date"    // ISO date of last URL plausibility check
+	MetaPropUrlCheckStatus     = "url_check_status"  // "ok" or "dead"
+	MetaPropWaivedDoublePdf    = "waived_double_pdf" // MD5 of shared PDF content — waives duplicate-PDF warning
+	// MetaPropPdfTitleWaived is a PDF title (its metadata) that is known to be wrong
+	// for the entry: the PDF is the entry's all the same (pdf_title.go). Set by the
+	// answer "yes" to the title question; removed in the Tables tab, Entry flags.
+	MetaPropPdfTitleWaived = "pdf_title_waived"
 )
 
 // GetMetadata returns the value of property prop for entry key, or "" if absent.

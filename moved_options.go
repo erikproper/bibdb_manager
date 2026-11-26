@@ -49,6 +49,7 @@ var movedOptions = map[string]string{
 	"get_pdf":                    "an entry's faded PDF icon, or its pop-up: Download PDF",
 	"get_pdfs":                   "Actions, PDF: Get from URL",
 	"matched_orcid_data_only":    "Actions, Contributors: Enrich, matched ORCIDs only",
+	"pdf_check_from_start":       "Actions, PDF: Check from the start",
 	"merge_contributors":         "a contributor's pop-up, Mark for merge",
 	"merge_orcid_duplicates":     "Actions, Contributors: Merge ORCID duplicates",
 	"remove_from_group":          "an entry's Edit tab, Groups",

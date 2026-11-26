@@ -240,6 +240,7 @@ var webActions = map[string]TWebAction{
 	"triage":          {"Triage contributor mappings", []string{"-triage_author_mappings"}, nil},
 	"triage_aliases":  {"Triage contributor aliases", []string{"-triage_contributor_aliases"}, nil},
 	"check_pdfs":      {"Check PDFs", []string{"-check_pdfs"}, nil},
+	"check_pdfs_new":  {"Check PDFs from the start", []string{"-pdf_check_from_start", "-check_pdfs"}, nil},
 	"get_pdfs":        {"Get PDFs from URLs", []string{"-get_pdfs"}, nil},
 	"get_arxiv":       {"Get PDFs from arXiv", []string{"-get_eprint_pdfs", "arXiv"}, nil},
 	"get_pdf":         {"Download PDF", []string{"-get_pdf"}, []string{"an entry's key"}},

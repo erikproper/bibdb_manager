@@ -261,7 +261,8 @@ table.compare td.kept { box-shadow: inset 2px 0 0 var(--ok); }
     <div class="card"><h2>PDF</h2><div class="actbtns">
         <button class="plain" data-action="get_pdfs" title="Download missing PDFs from the url fields ending in .pdf">Get from URL</button>
         <button class="plain" data-action="get_arxiv" title="Download missing PDFs of arXiv eprints from arXiv (one every 3 s; Stop when it is enough)">Get from arXiv</button>
-        <button class="plain" data-action="check_pdfs" title="Check PDF health, orphan files and duplicates">Check</button>
+        <button class="plain" data-action="check_pdfs" title="Check the PDFs (health, own title, duplicates), going on where the last check stopped (Stop when it is enough)">Check</button>
+        <button class="plain" data-action="check_pdfs_new" title="Check the PDFs from the first one again">Check from the start</button>
         <button class="plain" data-action="add_failed" title="Add the URLs of the last failed downloads to Bad URLs, so that Get skips them">Add failed</button></div>
     </div>
     <div class="card"><h2>DBLP</h2><div class="actbtns">
@@ -773,7 +774,7 @@ function qWaiting() {
 function qEnded(d) {
   qShown = "";
   const b = $("qconfirm");
-  if (b && b.dataset.ended) return;
+  if ((b && b.dataset.ended) || $("qclose")) return; // said once (a choice question has no Confirm button)
   $("mbody").insertAdjacentHTML("beforeend", '<div class="qwarn" style="margin-top:12px">The job ended' + (d.code ? " with code " + d.code : "") +
     '. Its output is in the Log tab.</div><div class="qactions"><button class="action" id="qclose">Close</button></div>');
   if (b) { b.dataset.ended = "1"; b.textContent = "Done"; }

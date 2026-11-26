@@ -124,7 +124,8 @@ func init() {
 		{Name: "bib_groups", Title: "Group members", Group: "Entries", Columns: []string{"group_name", "entry_key"}, Keys: []string{"group_name", "entry_key"},
 			Help: "Which entries are in which group (the groups of BibDesk; also set by Entry actions)."},
 		{Name: "entry_metadata", Title: "Entry flags", Group: "Entries", Columns: []string{"entry_key", "property", "value"}, Keys: []string{"entry_key", "property"},
-			Help: "Properties of entries kept outside their BibTeX fields (flags such as waivers), as property and value."},
+			Help: "Properties of entries kept outside their BibTeX fields (flags such as waivers), as property and value. " +
+				"pdf_title_waived: the entry's PDF is right although its own title (the value) differs; delete the row to have it checked again."},
 		{Name: "superseded_field_values", Title: "Superseded values", Group: "Entries", Columns: []string{"entry_key", "field", "value", "triage_status", "winner"}, Keys: []string{"entry_key", "field", "value"},
 			Help: "Values of fields that lost a challenge (to a newer or preferred value), kept so they are recognised when they come back; triage_status and winner record what Triage author mappings decided."},
 		{Name: "config", Title: "Config", Group: "Settings", Columns: []string{"key", "value"}, Keys: []string{"key"},

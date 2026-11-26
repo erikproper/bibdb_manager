@@ -25,6 +25,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 )
@@ -344,6 +345,7 @@ func (l *TBibTeXLibrary) mergePDFFile(sourceKey, targetKey string) {
 //   - If key is an alias for a canonical entry → rename to <canonical>.pdf.
 //     If <canonical>.pdf already exists, the old file is moved to trash instead.
 //   - Otherwise → no library entry at all → moved to library trash.
+//
 // After the scan, PDFFiles is refreshed from disk.
 // Intended for the normal check run and sync writes (lightweight — no PDF parsing).
 func (l *TBibTeXLibrary) ScanOrphanPDFs() {
@@ -560,15 +562,19 @@ func (l *TBibTeXLibrary) checkParentChildSharedPDF(childKey, parentKey string) {
 // For each .pdf file:
 //   - No matching library entry → warned as orphaned.
 //   - Duplicate content (same MD5 as another file):
-//       - Parent-child crossref pair → child PDF is trashed; if child has a URL a fresh
-//         copy is downloaded and compared; if still identical the URL is challenged and
-//         cleared; if different the fresh copy becomes the child's own PDF.
-//       - Other duplicates → interactive w(aive)/m(erge)/s(kip) prompt.
+//   - Parent-child crossref pair → child PDF is trashed; if child has a URL a fresh
+//     copy is downloaded and compared; if still identical the URL is challenged and
+//     cleared; if different the fresh copy becomes the child's own PDF.
+//   - Other duplicates → interactive w(aive)/m(erge)/s(kip) prompt.
 //   - HTML disguised as PDF → deleted automatically (no prompt).
 //   - PostScript disguised as PDF → converted via ps2pdf, then re-checked.
 //   - Valid PDF with no content (pdftotext + OCR both empty) → interactive prompt.
 //   - File passes check → any stale confirmed-OK entry is removed.
 //   - File fails check but is already confirmed-OK → silently skipped.
+//
+// configPDFCheckNext is the config key of the PDF the next PDF check begins with.
+const configPDFCheckNext = "pdf_check_next"
+
 func (l *TBibTeXLibrary) CheckPDFHealth() {
 	filesDir := l.FilesRoot + l.FilesFolder
 	l.Progress(ProgressCheckingPDFHealth, filesDir)
@@ -585,13 +591,39 @@ func (l *TBibTeXLibrary) CheckPDFHealth() {
 		}
 	}
 
+	// Where the last check stopped (a pointer, Erik 2026-11-26: the title question makes
+	// a check of all PDFs long): it goes on there, unless asked to begin again.
+	if cmdPdfCheckFromStart {
+		SetConfig(configPDFCheckNext, "")
+	}
+	if next := GetConfig(configPDFCheckNext, ""); next != "" {
+		from := sort.SearchStrings(pdfFiles, next)
+		if from < len(pdfFiles) {
+			messagef("Going on with the PDF check at %s (%d of %d); Check from the start begins again.\n", pdfFiles[from], from+1, len(pdfFiles))
+			pdfFiles = pdfFiles[from:]
+		}
+	}
+	finished := false
+	defer func() {
+		if finished {
+			SetConfig(configPDFCheckNext, "")
+		}
+	}()
+
 	total := len(pdfFiles)
 	md5Index := TStringSetMap{}
 	ticker := l.NewProgressTicker(fmt.Sprintf(ProgressCheckingPDFHealth, filesDir), total)
 
-	for _, fileName := range pdfFiles {
-		if ticker.Step() {
+	for n, fileName := range pdfFiles {
+		if ticker.Step() || l.QuitWasRequested() {
+			SetConfig(configPDFCheckNext, fileName) // stopped: the next check goes on here
 			break
+		}
+		if n%50 == 0 {
+			SetConfig(configPDFCheckNext, fileName)
+		}
+		if n == len(pdfFiles)-1 {
+			finished = true
 		}
 		key := strings.TrimSuffix(fileName, ".pdf")
 		fullPath := filesDir + fileName
@@ -607,6 +639,16 @@ func (l *TBibTeXLibrary) CheckPDFHealth() {
 		if reason == "" {
 			if l.HasMetadata(key, MetaPropPdfConfirmedOk) {
 				l.DeleteMetadata(key, MetaPropPdfConfirmedOk)
+			}
+			// Its own title, as a plausibility check (step 25.3).
+			if t := l.pdfTitleMismatch(key, fullPath); t != "" {
+				l.askPDFTitle(key, fullPath, t, "The PDF of "+key, "yes: its metadata is wrong (waive)", "skip")
+				if l.QuitWasRequested() {
+					SetConfig(configPDFCheckNext, fileName)
+					finished = false
+					ticker.Done()
+					return
+				}
 			}
 			continue
 		}
