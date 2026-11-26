@@ -546,6 +546,7 @@ func (w *TWebUI) handleEntry(rw http.ResponseWriter, r *http.Request) {
 		"Fields":      fields,
 		"Groups":      groups,
 		"HasPDF":      pdfErr == nil,
+		"PDFSource":   map[bool]string{true: "", false: webPDFSource(ro, key)}[pdfErr == nil],
 	})
 }
 
@@ -570,6 +571,25 @@ func webFieldLink(field, value string) string {
 		return ""
 	}
 	return strings.ReplaceAll(pattern, "$", strings.ReplaceAll(url.PathEscape(value), "%2F", "/"))
+}
+
+// webPDFSource is where key's PDF can be downloaded (pdfSourceURL), read through
+// the page's read-only connection; "" when nowhere.
+func webPDFSource(ro *sql.DB, key string) string {
+	fields := map[string]string{}
+	if rows, err := ro.Query(`SELECT field, value FROM bib_entries WHERE entry_key = ? AND field IN ('url', 'eprinttype', 'eprint')`, key); err == nil {
+		for rows.Next() {
+			var f, v string
+			if rows.Scan(&f, &v) == nil {
+				fields[f] = v
+			}
+		}
+		rows.Close()
+	}
+	return pdfSourceURL(func(f string) string { return fields[f] }, func(u string) bool {
+		var one int
+		return ro.QueryRow(`SELECT 1 FROM urls_ignore WHERE url = ?`, u).Scan(&one) == nil
+	})
 }
 
 // entryPDFPath is where an entry's PDF lives: <base>.files/<key>.pdf.

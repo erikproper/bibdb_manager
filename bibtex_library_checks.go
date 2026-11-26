@@ -1082,6 +1082,23 @@ func (l *TBibTeXLibrary) CheckBookishTitles(entry *TBibTeXEntry) {
 
 // Harmonize with tryGetDOIFromURL ???
 // Config based ... needs a bit of work I guess ....
+// trimPrefixFold is s without prefix, matched regardless of case; s itself when it does
+// not start with it.
+func trimPrefixFold(s, prefix string) string {
+	if len(s) >= len(prefix) && strings.EqualFold(s[:len(prefix)], prefix) {
+		return s[len(prefix):]
+	}
+	return s
+}
+
+// CheckDOIDot warns about a DOI ending in a dot, as a sloppy import leaves it
+// ("10.2307/248698."; step 25).
+func (l *TBibTeXLibrary) CheckDOIDot(entry *TBibTeXEntry) {
+	if doi := entry.FieldValue("doi"); strings.HasSuffix(doi, ".") {
+		l.ReportEntryWarning(entry.Key, "DOI ends in a dot: %q.", doi)
+	}
+}
+
 func (l *TBibTeXLibrary) CheckEPrint(entry *TBibTeXEntry) {
 	EPrintTypeValueity := strings.ToLower(entry.FieldValue("eprinttype"))
 	EPrintValueity := entry.FieldValue("eprint")
@@ -1105,66 +1122,54 @@ func (l *TBibTeXLibrary) CheckEPrint(entry *TBibTeXEntry) {
 
 	switch {
 	case OnArXive:
-		EPrintTypeValue := "arXiv"
-		EPrintValue := EPrintValueity
-
-		if EPrintValue != "" {
-			EPrintValue = strings.ReplaceAll(strings.ToLower(EPrintValue), "arxiv:", "")
-		}
-
-		if EPrintValue == "" && DOIValueLower != "" {
-			EPrintValue = strings.ReplaceAll(DOIValueLower, "10.48550/arxiv.", "")
-
-			if EPrintValue == DOIValueLower {
+		// The eprint as given, but for an "arXiv:" before it (step 25: no longer
+		// lowercased); else from an arXiv DOI or URL.
+		EPrintValue := trimPrefixFold(EPrintValueity, "arxiv:")
+		if EPrintValue == "" {
+			EPrintValue = trimPrefixFold(DOIValueity, "10.48550/arxiv.")
+			if EPrintValue == DOIValueity {
 				EPrintValue = ""
 			}
 		}
-
-		if EPrintValue == "" && URLValueLower != "" {
-			EPrintValue = strings.ReplaceAll(URLValueLower, "https://arxiv.org/abs/", "")
-
-			if EPrintValue == URLValueLower {
+		if EPrintValue == "" {
+			EPrintValue = trimPrefixFold(URLValueity, "https://arxiv.org/abs/")
+			if EPrintValue == URLValueity {
 				EPrintValue = ""
 			}
 		}
 
 		if EPrintValue == "" {
 			l.ReportEntryWarning(entry.Key, "Not able to find eprint data.")
-		} else {
-			if DOIValueity == "" {
-				DOIValueity = "10.48550/arXiv." + EPrintValue
-			}
+		} else if DOIValueity == "" {
+			DOIValueity = "10.48550/arXiv." + EPrintValue
 		}
 
-		l.setEntryField(entry, "eprinttype", EPrintTypeValue)
+		l.setEntryField(entry, "eprinttype", "arXiv")
 		l.setEntryField(entry, "eprint", EPrintValue)
 		l.setEntryField(entry, "doi", DOIValueity)
 
 	case OnJstor:
-		EPrintTypeValue := "jstor"
+		// The eprint as given; else from a JSTOR DOI or URL (step 25: before, any DOI
+		// became the eprint, and the URL branches read the empty value).
 		EPrintValue := EPrintValueity
-
-		if EPrintValue == "" {
-			EPrintValue = strings.ReplaceAll(DOIValueLower, "10.2307/", "")
-
+		for _, from := range []struct{ value, prefix string }{
+			{DOIValueity, "10.2307/"},
+			{URLValueity, "https://doi.org/10.2307/"},
+			{URLValueity, "http://www.jstor.org/stable/"},
+			{URLValueity, "https://www.jstor.org/stable/"},
+		} {
 			if EPrintValue == "" {
-				EPrintValue = strings.ReplaceAll(URLValueLower, "https://doi.org/10.2307/", "")
-
-				if EPrintValue == "" {
-					EPrintValue = strings.ReplaceAll(EPrintValue, "http://www.jstor.org/stable/", "")
-
-					if EPrintValue == "" {
-						EPrintValue = strings.ReplaceAll(EPrintValue, "https://www.jstor.org/stable/", "")
-
-						if EPrintValue == "" {
-							l.ReportEntryWarning(entry.Key, "Not able to find eprint data.")
-						}
-					}
+				if id := trimPrefixFold(from.value, from.prefix); id != from.value {
+					EPrintValue = id
 				}
 			}
 		}
 
-		l.setEntryField(entry, "eprinttype", EPrintTypeValue)
+		if EPrintValue == "" {
+			l.ReportEntryWarning(entry.Key, "Not able to find eprint data.")
+		}
+
+		l.setEntryField(entry, "eprinttype", "jstor")
 		l.setEntryField(entry, "eprint", EPrintValue)
 
 	default:
@@ -1947,6 +1952,7 @@ func (l *TBibTeXLibrary) CheckEntry(entry *TBibTeXEntry) {
 			l.NormaliseEntryFields(entry)
 			l.MaybeApplyFieldMappings(entry, true)
 			l.CheckDOIPresence(entry)
+			l.CheckDOIDot(entry)
 			l.CheckEPrint(entry)
 			l.CheckNoteURL(entry)
 			l.CheckHowPublishedURL(entry)

@@ -55,7 +55,7 @@ var (
 	Reporting TInteraction
 )
 
-const AppVersion = "30.170"
+const AppVersion = "30.172"
 
 // Run-state flags consumed by the write tail in main.
 var (
@@ -1907,6 +1907,26 @@ func contributorLabel(id string, current bool) string {
 func doAddFailedURLs() {
 	if openLibraryToUpdate() {
 		Library.AddFailedURLsToIgnore()
+	}
+}
+
+func doGetPdf(arg string) {
+	if openLibraryToUpdate() {
+		Library.ReadURLsIgnoreFile()
+		key := Library.MapEntryKey(arg)
+		if key == "" {
+			key = arg
+		}
+		if !Library.GetEntryPDF(key) {
+			endRun(1)
+		}
+	}
+}
+
+func doGetEprintPdfs(eprintType string) {
+	if openLibraryToUpdate() {
+		Library.ReadURLsIgnoreFile()
+		Library.GetEprintPDFs(eprintType)
 	}
 }
 
@@ -4001,6 +4021,8 @@ func doAssignOrcid(args []string) {
 var (
 	cmdSync                     bool
 	cmdGetPdfs                  bool
+	cmdGetEprintPdfs            bool
+	cmdGetPdf                   bool
 	cmdAddFailedURLs            bool
 	cmdFindEntries              bool
 	cmdAuditMappings            bool
@@ -4131,6 +4153,8 @@ func main() {
 	flag.BoolVar(&cmdSync, "sync", false, "sync library to bib file(s) via exchange config; optional arg narrows to one file")
 	flag.BoolVar(&cmdPull, "pull", false, "with -sync: skip up-sync (phase 1) and re-import; only write bib output from DB")
 	flag.BoolVar(&cmdGetPdfs, "get_pdfs", false, "download missing PDFs into the files folder")
+	flag.BoolVar(&cmdGetPdf, "get_pdf", false, "download the PDF of one entry from its url or eprint: -get_pdf <key>")
+	flag.BoolVar(&cmdGetEprintPdfs, "get_eprint_pdfs", false, "download missing PDFs from an eprint's site: -get_eprint_pdfs <eprinttype>")
 	flag.BoolVar(&cmdAddFailedURLs, "add_failed_urls", false, "add the URLs of the last failed PDF downloads (urls_failed.csv) to urls_ignore, so -get_pdfs skips them")
 	flag.BoolVar(&cmdAuditMappings, "audit_mappings", false, "report field_mappings rows that never apply, are undone or chained (read-only; details in <base>.tables/mapping_audit.log)")
 	flag.BoolVar(&cmdFindEntries, "find_entries", false, "list entries matching field [value] (key TAB value per line)")

@@ -160,6 +160,7 @@ table.grid td.op .tick { margin-right: 3px; }
 table.grid td.op button.copykey, table.grid td.op button.rowpdf { border: 0 !important; padding: 0 2px !important; margin: 0 2px 0 0; vertical-align: middle; }
 table.grid td.op .copyslot { display: inline-block; width: 17px; margin-right: 2px; }
 table.grid td.op button.rowpdf svg, table.grid td.op button.copykey svg { vertical-align: -2px; }
+button.rowpdf.faded { opacity: .35; } button.rowpdf.faded:hover { opacity: .8; }
 table.grid td.op button { background: transparent; border: 1px solid var(--border); border-radius: 6px; color: var(--primary);
                           cursor: pointer; padding: 0 6px; font-size: 13px; line-height: 18px; }
 .loading { padding: 12px; }
@@ -258,7 +259,8 @@ table.compare td.kept { box-shadow: inset 2px 0 0 var(--ok); }
         <button class="plain" data-action="triage_aliases" title="Name forms used in one entry only: generalise them, or keep them there">Triage contributor aliases</button></div>
     </div>
     <div class="card"><h2>PDF</h2><div class="actbtns">
-        <button class="plain" data-action="get_pdfs" title="Download missing PDFs into the files folder">Get</button>
+        <button class="plain" data-action="get_pdfs" title="Download missing PDFs from the url fields ending in .pdf">Get from URL</button>
+        <button class="plain" data-action="get_arxiv" title="Download missing PDFs of arXiv eprints from arXiv (one every 3 s; Stop when it is enough)">Get from arXiv</button>
         <button class="plain" data-action="check_pdfs" title="Check PDF health, orphan files and duplicates">Check</button>
         <button class="plain" data-action="add_failed" title="Add the URLs of the last failed downloads to Bad URLs, so that Get skips them">Add failed</button></div>
     </div>
@@ -449,6 +451,24 @@ async function pdfChanged(key) {
   }
   const top = stack[stack.length - 1];
   if ($("overlay").classList.contains("open") && top) show(top);
+}
+// downloadPDF downloads an entry's PDF from its url or eprint, as a job (step 25), staying
+// where the user is; the icon or pop-up follows when it is done.
+async function downloadPDF(key) {
+  try {
+    const r = await fetch(BASE + "/api/actions/start", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "get_pdf", given: [key] }) });
+    if (!r.ok) { alert(await r.text()); return; }
+  } catch (e) { lost(e); return; }
+  toast("Downloading the PDF of " + key + " …");
+  for (let i = 0; i < 120; i++) {
+    await new Promise((res) => setTimeout(res, 1000));
+    let d; try { d = await get("/api/actions", "json"); } catch (e) { return; }
+    if (!d.running) {
+      await pdfChanged(key);
+      toast(d.code ? "No PDF for " + key + ": the download failed (see the Log tab)." : "Downloaded the PDF of " + key + ".");
+      return;
+    }
+  }
 }
 // uploadPDF stores file as the entry's PDF; asks before replacing one. True when stored.
 async function uploadPDF(key, file) {
@@ -1018,7 +1038,8 @@ class SearchView {
     for (let n = from; n < this.rows.length; n++) {
       const r = this.rows[n];
       html.push('<tr data-key="' + esc(r.k) + '">' + (this.sel ? '<td class="op">' + this.tickHTML(r.t) + this.copyHTML(r) + "</td>" : "") + '<td class="op">' +
-        (r.pdf ? '<button class="rowpdf" data-pdf="' + esc(r.k) + '" title="Open the PDF">' + PDFICON + "</button><span></span>" : "") + "</td>");
+        (r.pdf ? '<button class="rowpdf" data-pdf="' + esc(r.k) + '" title="Open the PDF">' + PDFICON + "</button><span></span>"
+               : r.get ? '<button class="rowpdf faded" data-getpdf="' + esc(r.k) + '" title="No PDF yet: download it (from its url or eprint)">' + PDFICON + "</button><span></span>" : "") + "</td>");
       for (const c of layout.cols) {
         const v = r.cells[c] || "";
         html.push("<td" + (r.inh[c] ? ' class="inh"' : "") + ' title="' + esc(v) + '">' + esc(v) + "</td>");
@@ -1051,7 +1072,7 @@ class SearchView {
         const cells = {}, inh = {};
         layout.cols.forEach((c, i) => { cells[c] = r.c[i]; });
         for (const i of r.i || []) inh[layout.cols[i]] = true;
-        return { k: r.k, cells, inh, pdf: !!r.p, t: r.t || 0, l: r.l || "" };
+        return { k: r.k, cells, inh, pdf: !!r.p, get: !!r.g, t: r.t || 0, l: r.l || "" };
       });
       if (reset) this.rows = got; else this.rows.push(...got);
       this.renderRows(reset ? 0 : this.rows.length - got.length);
@@ -1076,7 +1097,7 @@ class SearchView {
         const cells = {}, inh = {};
         layout.cols.forEach((c, i) => { cells[c] = r.c[i]; });
         for (const i of r.i || []) inh[layout.cols[i]] = true;
-        return { k: r.k, cells, inh, pdf: !!r.p, t: r.t || 0, l: r.l || "" };
+        return { k: r.k, cells, inh, pdf: !!r.p, get: !!r.g, t: r.t || 0, l: r.l || "" };
       });
       this.renderRows(0);
       this.el.gridbox.scrollTop = top;
@@ -1819,7 +1840,7 @@ document.addEventListener("keydown", (e) => { if (e.key === "Escape" && $("overl
 
 // ---- clicks inside fragments ----
 document.addEventListener("click", async (e) => {
-  const el = e.target.closest("[data-entry],[data-author],[data-pdf],[data-pdfremove],[data-edit],[data-editauthor],[data-copy],[data-mark],[data-start],#stop");
+  const el = e.target.closest("[data-entry],[data-author],[data-pdf],[data-getpdf],[data-pdfremove],[data-edit],[data-editauthor],[data-copy],[data-mark],[data-start],#stop");
   if (!el) return;
   e.preventDefault();
   if (el.dataset.start) { // an action on this entry or author
@@ -1828,6 +1849,7 @@ document.addEventListener("click", async (e) => {
     return;
   }
   if (el.dataset.mark) { markForMerge(el.dataset.mark, el.dataset.key); return; }
+  if (el.dataset.getpdf) { downloadPDF(el.dataset.getpdf); return; }
   if (el.dataset.copy) {
     try { await navigator.clipboard.writeText(el.dataset.copy); toast("Copied: " + el.dataset.copy); }
     catch (err) { prompt("Copy the key:", el.dataset.copy); }
@@ -1932,6 +1954,7 @@ else showTab(location.hash.slice(1) || "search");
   <button class="plain" data-start="delete_entry" data-given="{{given .Key}}" title="Delete this entry (asks first, in the Actions tab)">Delete</button></div>
 {{if .Reference}}<div class="card ref">{{.Reference}}</div>{{else}}<p class="muted">The reference (HTML) shows once the library is loaded or the running job is done (the busy light is then green); open the entry again then.</p>{{end}}
 <div class="line"><span class="label">Groups</span>{{range .Groups}}<span class="chip">{{.}}</span>{{else}}<span class="muted">none</span>{{end}}</div>
+{{if .PDFSource}}<div class="line"><span class="label">PDF</span><span class="muted">none yet</span><button class="plain" data-getpdf="{{.Key}}" title="Download it from {{.PDFSource}}">Download PDF</button></div>{{end}}
 {{if .HasPDF}}<div class="line"><span class="label">PDF</span><button class="plain" data-pdfremove="{{.Key}}" title="Move this PDF to the Trash (Undo for a few minutes)" style="order:2">Remove</button><button class="pdf" data-pdf="{{.Key}}" title="Open the PDF"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M8 13h8M8 17h5"/></svg>Open the PDF</button><span class="muted"></span></div>{{end}}
 <div class="card bib">
   <div>@{{.Type}}{<span class="key">{{.Key}}</span>,</div>
@@ -1952,6 +1975,7 @@ else showTab(location.hash.slice(1) || "search");
 {{define "edit"}}
 <div class="editbar"><b>Editing</b> <span class="key">{{.Key}}</span>{{if .Alias}}<span class="muted">({{.Alias}})</span>{{end}}
   <button class="action edsave">Save</button><button class="plain edrevert">Revert</button><button class="plain edclose">Close</button>
+  {{if .PDFSource}}<button class="plain" data-getpdf="{{.Key}}" title="No PDF yet: download it from {{.PDFSource}}">Download PDF</button>{{end}}
   <span class="edmsg"></span></div>
 <div class="edstate" hidden data-state="{{.State}}"></div>
 {{if .Reference}}<div class="card ref">{{.Reference}}</div>{{end}}

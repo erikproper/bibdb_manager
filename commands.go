@@ -75,6 +75,30 @@ func init() {
 			},
 		},
 		{
+			name:     "get_pdf",
+			kind:     commandWrite,
+			selected: func() bool { return cmdGetPdf },
+			run: func(args []string) {
+				if len(args) != 1 {
+					messageln("Usage: -get_pdf <key>")
+					endRun(1)
+				}
+				doGetPdf(args[0])
+			},
+		},
+		{
+			name:     "get_eprint_pdfs",
+			kind:     commandWrite,
+			selected: func() bool { return cmdGetEprintPdfs },
+			run: func(args []string) {
+				if len(args) != 1 {
+					messageln("Usage: -get_eprint_pdfs <eprinttype>")
+					endRun(1)
+				}
+				doGetEprintPdfs(args[0])
+			},
+		},
+		{
 			name:     "audit_mappings",
 			kind:     commandRead,
 			selected: func() bool { return cmdAuditMappings },

@@ -65,6 +65,10 @@ type TBibTeXFolders struct {
 	// "https://doi.org/$". Added to (and may override) the built-in ones for doi
 	// and dblp (webFieldURLs).
 	FieldURLs map[string]string `json:"field_urls,omitempty"`
+	// EprintPDF says per eprinttype where an eprint's PDF comes from (step 25), e.g.
+	// "jstor": {"url": "https://www.jstor.org/stable/pdf/$.pdf", "browser": "Firefox",
+	// "noauto": true}. Added to (and may override) the built-in ones (builtinEprintPDF).
+	EprintPDF map[string]TEprintPDF `json:"eprint_pdf,omitempty"`
 	// WebBrowser opens the web UI (-ui) instead of the default browser: on macOS
 	// an application name ("Firefox"), otherwise a command ("firefox"); see
 	// openInBrowser.
@@ -98,18 +102,19 @@ type TBibTeXFolders struct {
 var (
 	csvDelimiter       = ";"
 	keyPrefix          = ""
-	localDBFolder      = ""                 // set by loadBibTeXFolders; default: the bibtex folder
-	sharedDBFolder     = ""                 // set by loadBibTeXFolders; default: the bibtex folder
-	backupFolder       = ""                 // set by loadBibTeXFolders; default: libraryBase()+".backups/"
-	dblpURL            = ""                 // set by loadBibTeXFolders; see doUpdateDblp
-	serviceIdleMinutes = 0                  // set by loadBibTeXFolders; see service.go
-	nrOfBackups        = defaultNrOfBackups // set by loadBibTeXFolders; see pruneLibraryBackups
-	servicePort        = 0                  // set by loadBibTeXFolders; see web_ui.go
-	fieldURLs          map[string]string    // set by loadBibTeXFolders; see webFieldLink
-	webBrowser         = ""                 // set by loadBibTeXFolders; see openInBrowser
-	displayFile        = ""                 // set by loadBibTeXFolders; see displayContent
-	displayCommand     = ""                 // set by loadBibTeXFolders; see displayContent
-	displayReopen      = true               // set by loadBibTeXFolders; see displayContent
+	localDBFolder      = ""                  // set by loadBibTeXFolders; default: the bibtex folder
+	sharedDBFolder     = ""                  // set by loadBibTeXFolders; default: the bibtex folder
+	backupFolder       = ""                  // set by loadBibTeXFolders; default: libraryBase()+".backups/"
+	dblpURL            = ""                  // set by loadBibTeXFolders; see doUpdateDblp
+	serviceIdleMinutes = 0                   // set by loadBibTeXFolders; see service.go
+	nrOfBackups        = defaultNrOfBackups  // set by loadBibTeXFolders; see pruneLibraryBackups
+	servicePort        = 0                   // set by loadBibTeXFolders; see web_ui.go
+	fieldURLs          map[string]string     // set by loadBibTeXFolders; see webFieldLink
+	eprintPDF          map[string]TEprintPDF // set by loadBibTeXFolders; see eprintPDFSetting
+	webBrowser         = ""                  // set by loadBibTeXFolders; see openInBrowser
+	displayFile        = ""                  // set by loadBibTeXFolders; see displayContent
+	displayCommand     = ""                  // set by loadBibTeXFolders; see displayContent
+	displayReopen      = true                // set by loadBibTeXFolders; see displayContent
 )
 
 func writeBibTeXFolders(foldersPath string, f TBibTeXFolders) {
@@ -255,6 +260,7 @@ func loadBibTeXFolders(settingsPath string) {
 	serviceIdleMinutes = f.ServiceIdleMinutes
 	servicePort = f.ServicePort
 	fieldURLs = f.FieldURLs
+	eprintPDF = f.EprintPDF
 	webBrowser = f.WebBrowser
 	nrOfBackups = defaultNrOfBackups
 	if f.NrOfBackups != nil {

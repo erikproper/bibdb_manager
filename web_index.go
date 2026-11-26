@@ -336,6 +336,7 @@ type TWebRow struct {
 	Cells     []string `json:"c"`
 	Inherited []int    `json:"i,omitempty"`
 	PDF       bool     `json:"p,omitempty"` // the entry has a PDF (checked on the fly)
+	CanGetPDF bool     `json:"g,omitempty"` // it has none, but a source to download it from (step 25)
 	Tick      int      `json:"t,omitempty"` // in a Select tab: selectOn, selectKept
 	Local     string   `json:"l,omitempty"` // in a Select tab: the entry's local key in the .keys file
 }
@@ -493,6 +494,13 @@ func webIndexPage(query string, groups []string, sel *TSelectSession, onlySelect
 		}
 		if _, err := os.Stat(entryPDFPath(row.Key)); err == nil {
 			row.PDF = true
+		} else {
+			if ro == nil {
+				ro, _ = openReadOnly()
+			}
+			if ro != nil {
+				row.CanGetPDF = webPDFSource(ro, row.Key) != ""
+			}
 		}
 		if sel != nil {
 			sel.mu.Lock()

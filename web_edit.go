@@ -166,8 +166,17 @@ func (w *TWebUI) handleEditFrag(rw http.ResponseWriter, r *http.Request) {
 	w.render(rw, "edit", map[string]any{
 		"Key": key, "Type": st.Type, "Types": types, "Fields": fields, "Addable": addable,
 		"Groups": st.Groups, "AllGroups": allGroups, "State": string(state), "Reference": reference,
-		"Alias": st.Fields["preferredalias"],
+		"Alias": st.Fields["preferredalias"], "PDFSource": editPDFSource(ro, key),
 	})
+}
+
+// editPDFSource is where key's PDF can be downloaded when it has none (step 25),
+// for the edit tab's Download PDF; "" otherwise.
+func editPDFSource(ro *sql.DB, key string) string {
+	if _, err := os.Stat(entryPDFPath(key)); err == nil {
+		return ""
+	}
+	return webPDFSource(ro, key)
 }
 
 // handleEditSave saves an edit tab (POST /api/edit/<key>, JSON {orig, new}):
