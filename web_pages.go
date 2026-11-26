@@ -613,6 +613,10 @@ function showQuestion(d, html) {
   qShown = qKey(d);
   popup("Question — " + (d.title || ""), html, false);
   for (const b of $("mbody").querySelectorAll("button[data-qopt]")) b.onclick = () => sendAnswer(b.dataset.qopt);
+  const sj = $("qstopjob");
+  if (sj) sj.onclick = async () => { try { if (dlg && dlg.job) await fetch(BASE + "/api/job/" + dlg.job + "/stop", { method: "POST" }); } catch (e) {} setTimeout(loadActions, 300); };
+  const p = $("qpdf");
+  if (p) p.onclick = async () => { try { const r = await fetch(BASE + "/api/qpdf", { method: "POST" }); if (!r.ok) toast("Could not open the PDF (" + r.status + ")."); } catch (e) { lost(e); } };
 }
 function qKey(d) { return d.asking && d.q ? d.q.id : ""; }
 // editHTML: [Edit…] opens a field (prefilled); its value answers opt and then the question
@@ -625,7 +629,12 @@ function wireEdit(opt) {
   $("qeditok").onclick = go;
   $("qeditin").onkeydown = (e) => { if (e.key === "Enter") go(); };
 }
-const stopButton = (q) => optKeys(q).includes("q") ? '<button class="plain" data-qopt="q" title="Stop the job">Stop</button>' : "";
+// qPDFIcon: a PDF icon that opens the PDF the question is about (q.pdf).
+const qPDFIcon = (q) => q.pdf ? ' <button class="pdf" id="qpdf" title="Open the PDF to look" style="vertical-align:middle">' + PDFICON + "</button>" : "";
+// stopButton: Stop answers "q" where the question takes it, else stops the job (the pop-up
+// covers the tab's own Stop button).
+const stopButton = (q) => optKeys(q).includes("q") ? '<button class="plain" data-qopt="q" title="Stop the job">Stop</button>'
+                                                  : '<button class="plain" id="qstopjob" title="Stop the job, as Ctrl-C does">Stop</button>';
 function openQuestion() {
   const d = dlg;
   if (!d || !d.asking) return;
@@ -705,7 +714,7 @@ function openQuestion() {
   const noneOpt = candidate && has("0") ? "0" : "", keyOpt = q.topic === "dblp_candidate" && has("k") ? "k" : "";
   const radios = (q.options || []).filter((o) => o.key !== "q" && o.key !== noneOpt && o.key !== keyOpt);
   const single = radios.length === 1 && radios[0].entry && q.topic === "dblp_candidate";
-  html += '<div class="qtext">' + (single ? "Possible DBLP entry match:" : esc(q.text || "Your answer?")) + "</div>" +
+  html += '<div class="qtext">' + (single ? "Possible DBLP entry match:" : esc(q.text || "Your answer?")) + qPDFIcon(q) + "</div>" +
     '<div class="qopts">' + radios.map((o) => '<label><input type="radio" name="qopt" value="' + esc(o.key) + '"' + (single ? " checked" : "") + '><div style="flex:1">' +
       (o.entry ? entryHTML(o.entry, false) : '<span class="qlabel">' + esc(cap(o.label || o.key)) + "</span>") +
       (o.value ? ' <input class="qval" data-for="' + esc(o.key) + '" placeholder="' + esc(cap(o.value)) + '" autocomplete="off" style="width:min(420px,90%);margin-top:4px;font:13px ui-monospace, Menlo, monospace;padding:4px 8px;border:1px solid var(--border);border-radius:6px;background:var(--card);color:var(--text)">' : "") + "</div></label>").join("") + "</div>" +

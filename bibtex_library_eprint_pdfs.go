@@ -207,7 +207,7 @@ func (l *TBibTeXLibrary) getPDFInBrowser(key, eprintType, u, browser, filePath s
 	if !loggedInAt[strings.ToLower(eprintType)] {
 		if answerOf(&TQuestion{Kind: "choice", Key: key, Text: fmt.Sprintf("Logged in to %s in %s?", site, browser),
 			Warning: fmt.Sprintf("The PDF of %s comes from %s, opened in %s, which needs you to be logged in there.", key, site, browser),
-			Options: []TQuestionOption{{Key: "y", Label: "yes: open it"}, {Key: "n", Label: "not now"}}}) != "y" {
+			Options: []TQuestionOption{{Key: "y", Label: "yes: open it"}, {Key: "n", Label: "not now"}, {Key: "q", Label: "stop"}}}) != "y" {
 			messagef("Not downloaded: log in to %s in %s first.\n", site, browser)
 			return false
 		}
@@ -244,7 +244,7 @@ func (l *TBibTeXLibrary) getPDFInBrowser(key, eprintType, u, browser, filePath s
 		if time.Now().After(deadline) {
 			if answerOf(&TQuestion{Kind: "choice", Key: key, Text: "Wait longer?",
 				Warning: fmt.Sprintf("No new PDF in %s after %s (%s, opened in %s).", dir, browserPDFWait, u, browser),
-				Options: []TQuestionOption{{Key: "w", Label: "wait longer"}, {Key: "s", Label: "skip"}}}) != "w" {
+				Options: []TQuestionOption{{Key: "w", Label: "wait longer"}, {Key: "s", Label: "skip"}, {Key: "q", Label: "stop"}}}) != "w" {
 				messagef("Not downloaded: %s.\n", key)
 				return false
 			}
@@ -272,6 +272,7 @@ func answerOf(q *TQuestion) string {
 			return a
 		}
 		if a == "q" {
+			quitNow()
 			return ""
 		}
 		q.Again = true

@@ -48,6 +48,8 @@ type TQuestion struct {
 	Confirm bool              `json:"confirm,omitempty"` // a safety confirmation (asked even when silenced)
 	Tight   bool              `json:"tight,omitempty"`   // shown right under the line before it
 	Again   bool              `json:"again,omitempty"`   // asked again after an answer it does not take
+	// PDF is a PDF file the question is about: the page shows a PDF icon that opens it.
+	PDF string `json:"pdf,omitempty"`
 }
 
 // TQuestionOption is an answer the question offers.

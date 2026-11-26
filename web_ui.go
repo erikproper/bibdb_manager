@@ -119,6 +119,7 @@ func (w *TWebUI) start() {
 	mux.HandleFunc(prefix+"/api/live", w.handleLive)
 	mux.HandleFunc(prefix+"/api/jobs", w.handleJobs)
 	mux.HandleFunc(prefix+"/api/job/", w.handleJob)
+	mux.HandleFunc(prefix+"/api/qpdf", w.handleQuestionPDF)
 	mux.HandleFunc(prefix+"/api/dblpsearch", w.handleDBLPSearch)
 	mux.HandleFunc(prefix+"/api/stop", w.handleStop)
 	mux.HandleFunc(prefix+"/api/prefs", w.handlePrefs)
@@ -591,6 +592,29 @@ func webPDFSource(ro *sql.DB, key string) string {
 		return ro.QueryRow(`SELECT 1 FROM urls_ignore WHERE url = ?`, u).Scan(&one) == nil
 	})
 	return u
+}
+
+// handleQuestionPDF opens the PDF the open question of the Actions tab's job is
+// about (POST /api/qpdf), with the OS's viewer: only that file, named by the job.
+func (w *TWebUI) handleQuestionPDF(rw http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(rw, "not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	actionsTab.mu.Lock()
+	job := actionsTab.job
+	actionsTab.mu.Unlock()
+	var q *TQuestion
+	if job != nil {
+		q = job.openQuestion()
+	}
+	if q == nil || q.PDF == "" {
+		http.NotFound(rw, r)
+		return
+	}
+	if err := openWithOS(q.PDF); err != nil {
+		http.Error(rw, err.Error(), http.StatusInternalServerError)
+	}
 }
 
 // entryPDFPath is where an entry's PDF lives: <base>.files/<key>.pdf.

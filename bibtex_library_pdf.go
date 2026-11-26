@@ -642,6 +642,7 @@ func (l *TBibTeXLibrary) CheckPDFHealth() {
 			}
 			// Its own title, as a plausibility check (step 25.3).
 			if t := l.pdfTitleMismatch(key, fullPath); t != "" {
+				SetConfig(configPDFCheckNext, fileName) // Stop at the question: the next check asks it again
 				l.askPDFTitle(key, fullPath, t, "The PDF of "+key, "yes: its metadata is wrong (waive)", "skip")
 				if l.QuitWasRequested() {
 					SetConfig(configPDFCheckNext, fileName)

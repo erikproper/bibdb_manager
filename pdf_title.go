@@ -250,16 +250,10 @@ func (l *TBibTeXLibrary) askPDFTitle(key, path, pdfT, thePDF, keep, other string
 		l.Warning("Entry %s: %s", key, warning)
 		return false
 	}
-	for {
-		switch answerOf(&TQuestion{Kind: "choice", Key: key, Text: "Is it the entry's PDF?", Warning: warning,
-			Options: []TQuestionOption{{Key: "w", Label: keep}, {Key: "o", Label: "open it to look"}, {Key: "s", Label: other}}}) {
-		case "w":
-			l.SetMetadata(key, MetaPropPdfTitleWaived, pdfT)
-			return true
-		case "o":
-			openWithOS(path) //nolint:errcheck
-		default:
-			return false
-		}
+	if answerOf(&TQuestion{Kind: "choice", Key: key, Text: "Is it the entry's PDF?", Warning: warning, PDF: path,
+		Options: []TQuestionOption{{Key: "w", Label: keep}, {Key: "s", Label: other}, {Key: "q", Label: "stop"}}}) == "w" {
+		l.SetMetadata(key, MetaPropPdfTitleWaived, pdfT)
+		return true
 	}
+	return false
 }
