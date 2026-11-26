@@ -103,7 +103,7 @@ select.groupadd { font-size: 13px; padding: 3px 6px; border: 1px solid var(--bor
 .tabs button .tabx { margin-left: 8px; opacity: .7; padding: 0 2px; border-radius: 4px; }
 .tabs button .tabx:hover { opacity: 1; background: rgba(0,0,0,.15); }
 .tabs button.seltab { font-style: italic; }
-.actbtns { flex: 1; display: flex; flex-wrap: wrap; gap: 8px; min-width: 0; } /* they wrap beside their label */
+.actbtns { display: flex; flex-wrap: wrap; gap: 6px; } /* under their group's heading, as on the Tables tab */
 .tablehelp { margin: 4px 0 10px; padding: 8px 12px; border-left: 3px solid var(--chosen); background: var(--card); border-radius: 4px; font-size: 13.5px; line-height: 1.45; }
 .selbar { flex: none; display: flex; gap: 10px; align-items: center; margin-bottom: 14px; /* as below the filter */ font-size: 13px; flex-wrap: wrap; }
 .selbar button.action, .editbar button.action { padding: 4px 12px; font-size: 13px; } /* the size of the other small buttons */
@@ -243,43 +243,36 @@ table.compare td.kept { box-shadow: inset 2px 0 0 var(--ok); }
     <p class="muted" style="font-size:13px;margin:0 0 12px">Each table can have a tab of its own: choose the ones to show in the tab bar.</p>
     <div id="tablelist"><p class="muted">Loading…</p></div></div></section>
   <section class="panel" id="panel-actions" hidden><div class="narrow">
-    <div class="card">
-      <div class="line" style="margin:0 0 8px">
-        <span class="label" style="min-width:4.5em">Checks</span><span class="actbtns">
+    <div class="card"><h2>Checks</h2><div class="actbtns">
         <button class="plain" data-action="check" title="Check the library">Check</button>
         <button class="plain" data-action="fix_duplicates" title="Resolve title duplicates">Fix duplicates</button>
-        <button class="plain" data-action="align_countries" title="Country names in booktitles, as the Country names in titles table has them">Country names in titles</button></span>
-      </div>
-      <div class="line" style="margin:0 0 8px">
-        <span class="label" style="min-width:4.5em">Contributors</span><span class="actbtns">
+        <button class="plain" data-action="align_countries" title="Country names in booktitles, as the Country names in titles table has them">Country names in titles</button></div>
+    </div>
+    <div class="card"><h2>Contributors</h2><div class="actbtns">
         <button class="plain" data-action="enrich" title="Absorb DBLP names and ORCIDs, enrich from ORCID profiles, merge ORCID duplicates">Enrich contributors</button>
         <button class="plain" data-action="enrich_matched" title="As Enrich contributors, but without asking about names that differ from the ORCID profile">Enrich, matched ORCIDs only</button>
         <button class="plain" data-action="refresh_orcid" title="Fetch the ORCID profiles again, the oldest first (Stop when it is enough)">Refresh ORCID</button>
         <button class="plain" data-action="merge_orcid" title="Merge contributors that share an ORCID, or whose ORCIDs were merged by ORCID">Merge ORCID duplicates</button>
         <button class="plain" data-action="disambiguate" title="Resolve names that several contributors share, entry by entry">Disambiguate contributors</button>
         <button class="plain" data-action="triage" title="Triage the author/editor values that lost a challenge">Triage contributor mappings</button>
-        <button class="plain" data-action="triage_aliases" title="Name forms used in one entry only: generalise them, or keep them there">Triage contributor aliases</button></span>
-      </div>
-      <div class="line" style="margin:0 0 8px">
-        <span class="label" style="min-width:4.5em">PDF</span><span class="actbtns">
+        <button class="plain" data-action="triage_aliases" title="Name forms used in one entry only: generalise them, or keep them there">Triage contributor aliases</button></div>
+    </div>
+    <div class="card"><h2>PDF</h2><div class="actbtns">
         <button class="plain" data-action="get_pdfs" title="Download missing PDFs into the files folder">Get</button>
         <button class="plain" data-action="check_pdfs" title="Check PDF health, orphan files and duplicates">Check</button>
-        <button class="plain" data-action="add_failed" title="Add the URLs of the last failed downloads to Bad URLs, so that Get skips them">Add failed</button></span>
-      </div>
-      <div class="line" style="margin:0 0 8px">
-        <span class="label" style="min-width:4.5em">DBLP</span><span class="actbtns">
+        <button class="plain" data-action="add_failed" title="Add the URLs of the last failed downloads to Bad URLs, so that Get skips them">Add failed</button></div>
+    </div>
+    <div class="card"><h2>DBLP</h2><div class="actbtns">
         <button class="plain" data-action="update_dblp" title="Import the DBLP export into the local DBLP cache (downloaded from dblp_url, or from Downloads)">Update cache</button>
         <button class="plain" data-action="update_entries" title="Update every entry with a DBLP key from the DBLP cache">Update entries</button>
         <button class="plain" data-action="fix_candidates" title="Link entries without a DBLP key to DBLP records">Candidates</button>
         <button class="plain" data-action="watch" title="Check the watched persons and ORCIDs for missing publications">Watch</button>
-        <button class="plain" id="dblplookup" title="Find an entry in the local DBLP cache, and add it to the library">Lookup</button></span>
-      </div>
-      <div class="line" style="margin:0 0 8px">
-        <span class="label" style="min-width:4.5em">Other</span><span class="actbtns">
+        <button class="plain" id="dblplookup" title="Find an entry in the local DBLP cache, and add it to the library">Lookup</button></div>
+    </div>
+    <div class="card"><h2>Other</h2><div class="actbtns">
         <button class="plain" data-action="entry_actions" title="Run the group assignment rules (entry_actions)">Entry actions</button>
         <button class="plain" data-action="audit" title="Report mapping rows that never apply">Audit mappings</button>
-        <button class="plain" data-action="push" title="Push the changes of this machine to the shared DB folder now">Push</button></span>
-      </div>
+        <button class="plain" data-action="push" title="Push the changes of this machine to the shared DB folder now">Push</button></div>
     </div>
     <div class="card">
       <div class="state"><span class="dot ok" id="dlgdot"></span><div><b id="dlgtitle">No job yet</b><br><span class="muted" id="dlgstate">Start one with an action above. Its output goes to the Log tab.</span></div>
@@ -290,7 +283,7 @@ table.compare td.kept { box-shadow: inset 2px 0 0 var(--ok); }
     <div class="card" id="dlgstepcard" hidden><h2>Progress</h2>
       <table class="list"><tr><td class="field">step</td><td id="dlgstep"></td></tr><tr><td class="field">item</td><td id="dlgsub"></td></tr>
         <tr><td class="field">now</td><td id="dlgnow"></td></tr></table></div>
-    <div class="card" id="dlgoutcard" hidden><h2>Result</h2><div id="dlgout"></div></div>
+    <div class="card" id="dlgoutcard" hidden><h2 id="dlgouttitle">Result</h2><div id="dlgout"></div></div>
     <div class="card" id="dlgnotescard" hidden><h2>Warnings</h2><div id="dlgnotes"></div></div>
     <div class="card" id="dlghistcard" hidden><h2>Answers</h2><table class="list" id="dlghist"></table></div>
   </div></section>
@@ -534,9 +527,12 @@ async function loadActions() {
   // The result so far: what became of each item, and the tables.
   const outs = d.outcomes || [], tabs = d.tables || [];
   $("dlgoutcard").hidden = !(outs.length || tabs.length);
+  // One table and nothing else (the load's Homework): the card is called after it.
+  const single = !outs.length && tabs.length === 1;
+  $("dlgouttitle").textContent = single ? tabs[0].text : "Result";
   $("dlgout").innerHTML = (outs.length ? '<table class="list">' + outs.slice().reverse().map((o) => '<tr><td class="key">' + esc(o.key) + "</td><td>" + esc(o.action) +
       (o.text ? ' <span class="muted">(' + esc(o.text) + ")</span>" : "") + '</td><td class="key">' + (o.target ? '<a href="#" data-entry="' + esc(o.target) + '">' + esc(o.target) + "</a>" : "") + "</td></tr>").join("") + "</table>" : "") +
-    tabs.map((t) => '<div class="qtext">' + esc(t.text) + '</div><table class="list">' + (t.rows || []).map((r) => "<tr><td>" + esc(r.label) + '</td><td style="text-align:right">' + esc(r.value) +
+    tabs.map((t) => (single ? "" : '<div class="qtext">' + esc(t.text) + "</div>") + '<table class="list">' + (t.rows || []).map((r) => "<tr><td>" + esc(r.label) + '</td><td style="text-align:right">' + esc(r.value) +
       '</td><td class="muted">' + (r.action ? '<button class="plain" data-start="' + esc(r.action) + '">' + esc(r.note) + "</button>" : esc(r.note || "")) + "</td></tr>").join("") + "</table>").join("");
   $("dlgnotescard").hidden = !(d.warnings && d.warnings.length);
   $("dlgnotes").innerHTML = (d.warnings || []).slice().reverse().map((w) => { const ls = w.text.trim().split("\n"); return warnHTML((w.kind === "error" ? "Error: " : "") + ls[0], ls.slice(1)); }).join("");
