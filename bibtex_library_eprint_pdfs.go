@@ -268,14 +268,14 @@ func answerOf(q *TQuestion) string {
 	for {
 		sendQuestion(q)
 		a := readStdinLine()
-		if valid[a] {
-			return a
-		}
-		if a == "q" {
+		if a == "q" { // before the options, which offer "q" too (v30.178 returned it as an answer)
 			// Stop: as Ctrl-C, which the job's loop checks (QuitWasRequested); quitNow
 			// would do nothing for a job of the service after its first stop.
 			interrupted.Store(true)
 			return ""
+		}
+		if valid[a] {
+			return a
 		}
 		q.Again = true
 	}

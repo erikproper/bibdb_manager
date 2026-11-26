@@ -633,8 +633,8 @@ function wireEdit(opt) {
 const qPDFIcon = (q) => q.pdf ? ' <button class="pdf" id="qpdf" title="Open the PDF to look" style="vertical-align:middle">' + PDFICON + "</button>" : "";
 // stopButton: Stop answers "q" where the question takes it, else stops the job (the pop-up
 // covers the tab's own Stop button).
-const stopButton = (q) => optKeys(q).includes("q") ? '<button class="plain" data-qopt="q" title="Stop the job">Stop</button>'
-                                                  : '<button class="plain" id="qstopjob" title="Stop the job, as Ctrl-C does">Stop</button>';
+const stopButton = (q) => optKeys(q).includes("q") ? '<button class="action danger" data-qopt="q" title="Stop the job">Stop</button>'
+                                                  : '<button class="action danger" id="qstopjob" title="Stop the job, as Ctrl-C does">Stop</button>';
 function openQuestion() {
   const d = dlg;
   if (!d || !d.asking) return;
@@ -693,7 +693,7 @@ function openQuestion() {
     showQuestion(d, html + '<div class="qtext">' + esc(q.text || "Your answer?") + "</div>" +
       '<div class="qactions"><input id="qtextin" placeholder="Your answer" autocomplete="off"><button class="action" id="qconfirm">Confirm</button>' +
       (q.options || []).map((o) => '<button class="plain" data-qopt="' + esc(o.key) + '">' + esc(cap(o.label || o.key)) + "</button>").join("") +
-      '<button class="plain" id="qstoptext" title="Stop the job">Stop</button></div>');
+      '<button class="action danger" id="qstoptext" title="Stop the job">Stop</button></div>');
     $("qstoptext").onclick = () => { qWaiting(); $("dlgstop").onclick(); };
     const t = $("qtextin"); t.focus();
     t.onkeydown = (e) => { if (e.key === "Enter") sendAnswer("", t.value); };

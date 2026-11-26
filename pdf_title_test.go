@@ -24,6 +24,7 @@ func TestTitlesPlausible(t *testing.T) {
 		{"Advances in Enterprise Engineering {VIII} -- 4th Working Conference", "LNBIP 174 - Advances in Enterprise Engineering VIII", true},
 		{"Design and Evaluation of a Web-based Modeling Platform to Support Learning", "Web-based Modeling Platform", true},
 		{"Semantic Smoothing of Document Models for Agglomerative Clustering", "Exploiting Image Contents in Web Search", false},
+		{"On the Move to Meaningful Internet Systems: {OTM} 2018 Workshops -- {Confederated} International Workshops: {EI2N}, {FBM}, {ICSP}, and {Meta4eS} 2018", "On the Move to Meaningful Internet Systems: OTM 2018 Workshops", true},
 	} {
 		if got := titlesPlausible(c.entry, c.pdf); got != c.want {
 			t.Errorf("titlesPlausible(%q, %q) = %v", c.entry, c.pdf, got)
