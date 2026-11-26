@@ -49,7 +49,7 @@ func beginJob() {
 	changesAtSessionOpen = 0
 	homeDbSizeAtOpen = 0
 	preCloseHook = nil
-	forceNameMapping = false
+	forceNameForm = false
 	rebuildDone = false
 	safeParseTemp = ""
 	safeParseOriginalCount = 0

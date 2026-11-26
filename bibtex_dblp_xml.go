@@ -13,7 +13,7 @@
  * decoding are stored as-is. Conversion to LaTeX happens at read time via
  * dblpRawToLaTeX (html_commands_map → html_character_map → unicode_map).
  *
- * Import is two-pass: the first pass collects name mappings from www (person
+ * Import is two-pass: the first pass collects name forms from www (person
  * homepage) entries; the second pass builds a new store with names already
  * mapped to their canonical bibtex= forms.
  *
@@ -190,7 +190,7 @@ func (pm dblpPersonMaps) aliasToCanonical() map[string]string {
 // works on the final representation (preventing HTML/Unicode encoding variants of
 // the same name from slipping through as separate entries).
 //
-// Entries that only contain a <crossref> field are recorded as key oldies
+// Entries that only contain a <crossref> field are recorded as old keys
 // (child → parent redirect) rather than being processed as person records.
 func dblpBuildNameMap(r io.Reader) (dblpPersonMaps, error) {
 	pm := dblpPersonMaps{
@@ -438,7 +438,7 @@ var errDblpImportInterrupted = errors.New("interrupted")
 
 // dblpImportFromReader streams DBLP XML from r into the store being built by b:
 // one row per entry plus its title, person and ORCID links. nameMap contains the
-// canonical name mappings collected by dblpBuildNameMap. progress is called every
+// canonical name forms collected by dblpBuildNameMap. progress is called every
 // dblpProgressInterval entries (may be nil). Returns the total entry count and
 // any fatal error; stops with errDblpImportInterrupted after a Ctrl-C.
 func dblpImportFromReader(r io.Reader, nameMap map[string]string, b *TDblpDBBuilder, progress func(n int)) (int, error) {
@@ -654,7 +654,7 @@ func doLoadDblpXml(args []string) error {
 
 	start := time.Now()
 
-	// First pass: collect name mappings from www entries.
+	// First pass: collect name forms from www entries.
 	messagef("Pass 1: building name map from www entries...\n")
 	f1, err := os.Open(xmlGzPath)
 	if err != nil {
@@ -1561,7 +1561,7 @@ func absorbContributorInto(fromID, fromName, intoID, intoName string) bool {
 	}
 	delete(Library.ContributorByID, fromID)
 	// The old canonical becomes a name form of the contributor merged into (by id:
-	// AddNameMapping works by name and would create a new contributor when intoName is
+	// AddNameForm works by name and would create a new contributor when intoName is
 	// shared).
 	Library.giveContributorNameForm(intoID, fromName)
 	return true
@@ -1633,7 +1633,7 @@ func doMergeOrcidDuplicates() {
 	merged += depMerged
 	if merged > 0 || depGiven > 0 {
 		Library.RenormaliseNameFields()
-		Library.CheckNameMappingConsistency()
+		Library.CheckNameFormConsistency()
 	}
 }
 
@@ -1649,7 +1649,7 @@ func doEnrichContributorData() {
 	}
 	announceStep("Enriching contributor data")
 
-	Library.Progress("  Step 1/4: absorbing DBLP name mappings...")
+	Library.Progress("  Step 1/4: absorbing DBLP name forms...")
 	Library.progressPrefix = "  " // "  " + existing "  " prefix = "    "
 	absorbDblpNamesCore()
 	Library.progressPrefix = ""
@@ -1673,7 +1673,7 @@ func doEnrichContributorData() {
 	merged += depMerged
 	if merged > 0 || depGiven > 0 {
 		Library.RenormaliseNameFields()
-		Library.CheckNameMappingConsistency()
+		Library.CheckNameFormConsistency()
 	}
 	Library.progressPrefix = ""
 }

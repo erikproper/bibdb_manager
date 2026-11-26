@@ -6,7 +6,7 @@
  *   - bibtex_library_db
  *
  * Relational data layer for the BibTeX library. Each logical data source
- * (name mappings, key hints, …) follows the same three-function pattern:
+ * (name forms, key aliases, …) follows the same three-function pattern:
  *   import*FromCSV()       — import a table from a CSV (only via -import)
  *   load<X>FromDb(l)        — populate in-memory library fields from DB
  *   save<X>ToDb(l)          — write in-memory library fields back to DB
@@ -14,7 +14,7 @@
  * This is the lowest of three layers, and the only one concerned with what is
  * actually stored: raw SQL CRUD, schema, and table lifecycle. It does not manage
  * consistency between a map and its inverse — that's bibtex_library_maps.go's job,
- * which calls down into this file's functions (e.g. upsertNameMapping) to persist
+ * which calls down into this file's functions (e.g. upsertNameForm) to persist
  * whatever it has already kept internally consistent. bibtex_library.go sits above
  * both: the business rules that decide what a mapping *should* be (e.g. cycle
  * detection, absorbing one contributor's aliases into another) call into
@@ -495,12 +495,12 @@ func tryCreateTableIfNeeded(command string) {
 //  1. Address tables (state_names, state_countries, country_names):
 //     Bootstrap from built-in defaults when empty; feed address normalisation.
 //
-//  2. name_mappings: author/editor name canonicalisation; independent of others.
+//  2. name forms: author/editor name canonicalisation; independent of others.
 //
 //  3. field_mappings: unified per-field value normalisation and cross-field propagation.
-//     Depends on name_mappings (name values are normalised via name aliases).
+//     Depends on the name forms (name values are normalised via name aliases).
 //
-//  6. key_hints, key_oldies, non_double_entries: key alias tables.
+//  6. key_aliases, old_keys, non_double_entries: key alias tables.
 //
 //  7. dblp_parent, dblp_waived, entry_flags: DBLP-related tables.
 //
@@ -972,40 +972,40 @@ func deleteContributorNameFromDB(id, name string) {
 	}
 }
 
-// --- name_mappings table ---
+// --- name forms table ---
 
-// forceNameMapping, when true, bypasses upsertNameMapping's automatic garbled-name
-// heuristic. Set around explicit, user-directed alias commands (e.g. -add_name_mapping)
+// forceNameForm, when true, bypasses upsertNameForm's automatic garbled-name
+// heuristic. Set around explicit, user-directed alias commands (e.g. -add_name_form)
 // where the user has already deliberately confirmed the name — organization names like
 // "OMG, Object Management Group, Inc." trip the 2-comma heuristic (built to catch
 // auto-derived "Lastname, Suffix, Firstname" garbage) despite being entirely valid.
 // Automatic/derived callers leave this false so the heuristic still protects them.
-var forceNameMapping bool
+var forceNameForm bool
 
-// collectSkippedNameMappings, when set, collects the name mappings the garbled-name
+// collectSkippedNameForms, when set, collects the name forms the garbled-name
 // heuristic skips instead of warning about each: ORCID's other-names often hold a
 // whole list or titles ("Huang, Michael, Michael Huang"), which -enrich_contributor_data
-// reports in one line and orcid_skipped_names.log (reportSkippedNameMappings).
-var collectSkippedNameMappings *[]string
+// reports in one line and orcid_skipped_names.log (reportSkippedNameForms).
+var collectSkippedNameForms *[]string
 
-// upsertNameMapping records alias as a non-derived name form for the contributor
+// upsertNameForm records alias as a non-derived name form for the contributor
 // whose canonical name is `name`. Suppressed during load. If no contributor
 // exists yet for `name` a new one is created on the fly.
 // If the alias is itself the canonical of another contributor, that contributor
 // is absorbed into the target contributor in-place (DB + in-memory).
-func upsertNameMapping(alias, name string) {
+func upsertNameForm(alias, name string) {
 	if contributorsLoading {
 		return
 	}
 	if alias == "" || name == "" || alias == name {
 		return
 	}
-	if !forceNameMapping && (isGarbledContributorName(alias) || isGarbledContributorName(name)) {
-		if collectSkippedNameMappings != nil {
-			*collectSkippedNameMappings = append(*collectSkippedNameMappings, fmt.Sprintf("%q -> %q", alias, name))
+	if !forceNameForm && (isGarbledContributorName(alias) || isGarbledContributorName(name)) {
+		if collectSkippedNameForms != nil {
+			*collectSkippedNameForms = append(*collectSkippedNameForms, fmt.Sprintf("%q -> %q", alias, name))
 			return
 		}
-		dbInteraction.Warning("Skipping name mapping %q -> %q: looks like a garbled/ambiguous name (heuristic check); add it in the web UI (Tables, Name mappings) to force it", alias, name)
+		dbInteraction.Warning("Skipping name form %q -> %q: looks like a garbled/ambiguous name (heuristic check); add it in the web UI (Tables, Name forms) to force it", alias, name)
 		return
 	}
 	id, ok := Library.NameToContributorID[name]
@@ -1097,9 +1097,9 @@ func removeNonDoubleContributorNamePair(l *TBibTeXLibrary, name1, name2 string) 
 		`DELETE FROM non_double_contributor_names WHERE name1 = ? AND name2 = ?`, name1, name2)
 }
 
-// deleteNameMapping removes a non-derived name form from the contributor
+// deleteNameForm removes a non-derived name form from the contributor
 // identified by alias. Suppressed during load.
-func deleteNameMapping(alias string) {
+func deleteNameForm(alias string) {
 	if contributorsLoading {
 		return
 	}
@@ -1922,25 +1922,25 @@ func (l *TBibTeXLibrary) FlushAmbiguousAssignments() {
 	l.ambiguousAssignmentPick = map[string]string{}
 }
 
-// --- key_hints table ---
+// --- key_aliases table ---
 
-func ensureKeyHintsTableExists() {
+func ensureKeyAliasesTableExists() {
 	tryCreateTableIfNeeded(`
-		CREATE TABLE IF NOT EXISTS key_hints (
-		  hint TEXT PRIMARY KEY,
+		CREATE TABLE IF NOT EXISTS key_aliases (
+		  alias TEXT PRIMARY KEY,
 		  key  TEXT NOT NULL
 		);`)
 }
 
-// newKeyHintsTable returns a write-through cache backed by the key_hints SQLite table.
+// newKeyAliasesTable returns a write-through cache backed by the key_aliases SQLite table.
 // Stale hints (target entry removed) are deleted from the DB during Load().
 // Transient DBLP-derived hints use SetTransient and are never written to the DB.
-func newKeyHintsTable() *TCachedTable[string, string] {
+func newKeyAliasesTable() *TCachedTable[string, string] {
 	t := newCachedTable(&TSQLiteTable[string, string]{
-		upsertSQL: `INSERT INTO key_hints (hint, key) VALUES (?, ?)
-		            ON CONFLICT(hint) DO UPDATE SET key = excluded.key;`,
-		deleteSQL:  `DELETE FROM key_hints WHERE hint = ?`,
-		selectSQL:  `SELECT hint, key FROM key_hints`,
+		upsertSQL: `INSERT INTO key_aliases (alias, key) VALUES (?, ?)
+		            ON CONFLICT(alias) DO UPDATE SET key = excluded.key;`,
+		deleteSQL:  `DELETE FROM key_aliases WHERE alias = ?`,
+		selectSQL:  `SELECT alias, key FROM key_aliases`,
 		upsertArgs: func(k, v string) []any { return []any{k, v} },
 		deleteArgs: func(k string) []any { return []any{k} },
 		scanRow: func(rows *sql.Rows) (string, string, error) {
@@ -1948,29 +1948,29 @@ func newKeyHintsTable() *TCachedTable[string, string] {
 			return hint, key, rows.Scan(&hint, &key)
 		},
 	})
-	t.onModify = func() { setTableDate("key_hints", time.Now().UnixMicro()) }
+	t.onModify = func() { setTableDate("key_aliases", time.Now().UnixMicro()) }
 	return t
 }
 
-// --- key_oldies table ---
+// --- old_keys table ---
 
-func ensureKeyOldiesTableExists() {
+func ensureOldKeysTableExists() {
 	tryCreateTableIfNeeded(`
-		CREATE TABLE IF NOT EXISTS key_oldies (
+		CREATE TABLE IF NOT EXISTS old_keys (
 		  alias TEXT PRIMARY KEY,
 		  key   TEXT NOT NULL
 		);`)
 }
 
-// newKeyOldiesTable returns a TKeyAliasTable backed by the key_oldies SQLite table.
+// newOldKeysTable returns a TKeyMapTable backed by the old_keys SQLite table.
 // Load() flattens any stored chains and deletes stale entries immediately.
-func newKeyOldiesTable() *TKeyAliasTable {
-	return &TKeyAliasTable{
-		upsertSQL: `INSERT INTO key_oldies (alias, key) VALUES (?, ?)
+func newOldKeysTable() *TKeyMapTable {
+	return &TKeyMapTable{
+		upsertSQL: `INSERT INTO old_keys (alias, key) VALUES (?, ?)
 		            ON CONFLICT(alias) DO UPDATE SET key = excluded.key;`,
-		deleteSQL: `DELETE FROM key_oldies WHERE alias = ?`,
-		selectSQL: `SELECT alias, key FROM key_oldies`,
-		onModify:  func() { setTableDate("key_oldies", time.Now().UnixMicro()) },
+		deleteSQL: `DELETE FROM old_keys WHERE alias = ?`,
+		selectSQL: `SELECT alias, key FROM old_keys`,
+		onModify:  func() { setTableDate("old_keys", time.Now().UnixMicro()) },
 	}
 }
 
@@ -2292,12 +2292,12 @@ func maybeMigrateDblpCanonical() {
 
 // repairDblpData fixes stale data left by incomplete transactions or aborted runs:
 //
-//  1. Category-A ghosts — entries that are already in key_oldies (properly merged
+//  1. Category-A ghosts — entries that are already in old_keys (properly merged
 //     away) but still carry a stale dblp field in bib_entries. Only the dblp row
-//     is removed; other oldie-related rows (key_hints, superseded_field_values, …) stay.
+//     is removed; other oldie-related rows (key_aliases, superseded_field_values, …) stay.
 //
 //  2. Category-B ghosts — entries with a dblp field but no entrytype and not yet in
-//     key_oldies (failed creates). All their rows are removed via CASCADE on
+//     old_keys (failed creates). All their rows are removed via CASCADE on
 //     bib_entry_keys.
 //
 //  3. Stale dblp_canonical rows — canonical_key no longer has an entrytype — are
@@ -2309,21 +2309,21 @@ func maybeMigrateDblpCanonical() {
 //
 // Must run before initEntryCache so the cache is built from clean data.
 func repairDblpData() {
-	// Category A: remove stale dblp field from properly-merged key_oldies.
+	// Category A: remove stale dblp field from properly-merged old_keys.
 	res, err := db.Exec(`
 		DELETE FROM bib_entries
 		WHERE field = ?
-		  AND entry_key IN     (SELECT alias FROM key_oldies)
+		  AND entry_key IN     (SELECT alias FROM old_keys)
 		  AND entry_key NOT IN (SELECT entry_key FROM bib_entries WHERE field = ?)`,
 		DBLPField, EntryTypeField)
 	if err != nil {
 		dbInteraction.Warning("repairDblpData (A): %s", err)
 	} else if n, _ := res.RowsAffected(); n > 0 {
-		dbInteraction.Progress("  Repair DBLP data: removed %d stale dblp field(s) from merged key_oldies", n)
+		dbInteraction.Progress("  Repair DBLP data: removed %d stale dblp field(s) from merged old_keys", n)
 	}
 
 	// Category B: remove ghost entries (dblp field only, no entrytype, not in
-	// key_oldies) that are redundant — i.e. another live entry already holds the
+	// old_keys) that are redundant — i.e. another live entry already holds the
 	// same DBLP key. Ghosts with no live sibling are NOT deleted: doing so would
 	// erase the only record of that publication, leaving only orphaned
 	// entry_lineage/source_field_signatures rows as posthumous evidence (the same
@@ -2342,7 +2342,7 @@ func repairDblpData() {
 		FROM bib_entries g
 		WHERE g.field = ?
 		  AND g.entry_key NOT IN (SELECT entry_key FROM bib_entries WHERE field = ?)
-		  AND g.entry_key NOT IN (SELECT alias FROM key_oldies)`,
+		  AND g.entry_key NOT IN (SELECT alias FROM old_keys)`,
 		DBLPField, EntryTypeField)
 	if err != nil {
 		dbInteraction.Warning("repairDblpData (B): %s", err)
@@ -2435,7 +2435,7 @@ func deleteDblpCanonicalByCanonicalKey(canonicalKey string) {
 }
 
 // LookupDblpCanonical returns the canonical library key for a DBLP key by querying
-// dblp_canonical directly (bypasses the transient KeyOldies alias).
+// dblp_canonical directly (bypasses the transient OldKeys alias).
 func LookupDblpCanonical(dblpKey string) string {
 	var canonical string
 	db.QueryRow(`SELECT canonical_key FROM dblp_canonical WHERE dblp_key = ?`, dblpKey).Scan(&canonical) //nolint:errcheck
@@ -2571,7 +2571,7 @@ func loadAuthorEditorFieldMappingsFromCache(l *TBibTeXLibrary) {
 			continue
 		}
 		normWinner := l.MapFieldValue(field, l.NormaliseFieldValue(field, winner))
-		// Apply NormaliseFieldValue to the stored superseded value so that name-mapping
+		// Apply NormaliseFieldValue to the stored superseded value so that name-form
 		// changes made after it was first recorded don't produce a stale key that no
 		// longer matches the incoming DBLP challenge (which is also normalised).
 		normSuperseded := l.MapFieldValue(field, l.NormaliseFieldValue(field, superseded))
@@ -3052,7 +3052,7 @@ func deleteEntryWarning(key, warning string) {
 // anchor row first rather than rely on it already being there.
 func insertEntryWarning(key, warning string) {
 	if err := bibExec(`INSERT OR IGNORE INTO bib_entry_keys (entry_key) VALUES (?)`, key); err != nil {
-		// Previously silent — see the matching comment in TKeyAliasTable.Load.
+		// Previously silent — see the matching comment in TKeyMapTable.Load.
 		dbInteraction.Warning("insertEntryWarning: bib_entry_keys anchor insert failed: %s", err)
 		markDbWriteFailed(fmt.Sprintf("insertEntryWarning: bib_entry_keys anchor insert failed (key=%s): %s", key, err))
 		return
@@ -3388,7 +3388,7 @@ func closeEntry(entry *TBibTeXEntry) bool {
 					// MergeInMemoryDBLPEntry, used by -watch to add new entries — hits
 					// a FOREIGN KEY violation on every contributor_roles insert.
 					if err2 := bibExec(`INSERT OR IGNORE INTO bib_entry_keys (entry_key) VALUES (?)`, entry.Key); err2 != nil {
-						// Previously silent — see the matching comment in TKeyAliasTable.Load.
+						// Previously silent — see the matching comment in TKeyMapTable.Load.
 						dbInteraction.Warning("closeEntry: bib_entry_keys anchor insert failed for %s: %s", entry.Key, err2)
 						markDbWriteFailed(fmt.Sprintf("closeEntry: bib_entry_keys anchor insert failed (key=%s, field=%s): %s", entry.Key, field, err2))
 						continue
@@ -3566,9 +3566,9 @@ func repairDirtyMappingTables() (entryFieldMappingsRepaired bool) {
 		setTableLastWritten(tableName)
 	}
 
-	// key_hints: "key;hint"
-	if repair("key_hints", base+KeyHintsFilePath) {
-		rows, err := db.Query(`SELECT key, hint FROM key_hints`)
+	// key_aliases: "key;hint"
+	if repair("key_aliases", base+KeyAliasesFilePath) {
+		rows, err := db.Query(`SELECT key, alias FROM key_aliases`)
 		if err == nil {
 			var lines []string
 			for rows.Next() {
@@ -3578,15 +3578,15 @@ func repairDirtyMappingTables() (entryFieldMappingsRepaired bool) {
 				}
 			}
 			rows.Close()
-			if writeRepairCSV(base+KeyHintsFilePath, lines) {
-				finishRepair("key_hints")
+			if writeRepairCSV(base+KeyAliasesFilePath, lines) {
+				finishRepair("key_aliases")
 			}
 		}
 	}
 
-	// key_oldies: "key;alias"
-	if repair("key_oldies", base+KeyOldiesFilePath) {
-		rows, err := db.Query(`SELECT key, alias FROM key_oldies`)
+	// old_keys: "key;alias"
+	if repair("old_keys", base+OldKeysFilePath) {
+		rows, err := db.Query(`SELECT key, alias FROM old_keys`)
 		if err == nil {
 			var lines []string
 			for rows.Next() {
@@ -3596,8 +3596,8 @@ func repairDirtyMappingTables() (entryFieldMappingsRepaired bool) {
 				}
 			}
 			rows.Close()
-			if writeRepairCSV(base+KeyOldiesFilePath, lines) {
-				finishRepair("key_oldies")
+			if writeRepairCSV(base+OldKeysFilePath, lines) {
+				finishRepair("old_keys")
 			}
 		}
 	}
@@ -3763,7 +3763,7 @@ func upsertBibEntryField(key, field, value string) {
 			// field (e.g. entry creation during -watch) hits a FOREIGN KEY violation
 			// on every contributor_roles insert for that entry.
 			if err2 := bibExec(`INSERT OR IGNORE INTO bib_entry_keys (entry_key) VALUES (?)`, key); err2 != nil {
-				// Previously silent — see the matching comment in TKeyAliasTable.Load.
+				// Previously silent — see the matching comment in TKeyMapTable.Load.
 				dbInteraction.Warning("upsertBibEntryField: bib_entry_keys anchor insert failed for %s: %s", key, err2)
 				markDbWriteFailed(fmt.Sprintf("upsertBibEntryField: bib_entry_keys anchor insert failed (key=%s, field=%s): %s", key, field, err2))
 				return
@@ -3800,7 +3800,7 @@ func upsertBibEntryField(key, field, value string) {
 		// bib transaction is active — a bare db.Exec competes for a second write
 		// slot and gets SQLITE_BUSY_SNAPSHOT (517) in WAL mode.
 		if err2 := bibExec(`INSERT OR IGNORE INTO bib_entry_keys (entry_key) VALUES (?)`, key); err2 != nil {
-			// Previously silent — see the matching comment in TKeyAliasTable.Load.
+			// Previously silent — see the matching comment in TKeyMapTable.Load.
 			dbInteraction.Warning("upsertBibEntryField: bib_entry_keys anchor insert failed for %s: %s", key, err2)
 			markDbWriteFailed(fmt.Sprintf("upsertBibEntryField: bib_entry_keys anchor insert failed (key=%s, field=%s): %s", key, field, err2))
 			return
@@ -4255,30 +4255,30 @@ func loadCommentsFromDb(l *TBibTeXLibrary) {
 	}
 }
 
-// addDblpKeyHintTransient adds a DBLP-derived hint to HintToKey and KeyOldies as a
+// addDblpKeyAliasTransient adds a DBLP-derived hint to AliasToKey and OldKeys as a
 // transient (in-memory only) entry. DBLP hints are regenerated from bib_entries on
 // every run, so they must not be persisted to the DB.
-func addDblpKeyHintTransient(l *TBibTeXLibrary, dblpHint, key string) {
-	if !l.HintToKey.Contains(dblpHint) {
-		l.HintToKey.SetTransient(dblpHint, key)
+func addDblpKeyAliasTransient(l *TBibTeXLibrary, dblpHint, key string) {
+	if !l.AliasToKey.Contains(dblpHint) {
+		l.AliasToKey.SetTransient(dblpHint, key)
 	}
 }
 
 // buildKeyAliasesFromDb rebuilds the in-memory key alias and hint maps from fields
 // stored in bib_entries (preferredalias) and dblp_canonical (dblp identity).
 // Must be called on the fast path where no parse takes place.
-// preferredalias entries go only to key_hints (not key_oldies); DBLP entries are
+// preferredalias entries go only to key_aliases (not old_keys); DBLP entries are
 // transient (regenerated each run from dblp_canonical, never written to the DB).
 func buildKeyAliasesFromDb(l *TBibTeXLibrary) {
 	dbInteraction.Progress(ProgressBuildingKeyAliases)
 	if entryCache != nil {
 		for key, e := range entryCache {
 			if alias := e.Fields[PreferredAliasField]; alias != "" {
-				l.AddKeyHint(alias, key)
+				l.AddKeyAlias(alias, key)
 			}
 			if dblp := e.Fields[DBLPField]; dblp != "" {
-				l.KeyOldies.SetTransient(KeyForDBLP(dblp), key)
-				addDblpKeyHintTransient(l, KeyForDBLP(dblp), key)
+				l.OldKeys.SetTransient(KeyForDBLP(dblp), key)
+				addDblpKeyAliasTransient(l, KeyForDBLP(dblp), key)
 			}
 		}
 		return
@@ -4298,7 +4298,7 @@ func buildKeyAliasesFromDb(l *TBibTeXLibrary) {
 			dbInteraction.Warning("Could not scan preferred alias row: %s", err)
 			continue
 		}
-		l.AddKeyHint(value, key)
+		l.AddKeyAlias(value, key)
 	}
 
 	dblpRows, err := db.Query(`SELECT dblp_key, canonical_key FROM dblp_canonical`)
@@ -4313,8 +4313,8 @@ func buildKeyAliasesFromDb(l *TBibTeXLibrary) {
 			dbInteraction.Warning("Could not scan dblp_canonical row: %s", err)
 			continue
 		}
-		l.KeyOldies.SetTransient(KeyForDBLP(dblpKey), canonical)
-		addDblpKeyHintTransient(l, KeyForDBLP(dblpKey), canonical)
+		l.OldKeys.SetTransient(KeyForDBLP(dblpKey), canonical)
+		addDblpKeyAliasTransient(l, KeyForDBLP(dblpKey), canonical)
 	}
 }
 

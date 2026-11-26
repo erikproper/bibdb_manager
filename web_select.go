@@ -218,7 +218,7 @@ func (s *TSelectSession) read() {
 			return key
 		}
 		var canonical string
-		if ro.QueryRow(`SELECT key FROM key_oldies WHERE alias = ?`, key).Scan(&canonical) == nil {
+		if ro.QueryRow(`SELECT key FROM old_keys WHERE alias = ?`, key).Scan(&canonical) == nil {
 			return canonical
 		}
 		return ""
@@ -292,7 +292,7 @@ func (s *TSelectSession) newLocal(key string) string {
 func (s *TSelectSession) toggle(key string) (int, error) {
 	if ro, err := openReadOnly(); err == nil { // an old key: its entry
 		var canonical string
-		if ro.QueryRow(`SELECT key FROM key_oldies WHERE alias = ?`, key).Scan(&canonical) == nil {
+		if ro.QueryRow(`SELECT key FROM old_keys WHERE alias = ?`, key).Scan(&canonical) == nil {
 			key = canonical
 		}
 		ro.Close()
@@ -692,7 +692,7 @@ func (w *TWebUI) handleSelState(rw http.ResponseWriter, r *http.Request) {
 	key := r.URL.Query().Get("key")
 	if ro, err := openReadOnly(); err == nil {
 		var canonical string
-		if ro.QueryRow(`SELECT key FROM key_oldies WHERE alias = ?`, key).Scan(&canonical) == nil {
+		if ro.QueryRow(`SELECT key FROM old_keys WHERE alias = ?`, key).Scan(&canonical) == nil {
 			key = canonical
 		}
 		ro.Close()

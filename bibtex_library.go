@@ -62,10 +62,10 @@ type (
 		ISBNIndex                  TStringSetMap                           //
 		DOIIndex                   TStringSetMap                           //
 		NonDoubleEntries           TStringSetMap                           //
-		newKeyHints                TStringMap                              // counts persistent hints added in the current run (for harvest reporting)
+		newKeyAliases              TStringMap                              // counts persistent hints added in the current run (for harvest reporting)
 		FieldMappings              TStringStringStringMap                  // field/value to field/value mapping
 		KeyIsTemporary             TStringSet                              // Keys that are generated for temporary reasons
-		tempKeyMergedInto          map[string]string                       // temporary key → the entry it was merged into (no key_oldie for those)
+		tempKeyMergedInto          map[string]string                       // temporary key → the entry it was merged into (no old_key for those)
 		illegalFields              TStringSet                              // Collect the unknown fields we encounter. We can warn about these when e.g. parsing has been finished.
 		foundDoubles               bool                                    // If set, we found double entries. In this case, we may not want to e.g. write this file.
 		EntryFieldSourceToTarget   TStringStringStringMap                  // A key and field specific mapping from challenged value to winner values
@@ -138,8 +138,8 @@ func (l *TBibTeXLibrary) Initialise(reporting TInteraction, filesRoot, baseName 
 	l.DOIIndex = TStringSetMap{}
 	l.NonDoubleEntries = TStringSetMap{}
 	l.NonDoubleContributorNames = map[[2]string]bool{}
-	l.KeyOldies = newKeyOldiesTable()
-	l.HintToKey = newKeyHintsTable()
+	l.OldKeys = newOldKeysTable()
+	l.AliasToKey = newKeyAliasesTable()
 	l.KeyIsTemporary = TStringSetNew()
 	l.tempKeyMergedInto = map[string]string{}
 	l.NameAliasToName = TStringMap{}
@@ -164,7 +164,7 @@ func (l *TBibTeXLibrary) Initialise(reporting TInteraction, filesRoot, baseName 
 	l.GenericFieldTargetToSource = TStringStringSetMap{}
 
 	l.NoDBUpdating = false
-	l.newKeyHints = TStringMap{}
+	l.newKeyAliases = TStringMap{}
 	l.Metadata = TEntryMetadata{}
 	l.LineageMap = map[string]map[string]TLineageRecord{}
 	l.SourceSignatures = map[string]map[string]map[string]string{}
@@ -325,7 +325,7 @@ func (l *TBibTeXLibrary) ProcessComment(comment string) bool {
 
 // authorEditorNamesEquivalent reports whether two " and "-joined author/editor
 // field values name the same people once "others"/"et al." tokens are dropped
-// and each name is normalised through NameAliasToName. A name-mapping decision
+// and each name is normalised through NameAliasToName. A name-form decision
 // made elsewhere (e.g. the auto-accept path in resolveNamePair during a DBLP
 // update) already resolves pairs like this; without this check AddEntryFieldAlias
 // would still log them into superseded_field_values as "awaiting triage" even
@@ -429,9 +429,9 @@ func (l *TBibTeXLibrary) AddEntryFieldAlias(entry, field, alias, target string, 
 	l.EntryFieldTargetToSource.AddValueToStringTrippleSetMap(entry, field, target, alias)
 
 	if field != PreferredAliasField && !entryFieldMappingsLoading {
-		alreadyResolvedByNameMapping := (field == "author" || field == "editor") &&
+		alreadyResolvedByNameForm := (field == "author" || field == "editor") &&
 			authorEditorNamesEquivalent(l, alias, target)
-		if l.MapFieldValue(field, alias) != l.MapEntryFieldValue(entry, field, target) && !alreadyResolvedByNameMapping {
+		if l.MapFieldValue(field, alias) != l.MapEntryFieldValue(entry, field, target) && !alreadyResolvedByNameForm {
 			// Store both the superseded value and the accepted winner so that
 			// loadEntryFieldMappingsFromDb can reconstruct the mapping even when
 			// bib_entries was not immediately updated after a "n" answer.
@@ -592,7 +592,7 @@ func (l *TBibTeXLibrary) ReassignEntryFieldMappings(source, target string) {
 //	if keyExists && knownKey != key {
 //		l.Warning("Ambiguous alias assignment of %s to %s, while we already have %s", alias, key, knownKey)
 //	} else {
-//		l.AddKeyAlias(alias, key)
+//		l.AddOldKey(alias, key)
 //	}
 //}
 
@@ -635,13 +635,13 @@ func invertedNameForm(name string) string {
 	return ""
 }
 
-// AddNameMapping makes alias an alias of canonical, absorbing the alias's
+// AddNameForm makes alias an alias of canonical, absorbing the alias's
 // existing canonical group (if any) into canonical.
 // If canonical is itself an alias of another name the call is normally redirected
 // to that name's canonical to keep the graph acyclic. Exception: when canonical is
 // currently an alias of alias (a direct inversion), we detach canonical first so
 // the intended direction takes effect.
-func (l *TBibTeXLibrary) AddNameMapping(canonical, alias string) {
+func (l *TBibTeXLibrary) AddNameForm(canonical, alias string) {
 	if existingCanonical, isMapped := l.NameAliasToName[canonical]; isMapped {
 		if existingCanonical == alias {
 			// Inversion: canonical is currently an alias of alias; detach it so
@@ -649,7 +649,7 @@ func (l *TBibTeXLibrary) AddNameMapping(canonical, alias string) {
 			l.deleteNameAlias(canonical)
 			// fall through to normal processing
 		} else {
-			l.AddNameMapping(existingCanonical, alias)
+			l.AddNameForm(existingCanonical, alias)
 			return
 		}
 	}
@@ -670,13 +670,13 @@ func (l *TBibTeXLibrary) AddNameMapping(canonical, alias string) {
 	l.FindAliases(canonical, canonical)
 }
 
-// CheckNameMappingConsistency silently flattens any (alias -> X -> canonical) chains
+// CheckNameFormConsistency silently flattens any (alias -> X -> canonical) chains
 // left by automatic alias derivation. These arise when FindAliases maps a derived
 // form to an intermediate alias instead of the ultimate canonical; the result is
 // correct but the chain needs one extra hop at lookup time. Flattening removes that
 // extra hop and ensures NameAliasToName is a single-level map.
-func (l *TBibTeXLibrary) CheckNameMappingConsistency() {
-	l.Progress(ProgressCheckingNameMappings)
+func (l *TBibTeXLibrary) CheckNameFormConsistency() {
+	l.Progress(ProgressCheckingNameForms)
 
 	// Phase 1: detect and break cycles. Collect the edge to remove for each
 	// cycle (the edge that closes the loop), then delete them all at once so
@@ -699,7 +699,7 @@ func (l *TBibTeXLibrary) CheckNameMappingConsistency() {
 				edge := cur + "→" + next
 				if !seenCycle[edge] {
 					seenCycle[edge] = true
-					l.Warning("Cycle in name mappings (auto-fixed): %s", strings.Join(path, " → "))
+					l.Warning("Cycle in name forms (auto-fixed): %s", strings.Join(path, " → "))
 					removals = append(removals, removal{cur, next})
 				}
 				break
@@ -740,7 +740,7 @@ func (l *TBibTeXLibrary) CheckNameMappingConsistency() {
 	// (e.g. via a later alias, merge, or garbled-name correction). A stale
 	// "different person" record left over from an earlier skipped triage decision
 	// should not survive a later decision that says otherwise; see also
-	// upsertNameMapping's cleanup of the same principle for a single new alias.
+	// upsertNameForm's cleanup of the same principle for a single new alias.
 	var contradictions [][2]string
 	for pair := range l.NonDoubleContributorNames {
 		id1, ok1 := l.NameToContributorID[pair[0]]
@@ -904,12 +904,12 @@ func (l *TBibTeXLibrary) MergeEntries(sourceRAW, targetRAW string) string {
 			}
 
 			if !l.KeyIsTemporary.Contains(source) {
-				l.AddKeyAlias(source, target)
+				l.AddOldKey(source, target)
 				l.AddNonDoubleEntries(source, target)
 				// Rename source PDF to target name so the file stays associated.
 				l.mergePDFFile(source, target)
 			} else {
-				// A temporary key gets no key_oldie, so nothing would resolve it: note
+				// A temporary key gets no old_key, so nothing would resolve it: note
 				// the survivor, and repoint the entries whose crossref names it (the
 				// parent split off for an earlier paper of the same proceedings, merged
 				// into the one split off for the next: 2026-11-21's watch left four
@@ -922,16 +922,16 @@ func (l *TBibTeXLibrary) MergeEntries(sourceRAW, targetRAW string) string {
 			l.ReassignEntryFieldMappings(source, target)
 			l.transferMetadata(source, target)
 
-			// Retarget any key_hints pointing to source → target before deleting source.
-			// key_hints has no FK cascade, so dead hints would otherwise accumulate.
+			// Retarget any key_aliases pointing to source → target before deleting source.
+			// key_aliases has no FK cascade, so dead hints would otherwise accumulate.
 			var hintsToRetarget []string
-			l.HintToKey.ForEach(func(hint, hKey string) {
+			l.AliasToKey.ForEach(func(hint, hKey string) {
 				if hKey == source {
 					hintsToRetarget = append(hintsToRetarget, hint)
 				}
 			})
 			for _, hint := range hintsToRetarget {
-				l.HintToKey.Set(hint, target)
+				l.AliasToKey.Set(hint, target)
 			}
 
 			deleteBibEntry(source)
@@ -1201,45 +1201,45 @@ func (l *TBibTeXLibrary) MaybeMergeEntrySet(keys TStringSet) {
 	}
 }
 
-// AddKeyAlias records a persistent alias→canonical key mapping in key_oldies.
-// key_oldies is reserved for former EP-YYYY-MM-DD-HH-MM-SS canonical keys — an
+// AddOldKey records a persistent alias→canonical key mapping in old_keys.
+// old_keys is reserved for former EP-YYYY-MM-DD-HH-MM-SS canonical keys — an
 // alias being registered here (explicit -add_key_mapping, MergeEntries's old
-// key, a migrated key hint, ...) is by definition a key that used to literally
+// key, a migrated key alias, ...) is by definition a key that used to literally
 // be some entry's own identifier. A non-EP-format alias (a citation shorthand,
-// a demoted preferred alias) is redirected to AddKeyHint/key_hints instead,
+// a demoted preferred alias) is redirected to AddKeyAlias/key_aliases instead,
 // below — that table is what "known alias, not a former canonical key" means.
 // Callers that need transient, regenerated-every-run aliases (e.g. DBLP-derived
 // ones, rebuilt fresh from the dblp field each run) should call
-// l.KeyOldies.SetTransient directly instead of going through this function.
-func (l *TBibTeXLibrary) AddKeyAlias(alias, key string) {
+// l.OldKeys.SetTransient directly instead of going through this function.
+func (l *TBibTeXLibrary) AddOldKey(alias, key string) {
 	canonical := l.MapEntryKey(key)
 	if alias == canonical {
 		return
 	}
 	if !IsValidKey(alias) {
-		l.AddKeyHint(alias, canonical)
+		l.AddKeyAlias(alias, canonical)
 		return
 	}
-	if existing := l.KeyOldies.Get(alias); existing != "" {
+	if existing := l.OldKeys.Get(alias); existing != "" {
 		if existing == canonical {
 			return
 		}
-		l.Warning(WarningAmbiguousKeyOldie, alias, existing, canonical)
+		l.Warning(WarningAmbiguousOldKey, alias, existing, canonical)
 		return
 	}
-	// KeyOldies and HintToKey each only guard against ambiguity within themselves;
+	// OldKeys and AliasToKey each only guard against ambiguity within themselves;
 	// without this cross-check the same alias string can be registered in both
 	// tables pointing at different targets, silently, since neither write sees the
 	// other table at all.
-	if existingHint := l.HintToKey.GetValue(alias); existingHint != "" && l.MapEntryKey(existingHint) != canonical {
-		l.Warning(WarningAmbiguousKeyOldie, alias, existingHint, canonical)
+	if existingHint := l.AliasToKey.GetValue(alias); existingHint != "" && l.MapEntryKey(existingHint) != canonical {
+		l.Warning(WarningAmbiguousOldKey, alias, existingHint, canonical)
 		return
 	}
-	l.KeyOldies.Set(alias, canonical)
+	l.OldKeys.Set(alias, canonical)
 }
 
-func (l *TBibTeXLibrary) AddKeyHint(hint, key string) {
-	// DBLP keys belong in KeyOldies via AssociateDblpKey / the dblp field, not in HintToKey.
+func (l *TBibTeXLibrary) AddKeyAlias(hint, key string) {
+	// DBLP keys belong in OldKeys via AssociateDblpKey / the dblp field, not in AliasToKey.
 	if strings.HasPrefix(hint, "DBLP:") {
 		return
 	}
@@ -1247,22 +1247,22 @@ func (l *TBibTeXLibrary) AddKeyHint(hint, key string) {
 	if hint == resolvedKey {
 		return
 	}
-	if existing := l.HintToKey.GetValue(hint); existing != "" {
+	if existing := l.AliasToKey.GetValue(hint); existing != "" {
 		if l.MapEntryKey(existing) == resolvedKey {
 			return
 		}
-		l.Warning(WarningAmbiguousKeyHint, hint, existing, resolvedKey)
+		l.Warning(WarningAmbiguousKeyAlias, hint, existing, resolvedKey)
 		return
 	}
-	// See the matching cross-check in AddKeyAlias: KeyOldies and HintToKey don't
+	// See the matching cross-check in AddOldKey: OldKeys and AliasToKey don't
 	// see each other's writes, so the same string can otherwise end up registered
 	// in both with different targets.
-	if existingOldie := l.KeyOldies.Get(hint); existingOldie != "" && existingOldie != resolvedKey {
-		l.Warning(WarningAmbiguousKeyHint, hint, existingOldie, resolvedKey)
+	if existingOldie := l.OldKeys.Get(hint); existingOldie != "" && existingOldie != resolvedKey {
+		l.Warning(WarningAmbiguousKeyAlias, hint, existingOldie, resolvedKey)
 		return
 	}
-	l.HintToKey.Set(hint, resolvedKey)
-	l.newKeyHints[hint] = resolvedKey
+	l.AliasToKey.Set(hint, resolvedKey)
+	l.newKeyAliases[hint] = resolvedKey
 }
 
 func (l *TBibTeXLibrary) AddFieldMapping(sourceField, sourceValue, targetField, targetValue string) {
@@ -1488,24 +1488,24 @@ func (l *TBibTeXLibrary) deleteEntryField(entry *TBibTeXEntry, field string) {
 }
 
 // DeleteEntry removes a canonical entry and all associated index data:
-// key hints, key oldies, bib_entries rows, title index, and PDF file (→ library trash).
+// key aliases, old keys, bib_entries rows, title index, and PDF file (→ library trash).
 // The canonical key and all current aliases are recorded in deleted_entries so that
 // subsequent subset syncs do not offer to re-add stale bib entries.
 // The caller is responsible for resolving aliases to the canonical key beforehand.
 func (l *TBibTeXLibrary) DeleteEntry(key string) {
 	// Record the canonical key and every alias so sync bibs can be silently skipped.
 	recordDeletedKey(key)
-	l.HintToKey.DeleteWhere(func(hint, target string) bool {
+	l.AliasToKey.DeleteWhere(func(hint, target string) bool {
 		if l.MapEntryKey(target) == key {
 			recordDeletedKey(hint)
 			return true
 		}
 		return false
 	})
-	l.KeyOldies.EachAlias(key, func(alias string) {
+	l.OldKeys.EachAlias(key, func(alias string) {
 		recordDeletedKey(alias)
 	})
-	l.KeyOldies.DeleteByTarget(key)
+	l.OldKeys.DeleteByTarget(key)
 	l.TitleIndex.DeleteValueFromStringSetMap(TeXStringIndexer(l.EntryFieldValueity(key, TitleField)), key)
 	// Move PDF to library trash before removing the DB entry.
 	if l.PDFFiles[key] {
@@ -1525,7 +1525,7 @@ func (l *TBibTeXLibrary) DeleteEntry(key string) {
 }
 
 func (l *TBibTeXLibrary) AliasExists(alias string) bool {
-	return l.KeyOldies.Has(alias)
+	return l.OldKeys.Has(alias)
 }
 
 // Checks if the provided winner is, indeed, the winner of the challenge by the challenger for the provided field of the provided entry.
@@ -1563,7 +1563,7 @@ func KeyFromTime(KeyTime time.Time) string {
 // ////// Place me somehwere
 func (l *TBibTeXLibrary) IsKnownKey(key string) bool {
 	_, isContributor := l.ContributorByID[key]
-	return bibEntryExists(key) || l.KeyOldies.Has(key) || isContributor
+	return bibEntryExists(key) || l.OldKeys.Has(key) || isContributor
 }
 
 // Generate a new key based on the ForwardKeyTime.

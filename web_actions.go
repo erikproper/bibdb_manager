@@ -6,7 +6,7 @@ package main
 // answered in the page (a button per option, or typed). A job from the command
 // line keeps asking on its terminal.
 //
-// One dialogue at a time (the service runs one job at a time): the last one
+// One job at a time (the service runs no more): the last one
 // stays shown until the next starts.
 
 import (
@@ -21,29 +21,29 @@ import (
 	"time"
 )
 
-// TDialogue is the job the Actions tab shows, and the questions answered in it. Its
+// TActionsJob is the job the Actions tab shows, and the questions answered in it. Its
 // status, open question and results are the job's (service_dialogue.go); its log
 // text goes to the service log.
-type TDialogue struct {
+type TActionsJob struct {
 	mu      sync.Mutex
 	title   string
 	running bool
 	code    int
 	job     *TJob
 	started time.Time
-	history []TDialogueReply // the questions answered in this job
+	history []TActionsReply // the questions answered in this job
 }
 
-// TDialogueReply is a question answered in the Actions tab.
-type TDialogueReply struct {
+// TActionsReply is a question answered in the Actions tab.
+type TActionsReply struct {
 	Question string `json:"question"`
 	Answer   string `json:"answer"`
 	At       string `json:"at"`
 }
 
-var dialogue = &TDialogue{}
+var actionsTab = &TActionsJob{}
 
-func (d *TDialogue) start(title string, job *TJob) {
+func (d *TActionsJob) start(title string, job *TJob) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.title, d.job, d.running, d.code, d.started, d.history = title, job, true, 0, time.Now(), nil
@@ -51,7 +51,7 @@ func (d *TDialogue) start(title string, job *TJob) {
 
 // show shows a command line's job that asks something; it tells whether it was not
 // shown yet.
-func (d *TDialogue) show(job *TJob) bool {
+func (d *TActionsJob) show(job *TJob) bool {
 	d.mu.Lock()
 	shown := d.job == job
 	d.mu.Unlock()
@@ -62,14 +62,14 @@ func (d *TDialogue) show(job *TJob) bool {
 }
 
 // shows tells whether a job is shown.
-func (d *TDialogue) shows() bool {
+func (d *TActionsJob) shows() bool {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	return d.job != nil
 }
 
 // finishIf is finish, when job is the one shown.
-func (d *TDialogue) finishIf(job *TJob, code int) {
+func (d *TActionsJob) finishIf(job *TJob, code int) {
 	d.mu.Lock()
 	shown := d.job == job
 	d.mu.Unlock()
@@ -78,14 +78,14 @@ func (d *TDialogue) finishIf(job *TJob, code int) {
 	}
 }
 
-func (d *TDialogue) finish(code int) {
+func (d *TActionsJob) finish(code int) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.running, d.code = false, code
 }
 
-// Asking tells whether the dialogue's job waits for an answer.
-func (d *TDialogue) Asking() bool {
+// Asking tells whether the Actions tab's job waits for an answer.
+func (d *TActionsJob) Asking() bool {
 	d.mu.Lock()
 	job := d.job
 	d.mu.Unlock()
@@ -94,35 +94,35 @@ func (d *TDialogue) Asking() bool {
 
 // answered notes that the job shown got its answer a to q: the log gets the issue
 // and the action taken (the question itself is no log line).
-func (d *TDialogue) answered(q *TQuestion, a TAnswer) {
+func (d *TActionsJob) answered(q *TQuestion, a TAnswer) {
 	shown := a.line()
 	if v := a.value(); v != "" {
 		shown += " " + v
 	}
 	d.mu.Lock()
-	d.history = append(d.history, TDialogueReply{Question: q.Text, Answer: shown, At: time.Now().Format("15:04:05")})
+	d.history = append(d.history, TActionsReply{Question: q.Text, Answer: shown, At: time.Now().Format("15:04:05")})
 	d.mu.Unlock()
 	for _, line := range summariseAnswer(q, a) {
 		fmt.Fprintln(os.Stderr, line)
 	}
 }
 
-// dialogueSink is the frame sink of the Actions tab's job: its log text (and
+// actionsSink is the frame sink of the Actions tab's job: its log text (and
 // output) goes to the service log. Its dialogue frames are taken by its TJob.
-type dialogueSink struct{}
+type actionsSink struct{}
 
-func (dialogueSink) send(f serviceFrame) error {
+func (actionsSink) send(f serviceFrame) error {
 	if f.T == "out" || f.T == "err" || f.T == "info" {
 		os.Stderr.WriteString(f.D) //nolint:errcheck
 	}
 	return nil
 }
 
-// runDialogueJob runs commands one after the other as the dialogue's job, in
+// runActionsJob runs commands one after the other as the Actions tab's job, in
 // the background, with questions answered in the page. own: the service's own
 // job (a command from the command line waits for it rather than being
 // refused). done (when not nil) gets the last exit code.
-func (s *TService) runDialogueJob(title string, cmds [][]string, own bool, done func(int), dir ...string) error {
+func (s *TService) runActionsJob(title string, cmds [][]string, own bool, done func(int), dir ...string) error {
 	s.mu.Lock()
 	if s.busy || s.stopping.Load() {
 		running := s.runningJob()
@@ -143,13 +143,13 @@ func (s *TService) runDialogueJob(title string, cmds [][]string, own bool, done 
 	run := func() {
 		code := 0
 		for _, args := range cmds {
-			sio := &TSocketIO{out: dialogueSink{}, interactive: true, lines: make(chan string, 16), job: job}
+			sio := &TSocketIO{out: actionsSink{}, interactive: true, lines: make(chan string, 16), job: job}
 			setAnswerValue("")
 			job.setReply(sio.answer)
-			if own && dialogue.shows() {
-				job.onAsk = func() { dialogue.show(job) } // a reload leaves the last job's result, until it asks
+			if own && actionsTab.shows() {
+				job.onAsk = func() { actionsTab.show(job) } // a reload leaves the last job's result, until it asks
 			} else {
-				dialogue.start(title, job)
+				actionsTab.start(title, job)
 			}
 			fmt.Fprintf(os.Stderr, "%s  job (Actions tab): %s\n", time.Now().Format(time.DateTime), strings.Join(append([]string{title + ":"}, args...), " "))
 			req := serviceFrame{T: "run", Args: append([]string{"-base", libraryBase()}, args...), Version: AppVersion, Base: libraryBase()}
@@ -158,12 +158,12 @@ func (s *TService) runDialogueJob(title string, cmds [][]string, own bool, done 
 			positional, ok := parseJobArguments(req.Args)
 			if ok && !runsInService() {
 				// A command that runs as a process of its own (-update_dblp, ...): its output
-				// and questions relayed (runDialogueChild).
+				// and questions relayed (runActionsChild).
 				childDir := ""
 				if len(dir) > 0 {
 					childDir = dir[0]
 				}
-				code = s.runDialogueChild(req.Args, childDir, job)
+				code = s.runActionsChild(req.Args, childDir, job)
 				ok = false
 			}
 			if ok {
@@ -186,7 +186,7 @@ func (s *TService) runDialogueJob(title string, cmds [][]string, own bool, done 
 			sio.finished.Store(true)
 			sio.endInput()
 			fmt.Fprintf(os.Stderr, "\n[ended with code %d]\n", code)
-			dialogue.finishIf(job, code)
+			actionsTab.finishIf(job, code)
 			if code != 0 {
 				break
 			}
@@ -218,16 +218,16 @@ var actionFromCommandLine = map[string]string{
 	"merge_entries": "Merge entries", "sync": "Sync", "harvest": "Harvest",
 }
 
-// TDialogueAction is an action the web UI can start: its title (the button's name),
+// TWebAction is an action the web UI can start: its title (the button's name),
 // its command, and what it is given (the names of its arguments, for a refusal).
-type TDialogueAction struct {
+type TWebAction struct {
 	Title string
 	Args  []string
 	Given []string
 }
 
-// dialogueActions are the actions: name → command.
-var dialogueActions = map[string]TDialogueAction{
+// webActions are the actions: name → command.
+var webActions = map[string]TWebAction{
 	"check":           {"Check", []string{}, nil},
 	"fix_candidates":  {"DBLP candidates", []string{"-fix_candidates"}, nil},
 	"fix_duplicates":  {"Fix duplicates", []string{"-fix_duplicates"}, nil},
@@ -236,9 +236,9 @@ var dialogueActions = map[string]TDialogueAction{
 	"enrich_matched":  {"Enrich, matched ORCIDs only", []string{"-matched_orcid_data_only", "-enrich_contributor_data"}, nil},
 	"refresh_orcid":   {"Refresh ORCID", []string{"-update_orcid"}, nil},
 	"merge_orcid":     {"Merge ORCID duplicates", []string{"-merge_orcid_duplicates"}, nil},
-	"disambiguate":    {"Disambiguate authors", []string{"-disambiguate_contributors"}, nil},
-	"triage":          {"Triage author mappings", []string{"-triage_author_mappings"}, nil},
-	"triage_aliases":  {"Triage author aliases", []string{"-triage_contributor_aliases"}, nil},
+	"disambiguate":    {"Disambiguate contributors", []string{"-disambiguate_contributors"}, nil},
+	"triage":          {"Triage contributor mappings", []string{"-triage_author_mappings"}, nil},
+	"triage_aliases":  {"Triage contributor aliases", []string{"-triage_contributor_aliases"}, nil},
 	"check_pdfs":      {"Check PDFs", []string{"-check_pdfs"}, nil},
 	"get_pdfs":        {"Get PDFs", []string{"-get_pdfs"}, nil},
 	"add_failed":      {"Add failed URLs to Bad URLs", []string{"-add_failed_urls"}, nil},
@@ -266,7 +266,7 @@ func givenArguments(args ...any) string {
 }
 
 // command is the action's command line with what it is given.
-func (a TDialogueAction) command(given []string) ([]string, error) {
+func (a TWebAction) command(given []string) ([]string, error) {
 	if len(given) != len(a.Given) {
 		return nil, fmt.Errorf("%s: give %s", a.Title, strings.Join(a.Given, ", "))
 	}
@@ -281,18 +281,18 @@ func (a TDialogueAction) command(given []string) ([]string, error) {
 	return args, nil
 }
 
-// handleDialogue answers what the Actions tab shows (GET /api/dialogue: the job, its
+// handleActions answers what the Actions tab shows (GET /api/actions: the job, its
 // status, question, results), or acts on it (POST
-// /api/dialogue/start {action, given}). Answers and stop: /api/job/<id>/… (service_dialogue.go).
-func (w *TWebUI) handleDialogue(rw http.ResponseWriter, r *http.Request) {
-	action := strings.TrimPrefix(r.URL.Path, "/"+w.token+"/api/dialogue")
+// /api/actions/start {action, given}). Answers and stop: /api/job/<id>/… (service_dialogue.go).
+func (w *TWebUI) handleActions(rw http.ResponseWriter, r *http.Request) {
+	action := strings.TrimPrefix(r.URL.Path, "/"+w.token+"/api/actions")
 	action = strings.TrimPrefix(action, "/")
 	if r.Method == http.MethodGet && action == "" {
-		d := dialogue
+		d := actionsTab
 		d.mu.Lock()
 		out := map[string]any{
 			"title": d.title, "running": d.running, "asking": false, "code": d.code,
-			"since": d.started.Format("15:04:05"), "history": append([]TDialogueReply{}, d.history...),
+			"since": d.started.Format("15:04:05"), "history": append([]TActionsReply{}, d.history...),
 		}
 		if d.job != nil {
 			out["job"], out["status"] = d.job.id, d.job.currentStatus()
@@ -318,7 +318,7 @@ func (w *TWebUI) handleDialogue(rw http.ResponseWriter, r *http.Request) {
 	json.NewDecoder(http.MaxBytesReader(rw, r.Body, 1<<16)).Decode(&req) //nolint:errcheck
 	switch action {
 	case "start":
-		a, ok := dialogueActions[req.Action]
+		a, ok := webActions[req.Action]
 		if !ok {
 			http.Error(rw, "no such action", http.StatusBadRequest)
 			return
@@ -332,7 +332,7 @@ func (w *TWebUI) handleDialogue(rw http.ResponseWriter, r *http.Request) {
 		if len(req.Given) > 0 {
 			title += " " + strings.Join(req.Given, " ")
 		}
-		if err := w.service.runDialogueJob(title, [][]string{args}, false, nil); err != nil {
+		if err := w.service.runActionsJob(title, [][]string{args}, false, nil); err != nil {
 			http.Error(rw, err.Error(), http.StatusConflict)
 			return
 		}
@@ -554,11 +554,11 @@ func summariseAnswer(q *TQuestion, a TAnswer) []string {
 	return append(out, "ACTION: "+action)
 }
 
-// runDialogueChild runs a command that does not run in the service (a process of
+// runActionsChild runs a command that does not run in the service (a process of
 // its own: -update_dblp, -harvest, ...) as the Actions tab's job. It speaks the
 // same frames as a job in the service (TFrameIO): its output goes through the
 // dialogue, its questions are put to the page, the answers go back as frames.
-func (s *TService) runDialogueChild(args []string, dir string, job *TJob) int {
+func (s *TService) runActionsChild(args []string, dir string, job *TJob) int {
 	c, err := startFrameChild(args, dir, true, func(_, d string) { os.Stderr.WriteString(d) }) //nolint:errcheck
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "The service cannot run the job: %s\n", err)
@@ -574,7 +574,7 @@ func (s *TService) runDialogueChild(args []string, dir string, job *TJob) int {
 	s.mu.Unlock()
 	job.setReply(func(a TAnswer) { c.answer(a.line()+"\n", a.value()) })
 	return c.run(func(f serviceFrame) {
-		dialogueSink{}.send(f) //nolint:errcheck
+		actionsSink{}.send(f) //nolint:errcheck
 		job.take(f)
 	})
 }

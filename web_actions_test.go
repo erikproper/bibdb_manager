@@ -53,7 +53,7 @@ func TestSummariseAnswer(t *testing.T) {
 }
 
 func TestActionCommand(t *testing.T) {
-	split := dialogueActions["split_position"]
+	split := webActions["split_position"]
 	if got, err := split.command([]string{"EP-1", "author", "2"}); err != nil || strings.Join(got, " ") != "-split_position EP-1 author 2" {
 		t.Errorf("%v %v", got, err)
 	}
@@ -62,7 +62,7 @@ func TestActionCommand(t *testing.T) {
 			t.Errorf("%q taken: %v", bad, got)
 		}
 	}
-	if _, err := dialogueActions["check"].command([]string{"x"}); err == nil {
+	if _, err := webActions["check"].command([]string{"x"}); err == nil {
 		t.Error("an argument for an action without any")
 	}
 	if got := givenArguments("EP-1", "editor", 3); got != `["EP-1","editor","3"]` {

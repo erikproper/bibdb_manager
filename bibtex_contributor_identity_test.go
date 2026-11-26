@@ -191,7 +191,7 @@ func TestPositionEvidence(t *testing.T) {
 func TestGiveContributorNameFormSharedName(t *testing.T) {
 	identityFixture(t)
 	// "Zhang, Lin" is shared by lin42 and lin9: a form for lin42 must go to lin42, not
-	// to a new contributor named "Zhang, Lin" (as AddNameMapping does).
+	// to a new contributor named "Zhang, Lin" (as AddNameForm does).
 	before := len(Library.ContributorByID)
 	Library.giveContributorNameForm("lin42", "Zhang, L.")
 	if len(Library.ContributorByID) != before {
@@ -207,11 +207,11 @@ func TestGiveContributorNameFormSharedName(t *testing.T) {
 	}
 }
 
-func TestUpsertNameMappingSharedName(t *testing.T) {
+func TestUpsertNameFormSharedName(t *testing.T) {
 	identityFixture(t)
 	// "Zhang, Lin" is shared: an alias for it must not create a contributor named so.
 	before := len(Library.ContributorByID)
-	upsertNameMapping("zhang, lin", "Zhang, Lin")
+	upsertNameForm("zhang, lin", "Zhang, Lin")
 	if len(Library.ContributorByID) != before {
 		t.Errorf("a new contributor was created for a shared name")
 	}

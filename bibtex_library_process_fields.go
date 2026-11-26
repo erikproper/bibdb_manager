@@ -23,15 +23,15 @@ var fieldProcessors TFieldProcessors
 
 func processDBLPValue(l *TBibTeXLibrary, key, value string) (string, string) {
 	// Transient: DBLP-derived aliases are regenerated from the dblp field on
-	// every run, so persisting them to key_oldies would just be redundant.
-	l.KeyOldies.SetTransient(KeyForDBLP(value), key)
-	addDblpKeyHintTransient(l, KeyForDBLP(value), key)
+	// every run, so persisting them to old_keys would just be redundant.
+	l.OldKeys.SetTransient(KeyForDBLP(value), key)
+	addDblpKeyAliasTransient(l, KeyForDBLP(value), key)
 
 	return DBLPField, value
 }
 
 func processPreferredAliasValue(l *TBibTeXLibrary, key, value string) (string, string) {
-	l.AddKeyHint(value, key)
+	l.AddKeyAlias(value, key)
 
 	return PreferredAliasField, value
 }

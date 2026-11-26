@@ -114,8 +114,8 @@ func (w *TWebUI) start() {
 	mux.HandleFunc(prefix+"/api/tables", w.handleTables)
 	mux.HandleFunc(prefix+"/api/compare", w.handleCompare)
 	mux.HandleFunc(prefix+"/api/merge", w.handleMerge)
-	mux.HandleFunc(prefix+"/api/dialogue", w.handleDialogue)
-	mux.HandleFunc(prefix+"/api/dialogue/", w.handleDialogue)
+	mux.HandleFunc(prefix+"/api/actions", w.handleActions)
+	mux.HandleFunc(prefix+"/api/actions/", w.handleActions)
 	mux.HandleFunc(prefix+"/api/live", w.handleLive)
 	mux.HandleFunc(prefix+"/api/jobs", w.handleJobs)
 	mux.HandleFunc(prefix+"/api/job/", w.handleJob)
@@ -244,8 +244,8 @@ func (w *TWebUI) handleState(rw http.ResponseWriter, r *http.Request) {
 		"index":    webIndexVersion.Load(),
 		"unloaded": serviceLibraryLevel == libraryNotLoaded,
 		"unpushed": readLibraryUnpushed() != nil,
-		"answer":   libraryNeedsAnswer.Load() || dialogue.Asking(),
-		"asking":   dialogue.Asking(),
+		"answer":   libraryNeedsAnswer.Load() || actionsTab.Asking(),
+		"asking":   actionsTab.Asking(),
 		"counts":   currentActionCounts(),
 	})
 }
@@ -362,8 +362,8 @@ func (w *TWebUI) handleStats(rw http.ResponseWriter, r *http.Request) {
 		{"Same-field mappings", `SELECT COUNT(*) FROM field_mappings WHERE source_field = target_field`},
 		{"Cross-field mappings", `SELECT COUNT(*) FROM field_mappings WHERE source_field != target_field`},
 		{"Superseded values", `SELECT COUNT(*) FROM superseded_field_values`},
-		{"Key oldies", `SELECT COUNT(*) FROM key_oldies`},
-		{"Key hints", `SELECT COUNT(*) FROM key_hints`},
+		{"Old keys", `SELECT COUNT(*) FROM old_keys`},
+		{"Key aliases", `SELECT COUNT(*) FROM key_aliases`},
 		{"Non-double entry pairs", `SELECT COUNT(*) FROM non_double_entries`},
 	} {
 		var n int
@@ -616,7 +616,7 @@ func (w *TWebUI) handlePDFUpload(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var canonical string
-	if ro.QueryRow(`SELECT key FROM key_oldies WHERE alias = ?`, key).Scan(&canonical) == nil {
+	if ro.QueryRow(`SELECT key FROM old_keys WHERE alias = ?`, key).Scan(&canonical) == nil {
 		key = canonical
 	}
 	var n int

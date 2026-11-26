@@ -34,7 +34,7 @@ import (
 // harvestIgnoreKeys holds source keys (lowercased) that must never be treated as a
 // real key during harvesting — e.g. some exporters (ResearchGate) emit the literal
 // entry type ("article") as every entry's key. Without this, such a non-unique key
-// gets registered as a key hint for the first harvested entry and then silently
+// gets registered as a key alias for the first harvested entry and then silently
 // matches every later, unrelated entry sharing the same generic key (Step 1 of
 // runHarvestEntry, which merges automatically with no user interaction).
 var harvestIgnoreKeys = TStringSetNew()
@@ -258,9 +258,9 @@ func reorderHarvestCrossrefsFirst(entries []TBibTeXEntry) []TBibTeXEntry {
 // --- Entry matching pipeline ---
 
 // harvestKeyMatch returns the canonical library key matching e's source key via
-// KeyToKey aliases or HintToKey. Returns "" when no real library entry is found.
+// KeyToKey aliases or AliasToKey. Returns "" when no real library entry is found.
 // MapEntryKey returns the key unchanged when not in KeyToKey, so EntryExists guards
-// against false positives from key-hint-only keys.
+// against false positives from key-alias-only keys.
 func (l *TBibTeXLibrary) harvestKeyMatch(e TBibTeXEntry) string {
 	if e.Key == "" || harvestIgnoreKeys.Contains(strings.ToLower(e.Key)) {
 		return ""
@@ -268,7 +268,7 @@ func (l *TBibTeXLibrary) harvestKeyMatch(e TBibTeXEntry) string {
 	if canon := l.MapEntryKey(e.Key); l.EntryExists(canon) {
 		return canon
 	}
-	if hint := l.HintToKey.GetValue(e.Key); hint != "" {
+	if hint := l.AliasToKey.GetValue(e.Key); hint != "" {
 		if canon := l.MapEntryKey(hint); l.EntryExists(canon) {
 			return canon
 		}
@@ -409,16 +409,16 @@ func addToHarvestWeave(e TBibTeXEntry) {
 	}
 }
 
-// maybeCollectKeyHint adds sourceKey → finalKey to the hints DB when the
+// maybeCollectKeyAlias adds sourceKey → finalKey to the hints DB when the
 // mapping is unambiguous (not already pointing elsewhere).
-func maybeCollectKeyHint(l *TBibTeXLibrary, sourceKey, finalKey string) {
+func maybeCollectKeyAlias(l *TBibTeXLibrary, sourceKey, finalKey string) {
 	if sourceKey == "" || finalKey == "" || harvestIgnoreKeys.Contains(strings.ToLower(sourceKey)) {
 		return
 	}
-	if existing := l.HintToKey.GetValue(sourceKey); existing != "" && l.MapEntryKey(existing) != finalKey {
+	if existing := l.AliasToKey.GetValue(sourceKey); existing != "" && l.MapEntryKey(existing) != finalKey {
 		return
 	}
-	l.AddKeyHint(sourceKey, finalKey)
+	l.AddKeyAlias(sourceKey, finalKey)
 }
 
 // --- PDF harvesting ---
@@ -759,9 +759,9 @@ func (l *TBibTeXLibrary) runHarvestEntry(e TBibTeXEntry, syncState *TSyncState) 
 	// The source entry is named by its "item" message; a question about it carries
 	// the entry itself (shown with the question).
 
-	// Step 1: key hint / alias match.
+	// Step 1: key alias / alias match.
 	// The entry is already in the library (matched via KeyToKey alias/oldie or a
-	// previously confirmed HintToKey mapping). The key match only confirms identity,
+	// previously confirmed AliasToKey mapping). The key match only confirms identity,
 	// not that the two sides still agree field-for-field — the harvested source may
 	// have been independently enriched since the library entry was first created
 	// (e.g. a bib.sync-exported file that got hand-edited or re-exported elsewhere).
@@ -778,7 +778,7 @@ func (l *TBibTeXLibrary) runHarvestEntry(e TBibTeXEntry, syncState *TSyncState) 
 		finalKey := mergeAndCheck(addHarvestEntry(l, e), keyMatch)
 		l.fixMiscJournalField(finalKey, e.Fields)
 		l.fixHowPublishedURLField(finalKey)
-		maybeCollectKeyHint(l, e.Key, finalKey)
+		maybeCollectKeyAlias(l, e.Key, finalKey)
 		l.maybeHarvestPDF(e, finalKey)
 		l.maybeHarvestGroups(e, finalKey, syncState)
 		transferHarvestKey(e.Key, finalKey)
@@ -802,7 +802,7 @@ func (l *TBibTeXLibrary) runHarvestEntry(e TBibTeXEntry, syncState *TSyncState) 
 			if matched := l.MapEntryKey(canon); l.EntryExists(matched) {
 				l.showLibraryEntry("DBLP key match in library", matched)
 				finalKey := mergeAndCheck(addHarvestEntry(l, e), matched)
-				maybeCollectKeyHint(l, e.Key, finalKey)
+				maybeCollectKeyAlias(l, e.Key, finalKey)
 				l.maybeHarvestPDF(e, finalKey)
 				l.maybeHarvestGroups(e, finalKey, syncState)
 				transferHarvestKey(e.Key, finalKey)
@@ -824,7 +824,7 @@ func (l *TBibTeXLibrary) runHarvestEntry(e TBibTeXEntry, syncState *TSyncState) 
 		}
 		if pick > 0 {
 			finalKey := mergeAndCheck(addHarvestEntry(l, e), titleMatches[pick-1])
-			maybeCollectKeyHint(l, e.Key, finalKey)
+			maybeCollectKeyAlias(l, e.Key, finalKey)
 			l.maybeHarvestPDF(e, finalKey)
 			l.maybeHarvestGroups(e, finalKey, syncState)
 			transferHarvestKey(e.Key, finalKey)
@@ -856,7 +856,7 @@ func (l *TBibTeXLibrary) runHarvestEntry(e TBibTeXEntry, syncState *TSyncState) 
 			doAllChecks(finalKey)
 			fixEntry(finalKey)
 			finalKey = l.MapEntryKey(finalKey)
-			maybeCollectKeyHint(l, e.Key, finalKey)
+			maybeCollectKeyAlias(l, e.Key, finalKey)
 			l.maybeHarvestPDF(e, finalKey)
 			transferHarvestKey(e.Key, finalKey)
 			recordStatus(finalKey)
@@ -890,7 +890,7 @@ func (l *TBibTeXLibrary) runHarvestEntry(e TBibTeXEntry, syncState *TSyncState) 
 				doAllChecks(finalKey)
 				finalKey = l.MapEntryKey(finalKey)
 				fixEntry(finalKey)
-				maybeCollectKeyHint(l, e.Key, finalKey)
+				maybeCollectKeyAlias(l, e.Key, finalKey)
 				l.maybeHarvestPDF(e, finalKey)
 				transferHarvestKey(e.Key, finalKey)
 				recordStatus(finalKey)
@@ -917,7 +917,7 @@ func (l *TBibTeXLibrary) runHarvestEntry(e TBibTeXEntry, syncState *TSyncState) 
 			l.showLibraryEntry("Merging into", canon)
 			finalKey := mergeAndCheck(addHarvestEntry(l, e), canon)
 			done("merged into", finalKey, "chosen")
-			maybeCollectKeyHint(l, e.Key, finalKey)
+			maybeCollectKeyAlias(l, e.Key, finalKey)
 			l.maybeHarvestPDF(e, finalKey)
 			l.maybeHarvestGroups(e, finalKey, syncState)
 			transferHarvestKey(e.Key, finalKey)
@@ -940,7 +940,7 @@ func (l *TBibTeXLibrary) runHarvestEntry(e TBibTeXEntry, syncState *TSyncState) 
 		doAllChecks(newKey)
 		finalKey := l.MapEntryKey(newKey)
 		fixEntry(finalKey)
-		maybeCollectKeyHint(l, e.Key, finalKey)
+		maybeCollectKeyAlias(l, e.Key, finalKey)
 		l.maybeHarvestPDF(e, finalKey)
 		transferHarvestKey(e.Key, finalKey)
 		recordStatus(finalKey)
@@ -951,7 +951,7 @@ func (l *TBibTeXLibrary) runHarvestEntry(e TBibTeXEntry, syncState *TSyncState) 
 // runHarvestLoop processes entries interactively in source-file order.
 // Entries already handled (resolved, ignored, or skip-content unchanged) are silently
 // skipped when syncState is non-nil. For previously resolved entries, PDF sync and
-// key-hint registration are re-run on each pass.
+// key-alias registration are re-run on each pass.
 //
 // Entries that are not already resolved/skipped are then processed in two passes:
 // key-matched first (harvestKeyMatch finds an existing key/hint match — Step 1 of
@@ -979,7 +979,7 @@ func (l *TBibTeXLibrary) runHarvestLoop(entries []TBibTeXEntry, syncState *TSync
 				l.maybeHarvestPDF(e, resolvedCanon)
 				l.maybeHarvestGroups(e, resolvedCanon, syncState)
 				if e.Key != "" {
-					l.AddKeyHint(e.Key, resolvedCanon)
+					l.AddKeyAlias(e.Key, resolvedCanon)
 					transferHarvestKey(e.Key, resolvedCanon)
 				}
 			} else if e.Key != "" && syncState != nil {
@@ -1099,8 +1099,8 @@ func doHarvest(sourcePath string) {
 // runHarvestSync is called from doSync when mode == "harvest". The library is already open.
 // State (resolved/ignored/skip-content) is tracked in the .sync DB next to the source bib.
 func runHarvestSync(cfg TBibGetConfig, baseDir string) {
-	if cfg.TrustHints {
-		cmdTrustHints = true
+	if cfg.TrustKeyAliases {
+		cmdTrustKeyAliases = true
 	}
 	if cfg.CollectKeys {
 		cmdCollectKeys = true
@@ -1138,8 +1138,8 @@ func runHarvestSync(cfg TBibGetConfig, baseDir string) {
 		return "off"
 	}
 	Library.Progress("\nSync harvest: %s", cfg.FileName)
-	Library.Progress("  trust_hints=%-3s  collect_keys=%-3s  fix=%-3s",
-		on(cmdTrustHints), on(cmdCollectKeys), on(cmdFix))
+	Library.Progress("  trust_key_aliases=%-3s  collect_keys=%-3s  fix=%-3s",
+		on(cmdTrustKeyAliases), on(cmdCollectKeys), on(cmdFix))
 	Library.Progress("  Source: %s", sourcePath)
 
 	entries, parseOK := Library.parseHarvestBib(sourcePath)
@@ -1171,10 +1171,10 @@ func runHarvestSync(cfg TBibGetConfig, baseDir string) {
 		skipped, pending, autoResolvable, pending-autoResolvable)
 
 	pdfsBefore := len(Library.PDFFiles)
-	hintsBefore := len(Library.newKeyHints)
+	hintsBefore := len(Library.newKeyAliases)
 	Library.runHarvestLoop(entries, syncState)
 	pdfsHarvested := len(Library.PDFFiles) - pdfsBefore
-	hintsAdded := len(Library.newKeyHints) - hintsBefore
+	hintsAdded := len(Library.newKeyAliases) - hintsBefore
 
 	resolved, skippedContent, ignored, stillPending := 0, 0, 0, 0
 	for _, e := range entries {
@@ -1200,7 +1200,7 @@ func runHarvestSync(cfg TBibGetConfig, baseDir string) {
 		{"Skipped (skip-content)", fmt.Sprintf("%d", skippedContent), ""},
 		{"Pending (not yet seen)", fmt.Sprintf("%d", stillPending), ""},
 		{"PDFs harvested", fmt.Sprintf("%d", pdfsHarvested), ""},
-		{"Key hints added", fmt.Sprintf("%d", hintsAdded), ""},
+		{"Key aliases added", fmt.Sprintf("%d", hintsAdded), ""},
 	}, true)
 	// Mirror local groups and weave entries into the harvest_transfer target's .sync DB.
 	if cmdHarvestTransferKeysPath != "" {

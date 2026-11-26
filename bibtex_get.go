@@ -54,15 +54,15 @@ type TBibGetConfig struct {
 	ShortenFile         string   `json:"shorten_file"`
 	IncludeURL          bool     `json:"include_url"`
 	UrldateAsNote       bool     `json:"urldate_as_note"`
-	Hyphenations        bool     `json:"hyphenations"`     // insert \- hints from global_folder/hyphenations.csv
-	TrustHints          bool     `json:"trust_hints"`      // harvest: auto-accept key-hint matches without confirmation
-	CollectKeys         bool     `json:"collect_keys"`     // harvest: add source keys to hints DB when unambiguous
-	HarvestTransfer     string   `json:"harvest_transfer"` // harvest: base name of target bib to append resolved keys into
-	PruneResolved       bool     `json:"prune_resolved"`   // harvest: rewrite source bib keeping only pending/skip-content entries
-	TrustedSubset       bool     `json:"trusted_subset"`   // subset: apply changes/adds/deletes without confirmation
-	PDFFiles            string   `json:"pdf_files"`        // subset/full: "" | "global" | "local"
-	Format              string   `json:"format"`           // output dialect: "bibdesk" (default) | "jabref"
-	SyncGroups          []string `json:"groups"`           // group names to sync to main DB; all others stay local
+	Hyphenations        bool     `json:"hyphenations"`      // insert \- hints from global_folder/hyphenations.csv
+	TrustKeyAliases     bool     `json:"trust_key_aliases"` // harvest: auto-accept key-alias matches without confirmation
+	CollectKeys         bool     `json:"collect_keys"`      // harvest: add source keys to hints DB when unambiguous
+	HarvestTransfer     string   `json:"harvest_transfer"`  // harvest: base name of target bib to append resolved keys into
+	PruneResolved       bool     `json:"prune_resolved"`    // harvest: rewrite source bib keeping only pending/skip-content entries
+	TrustedSubset       bool     `json:"trusted_subset"`    // subset: apply changes/adds/deletes without confirmation
+	PDFFiles            string   `json:"pdf_files"`         // subset/full: "" | "global" | "local"
+	Format              string   `json:"format"`            // output dialect: "bibdesk" (default) | "jabref"
+	SyncGroups          []string `json:"groups"`            // group names to sync to main DB; all others stay local
 
 	// Runtime-only (not serialised): all group assignments per canonical key, pre-built
 	// from the .sync state before the write phase. When non-nil, entryGetString uses this
@@ -110,6 +110,9 @@ func readBibGetConfig() (TBibGetConfig, bool) {
 		return TBibGetConfig{}, false
 	}
 	needsWriteBack := migrateRawConfigFileNames(rawMap)
+	if renameLegacyConfigKeys(rawMap) {
+		needsWriteBack = true
+	}
 
 	// Seed all absent option fields so bib.config is fully self-documenting.
 	// Per-file .config files inherit these and only need to specify overrides.
@@ -129,7 +132,7 @@ func readBibGetConfig() (TBibGetConfig, bool) {
 		{"shorten_file", json.RawMessage(`""`)},
 		{"urldate_as_note", json.RawMessage(`false`)},
 		{"hyphenations", json.RawMessage(`false`)},
-		{"trust_hints", json.RawMessage(`false`)},
+		{"trust_key_aliases", json.RawMessage(`false`)},
 		{"collect_keys", json.RawMessage(`false`)},
 		{"harvest_transfer", json.RawMessage(`""`)},
 		{"prune_resolved", json.RawMessage(`false`)},
@@ -228,7 +231,7 @@ func bootstrapKeysFromSync(fileName string) []TBibGetPair {
 			}
 			resolved := Library.MapEntryKey(sourceKey)
 			if resolved == sourceKey {
-				if hint, ok := Library.HintToKey.Get(sourceKey); ok {
+				if hint, ok := Library.AliasToKey.Get(sourceKey); ok {
 					resolved = Library.MapEntryKey(hint)
 				}
 			}
@@ -286,7 +289,7 @@ func bootstrapKeysFromBib(fileName string) []TBibGetPair {
 		}
 		resolved := Library.MapEntryKey(localKey)
 		if resolved == localKey {
-			if hint, ok := Library.HintToKey.Get(localKey); ok {
+			if hint, ok := Library.AliasToKey.Get(localKey); ok {
 				resolved = Library.MapEntryKey(hint)
 			}
 		}
@@ -1069,20 +1072,20 @@ func writePullSync(cfg TBibGetConfig, baseDir string) []TBibGetPair {
 		resolved := Library.MapEntryKey(p.canonicalKey)
 		if resolved == p.canonicalKey {
 			// Key didn't move through the alias table — try hints (preferred aliases, source keys).
-			if hint, ok := Library.HintToKey.Get(p.canonicalKey); ok {
+			if hint, ok := Library.AliasToKey.Get(p.canonicalKey); ok {
 				resolved = Library.MapEntryKey(hint)
 			}
 		}
 		// The canonical key itself may be stale (e.g. the entry was merged/re-keyed
 		// since this .keys file was last written), with nothing pointing forward from
-		// it in either key_oldies or key_hints. Try the local (human-readable) key as
+		// it in either old_keys or key_aliases. Try the local (human-readable) key as
 		// a hint instead — if that resolves to a live entry, register the stale
 		// canonical as an oldie so future lookups resolve directly, without this
 		// fallback.
 		if !bibEntryExists(resolved) && p.localKey != "" {
-			if hint, ok := Library.HintToKey.Get(p.localKey); ok {
+			if hint, ok := Library.AliasToKey.Get(p.localKey); ok {
 				if hinted := Library.MapEntryKey(hint); bibEntryExists(hinted) {
-					Library.AddKeyAlias(resolved, hinted)
+					Library.AddOldKey(resolved, hinted)
 					resolved = hinted
 				}
 			}
@@ -1574,6 +1577,22 @@ func defaultSyncConfig() TBibGetConfig {
 	return TBibGetConfig{KeyMapping: true, IncludeDOI: true, IncludeISBN: true, IncludeURL: true}
 }
 
+// renameLegacyConfigKeys gives a bib.config's settings named before step 22.4d their
+// new names (trust_hints, as it was called, becomes trust_key_aliases), and tells whether it did.
+func renameLegacyConfigKeys(rawMap map[string]json.RawMessage) bool {
+	renamed := false
+	for old, now := range map[string]string{"trust_hints": "trust_key_aliases"} {
+		if v, ok := rawMap[old]; ok {
+			if _, has := rawMap[now]; !has {
+				rawMap[now] = v
+			}
+			delete(rawMap, old)
+			renamed = true
+		}
+	}
+	return renamed
+}
+
 // applyJSONOverlay unmarshals data into cfg, overriding only the fields present
 // in the JSON. Returns false and prints an error when the JSON is malformed.
 func applyJSONOverlay(cfg *TBibGetConfig, data []byte, path string) bool {
@@ -1623,6 +1642,7 @@ func readFileConfig(baseCfg TBibGetConfig, name, baseDir string) (TBibGetConfig,
 		messagef("Cannot parse %s: %s\n", cfgPath, jsonErr)
 		return TBibGetConfig{}, false
 	}
+	renameLegacyConfigKeys(rawMap) // an overlay is not written back: read under its new name
 
 	// file_name and file_names are not meaningful in per-file configs — warn and strip.
 	for _, key := range []string{"file_name", "file_names"} {

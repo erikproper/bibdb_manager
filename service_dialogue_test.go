@@ -60,7 +60,7 @@ func TestJobAnswers(t *testing.T) {
 
 // A command line's job brings its question up; its answer reaches it once.
 func TestCommandLineJobAsks(t *testing.T) {
-	sio := &TSocketIO{out: dialogueSink{}, interactive: true, lines: make(chan string, 16)}
+	sio := &TSocketIO{out: actionsSink{}, interactive: true, lines: make(chan string, 16)}
 	j := newJob("test", "command line")
 	sio.job = j
 	asked := 0

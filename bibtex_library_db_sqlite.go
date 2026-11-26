@@ -92,6 +92,7 @@ func connectToDatabase() {
 		dbInteraction.Progress("Working database stale or corrupt — will refresh from home database")
 		return
 	}
+	tablesRenamed := renameTables() // before the ensure… below make them anew
 
 	ensureTableDatesTableExists()
 	maybeConsolidateEntryFlags()
@@ -104,8 +105,8 @@ func connectToDatabase() {
 	ensureContributorORCIDsTableExists()
 	ensureContributorORCIDSeenTableExists()
 	maybeMigrateContributorORCIDs()
-	ensureKeyHintsTableExists()
-	ensureKeyOldiesTableExists()
+	ensureKeyAliasesTableExists()
+	ensureOldKeysTableExists()
 	ensureKeyNonDoublesTableExists()
 	ensureNonDoubleContributorNamesTableExists()
 	ensureDblpParentTableExists()
@@ -128,6 +129,9 @@ func connectToDatabase() {
 	ensureEntryWarningsTableExists()
 	ensureDeletedEntriesTableExists()
 	ensureConfigTableExists()
+	if tablesRenamed {
+		requireVersion(renamedTablesVersion)
+	}
 	// Checking config row count is not a reliable "not yet populated from home"
 	// signal: a half-finished prior attempt (e.g. interrupted at the key-prefix
 	// prompt) can leave config rows (version, backup_folder, ...) behind from
@@ -311,6 +315,7 @@ func reopenDb(path string) {
 	}
 	refuseIfTooOld()
 	configureDatabasePragmas()
+	tablesRenamed := renameTables()
 	ensureTableDatesTableExists()
 	ensureContributorsTableExists()
 	ensureContributorNamesTableExists()
@@ -321,8 +326,8 @@ func reopenDb(path string) {
 	ensureContributorORCIDsTableExists()
 	ensureContributorORCIDSeenTableExists()
 	maybeMigrateContributorORCIDs()
-	ensureKeyHintsTableExists()
-	ensureKeyOldiesTableExists()
+	ensureKeyAliasesTableExists()
+	ensureOldKeysTableExists()
 	ensureKeyNonDoublesTableExists()
 	ensureNonDoubleContributorNamesTableExists()
 	ensureDblpParentTableExists()
@@ -340,6 +345,9 @@ func reopenDb(path string) {
 	ensureSupersededFieldValuesTableExists()
 	ensureEntryDoiAliasesTableExists()
 	ensureConfigTableExists()
+	if tablesRenamed {
+		requireVersion(renamedTablesVersion)
+	}
 	ensureShortenMappingsTableExists()
 	ensureBibEntryKeysTableExists()
 	ensureBibTablesExist()

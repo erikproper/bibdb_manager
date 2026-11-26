@@ -29,9 +29,21 @@ import (
 	"strings"
 )
 
-// tablesFilePath returns the full path for a table's CSV file.
+// tablesFilePath returns the full path for a table's CSV file. A file under the
+// table's name before step 22.4d (key_hints.csv, key_oldies.csv) is still read when
+// there is no file under the new name.
 func tablesFilePath(suffix string) string {
-	return libraryBase() + suffix
+	path := libraryBase() + suffix
+	if legacy, renamed := legacyTableFiles[suffix]; renamed && !FileExists(path) && FileExists(libraryBase()+legacy) {
+		return libraryBase() + legacy
+	}
+	return path
+}
+
+// legacyTableFiles are the CSV files renamed in step 22.4d: new → old.
+var legacyTableFiles = map[string]string{
+	KeyAliasesFilePath: tablesFolderSuffix + "/key_hints.csv",
+	OldKeysFilePath:    tablesFolderSuffix + "/key_oldies.csv",
 }
 
 // ensureTablesDir creates the tables directory if it does not exist.
@@ -257,29 +269,29 @@ func importContributorORCIDSeenFromCSV(replace bool) {
 	}
 }
 
-// ── key_hints ────────────────────────────────────────────────────────────────
+// ── key_aliases ────────────────────────────────────────────────────────────────
 // CSV format: key;hint  (elements[0]=key, elements[1]=hint)
 
-func ExportKeyHints() {
+func ExportKeyAliases() {
 	ensureTablesDir()
-	path := tablesFilePath(KeyHintsFilePath)
-	rows, err := db.Query(`SELECT key, hint FROM key_hints ORDER BY key, hint`)
+	path := tablesFilePath(KeyAliasesFilePath)
+	rows, err := db.Query(`SELECT key, alias FROM key_aliases ORDER BY key, alias`)
 	if err != nil {
-		dbInteraction.Warning("Could not query key_hints: %s", err)
+		dbInteraction.Warning("Could not query key_aliases: %s", err)
 		return
 	}
 	defer rows.Close()
 	writeCSVExport(path, rows, 2)
 }
 
-func importKeyHintsFromCSV(replace bool) {
-	path := tablesFilePath(KeyHintsFilePath)
-	upsert := `INSERT INTO key_hints (hint, key) VALUES (?, ?)
-	             ON CONFLICT(hint) DO UPDATE SET key = excluded.key`
+func importKeyAliasesFromCSV(replace bool) {
+	path := tablesFilePath(KeyAliasesFilePath)
+	upsert := `INSERT INTO key_aliases (alias, key) VALUES (?, ?)
+	             ON CONFLICT(alias) DO UPDATE SET key = excluded.key`
 	validate := func(f []string) bool { return len(f) >= 2 && f[0] != "" && f[1] != "" }
 	var clearFn func()
 	if replace {
-		clearFn = func() { db.Exec(`DELETE FROM key_hints`) }
+		clearFn = func() { db.Exec(`DELETE FROM key_aliases`) }
 	}
 	n, ok := importTwoPhase(path, validate, clearFn, func(tx *sql.Tx, f []string) {
 		tx.Exec(upsert, f[1], f[0]) // hint=f[1], key=f[0]
@@ -289,29 +301,29 @@ func importKeyHintsFromCSV(replace bool) {
 	}
 }
 
-// ── key_oldies ───────────────────────────────────────────────────────────────
+// ── old_keys ───────────────────────────────────────────────────────────────
 // CSV format: key;alias  (elements[0]=key, elements[1]=alias)
 
-func ExportKeyOldies() {
+func ExportOldKeys() {
 	ensureTablesDir()
-	path := tablesFilePath(KeyOldiesFilePath)
-	rows, err := db.Query(`SELECT key, alias FROM key_oldies ORDER BY alias`)
+	path := tablesFilePath(OldKeysFilePath)
+	rows, err := db.Query(`SELECT key, alias FROM old_keys ORDER BY alias`)
 	if err != nil {
-		dbInteraction.Warning("Could not query key_oldies: %s", err)
+		dbInteraction.Warning("Could not query old_keys: %s", err)
 		return
 	}
 	defer rows.Close()
 	writeCSVExport(path, rows, 2)
 }
 
-func importKeyOldiesFromCSV(replace bool) {
-	path := tablesFilePath(KeyOldiesFilePath)
-	upsert := `INSERT INTO key_oldies (alias, key) VALUES (?, ?)
+func importOldKeysFromCSV(replace bool) {
+	path := tablesFilePath(OldKeysFilePath)
+	upsert := `INSERT INTO old_keys (alias, key) VALUES (?, ?)
 	             ON CONFLICT(alias) DO UPDATE SET key = excluded.key`
 	validate := func(f []string) bool { return len(f) >= 2 && f[0] != "" && f[1] != "" }
 	var clearFn func()
 	if replace {
-		clearFn = func() { db.Exec(`DELETE FROM key_oldies`) }
+		clearFn = func() { db.Exec(`DELETE FROM old_keys`) }
 	}
 	n, ok := importTwoPhase(path, validate, clearFn, func(tx *sql.Tx, f []string) {
 		tx.Exec(upsert, f[1], f[0]) // alias=f[1], key=f[0]

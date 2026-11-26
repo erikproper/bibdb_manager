@@ -233,11 +233,11 @@ func init() {
 			},
 		},
 		{
-			name:     "restore_key_hints",
+			name:     "restore_key_aliases",
 			kind:     commandWrite,
-			selected: func() bool { return cmdRestoreKeyHints },
+			selected: func() bool { return cmdRestoreKeyAliases },
 			run: func(args []string) {
-				doRestoreKeyHints(restoreKeyHintsPath)
+				doRestoreKeyAliases(restoreKeyAliasesPath)
 			},
 		},
 		{
@@ -342,15 +342,15 @@ func init() {
 			},
 		},
 		{
-			name:     "add_name_mapping",
+			name:     "add_name_form",
 			kind:     commandWrite,
-			selected: func() bool { return cmdAddNameMapping },
+			selected: func() bool { return cmdAddNameForm },
 			run: func(args []string) {
 				if len(args) != 2 {
-					messageln("Usage: -add_name_mapping <canonical> <alias>")
+					messageln("Usage: -add_name_form <form> <canonical>")
 					endRun(1)
 				}
-				doAddNameMapping(args)
+				doAddNameForm(args)
 			},
 		},
 		{

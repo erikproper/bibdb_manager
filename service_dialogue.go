@@ -371,7 +371,7 @@ func (w *TWebUI) handleJob(rw http.ResponseWriter, r *http.Request) {
 			http.Error(rw, err.Error(), http.StatusUnprocessableEntity)
 			return
 		}
-		dialogue.answered(q, a)
+		actionsTab.answered(q, a)
 		reply(a)
 		rw.WriteHeader(http.StatusNoContent)
 	case r.Method == http.MethodPost && action == "stop":

@@ -370,7 +370,7 @@ func (w *TWebUI) handleEditAuthorSave(rw http.ResponseWriter, r *http.Request) {
 	}
 	ro.Close()
 	if other != "" {
-		http.Error(rw, fmt.Sprintf("%q is the name of another author (%s). To make them one, merge them: Mark for merge, %s and %s", strings.TrimSpace(req.Name), other, id, other), http.StatusConflict)
+		http.Error(rw, fmt.Sprintf("%q is the name of another contributor (%s). To make them one, merge them: Mark for merge, %s and %s", strings.TrimSpace(req.Name), other, id, other), http.StatusConflict)
 		return
 	}
 	if !found {
@@ -378,7 +378,7 @@ func (w *TWebUI) handleEditAuthorSave(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if current != req.OrigName {
-		http.Error(rw, "The author changed since this form was read. Reload the form; your changes are not saved.", http.StatusConflict)
+		http.Error(rw, "The contributor changed since this form was read. Reload the form; your changes are not saved.", http.StatusConflict)
 		return
 	}
 	var cmds [][]string
@@ -512,7 +512,7 @@ func (w *TWebUI) handleMerge(rw http.ResponseWriter, r *http.Request) {
 	}
 	cmd, title := "-merge_entries", "Merge entries"
 	if req.Kind == "authors" {
-		cmd, title = "-merge_contributors", "Merge authors"
+		cmd, title = "-merge_contributors", "Merge contributors"
 	}
 	args := append(append([]string{cmd}, from...), req.Target)
 	// The values chosen where the entries differ are set first, on the one kept and on
@@ -569,7 +569,7 @@ func (w *TWebUI) handleMerge(rw http.ResponseWriter, r *http.Request) {
 		}
 	}
 	cmds = append(append(cmds, aliasCmds...), args)
-	if err := w.service.runDialogueJob(title, cmds, false, nil); err != nil {
+	if err := w.service.runActionsJob(title, cmds, false, nil); err != nil {
 		http.Error(rw, err.Error(), http.StatusConflict)
 		return
 	}
@@ -592,9 +592,9 @@ func resolveKeyForUI(raw, dir string) string {
 		}
 		var key string
 		for _, q := range []string{
-			`SELECT key FROM key_oldies WHERE alias = ?`,
+			`SELECT key FROM old_keys WHERE alias = ?`,
 			`SELECT entry_key FROM bib_entries WHERE field = 'preferredalias' AND value = ?`,
-			`SELECT key FROM key_hints WHERE hint = ?`,
+			`SELECT key FROM key_aliases WHERE alias = ?`,
 		} {
 			if ro.QueryRow(q, k).Scan(&key) == nil && key != "" {
 				return key

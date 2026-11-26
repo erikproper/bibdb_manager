@@ -14,13 +14,13 @@
  * a function belongs here when its job is managing the redundancy between a map
  * and its inverse — e.g. setNameAlias/deleteNameAlias keep NameAliasToName/
  * NameToAliases in sync with each other and, via bibtex_library_db.go's
- * upsertNameMapping/deleteNameMapping, with the DB. Pure business-logic reads that
- * only ever touch one side (e.g. MapEntryKey's KeyOldies.Get()) live here too,
+ * upsertNameForm/deleteNameForm, with the DB. Pure business-logic reads that
+ * only ever touch one side (e.g. MapEntryKey's OldKeys.Get()) live here too,
  * since they're still "access on top of the maps", even though they don't have
  * an inverse to manage.
  *
  * Invariant: bibtex_library.go never mutates NameAliasToName/NameToAliases
- * directly — AddNameMapping's absorb-group logic and CheckNameMappingConsistency's
+ * directly — AddNameForm's absorb-group logic and CheckNameFormConsistency's
  * cycle-removal/chain-flattening phases are graph-decision code (what should map to
  * what) that call setNameAlias/deleteNameAlias for every actual change, same as
  * everything else. bibtex_library.go may still read the maps directly to make
@@ -43,14 +43,14 @@ package main
 import "strings"
 
 // TBibTeXLibraryMappings holds the library's alias/key/contributor lookup tables —
-// each either a DB-backed write-through cache (KeyOldies, HintToKey) or an
+// each either a DB-backed write-through cache (OldKeys, AliasToKey) or an
 // in-memory map kept consistent with the DB by the functions in this file
 // (NameAliasToName/NameToAliases via setNameAlias). Embedded anonymously in
 // TBibTeXLibrary, the same way TBibTeXTeX and TInteraction are — field access
-// (l.NameAliasToName, l.KeyOldies, …) is unchanged for every existing caller.
+// (l.NameAliasToName, l.OldKeys, …) is unchanged for every existing caller.
 type TBibTeXLibraryMappings struct {
-	KeyOldies *TKeyAliasTable               // alias→canonical key mappings; always flat, eagerly updated
-	HintToKey *TCachedTable[string, string] // persistent hint→key mappings (DBLP-derived hints are transient)
+	OldKeys    *TKeyMapTable                 // alias→canonical key mappings; always flat, eagerly updated
+	AliasToKey *TCachedTable[string, string] // persistent hint→key mappings (DBLP-derived hints are transient)
 
 	NameAliasToName               TStringMap               // Mapping from name aliases to the actual name.
 	NameToAliases                 TStringSetMap            // The inverted version of NameAliasToName
@@ -65,7 +65,7 @@ type TBibTeXLibraryMappings struct {
 
 // setNameAlias records alias as a name variant of canonical: it validates the
 // pair, updates the in-memory NameAliasToName/NameToAliases maps, and persists
-// the mapping via upsertNameMapping — the one place where a name alias's memory
+// the mapping via upsertNameForm — the one place where a name alias's memory
 // cache and its DB-backed source of truth are kept in sync. When check is true,
 // an alias already mapped to a different canonical is rejected (with a warning)
 // instead of being silently overwritten. Returns false when the mapping was
@@ -93,14 +93,14 @@ func (l *TBibTeXLibrary) setNameAlias(alias, canonical string, check bool) bool 
 
 	l.NameAliasToName[alias] = canonical
 	l.NameToAliases.AddValueToStringSetMap(canonical, alias)
-	upsertNameMapping(alias, canonical)
+	upsertNameForm(alias, canonical)
 
 	return true
 }
 
 // deleteNameAlias removes alias's forward mapping and its membership in the old
 // canonical's inverse set, and persists the removal. Used by
-// CheckNameMappingConsistency's cycle-removal phase — the counterpart to
+// CheckNameFormConsistency's cycle-removal phase — the counterpart to
 // setNameAlias for the "this mapping should no longer exist" case. No-op if
 // alias is not currently mapped.
 func (l *TBibTeXLibrary) deleteNameAlias(alias string) {
@@ -115,27 +115,27 @@ func (l *TBibTeXLibrary) deleteNameAlias(alias string) {
 			// alias is itself a canonical contributor's own name — the edge being
 			// removed was a stale claim from a DIFFERENT contributor's records
 			// (FindAliases-derived, or a stale contributor_names row), not alias's
-			// own identity. deleteNameMapping would incorrectly target alias's own
+			// own identity. deleteNameForm would incorrectly target alias's own
 			// record; clear only the stale cross-claim instead.
 			dbExecSave("deleteNameAlias: remove stale alias claim",
 				`DELETE FROM contributor_names WHERE name = ? AND id != ?`, alias, id)
 			return
 		}
 	}
-	deleteNameMapping(alias)
+	deleteNameForm(alias)
 }
 
-// MapEntryKey resolves key through KeyOldies to its current canonical form, or
+// MapEntryKey resolves key through OldKeys to its current canonical form, or
 // returns key unchanged when it is not a known alias.
 func (l *TBibTeXLibrary) MapEntryKey(key string) string {
-	if canonical := l.KeyOldies.Get(key); canonical != "" {
+	if canonical := l.OldKeys.Get(key); canonical != "" {
 		return canonical
 	}
 	return key
 }
 
 // entryKeyOf is the key of the entry that k names: k itself, or the entry a
-// former key (key_oldies) or another key it is known by (key_hints: a preferred
+// former key (old_keys) or another key it is known by (key_aliases: a preferred
 // alias, a harvested file's key) maps to. Unknown: k.
 func (l *TBibTeXLibrary) entryKeyOf(k string) string {
 	if l.EntryExists(k) {
@@ -144,7 +144,7 @@ func (l *TBibTeXLibrary) entryKeyOf(k string) string {
 	if c := l.MapEntryKey(k); c != k {
 		return c
 	}
-	if c := l.HintToKey.GetValue(k); c != "" {
+	if c := l.AliasToKey.GetValue(k); c != "" {
 		return l.MapEntryKey(c)
 	}
 	return k
@@ -152,7 +152,7 @@ func (l *TBibTeXLibrary) entryKeyOf(k string) string {
 
 // LookupDBLPKey resolves a DBLP key to the library key that absorbed it, if any.
 func (l *TBibTeXLibrary) LookupDBLPKey(DBLPkey string) string {
-	return l.KeyOldies.Get(KeyForDBLP(DBLPkey))
+	return l.OldKeys.Get(KeyForDBLP(DBLPkey))
 }
 
 // maybeAddFoundAlias adds alias → canonical silently if alias is not yet mapped.

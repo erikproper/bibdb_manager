@@ -55,7 +55,7 @@ var (
 	Reporting TInteraction
 )
 
-const AppVersion = "30.163"
+const AppVersion = "30.169"
 
 // Run-state flags consumed by the write tail in main.
 var (
@@ -64,7 +64,7 @@ var (
 	skipStartupChecks          bool // set by -import so the import runs before consistency checks
 	forceWrite                 bool
 	cmdNoGarbageCleaning       bool
-	cmdTrustHints              bool           // -trust_hints: auto-accept key-hint matches in harvest
+	cmdTrustKeyAliases         bool           // trust_key_aliases (bib.config): auto-accept key-alias matches in harvest
 	cmdCollectKeys             bool           // -collect_keys: add source keys to hints DB when unambiguous
 	cmdHarvestTransferKeysPath string         // resolved .keys path for harvest_transfer target; "" = disabled
 	cmdHarvestWeaveEntries     []TBibTeXEntry // ignored entries accumulated during this harvest run; flushed to follow .sync DB
@@ -160,10 +160,10 @@ func initialiseLibrary() {
 func loadMappingFiles() {
 	Library.ReadAddressMappings()
 	Library.CheckAddressMappings()
-	Library.ReadKeyHintsFile()
+	Library.ReadKeyAliasesFile()
 	Library.ReadKeyNonDoublesFile()
 	Library.ReadIgnoreTitlesFile()
-	Library.ReadNameMappingsFile()
+	Library.ReadNameFormsFile()
 	Library.ReadFieldMappingsFile()
 	Library.ReadEntryFieldMappingsFile()
 	Library.ReadDblpParentFile()
@@ -171,7 +171,7 @@ func loadMappingFiles() {
 	Library.ReadMetadataFile()
 	Library.ReadEntryFlagsFile()
 	Library.CheckFieldMappings()
-	Library.CheckNameMappingConsistency()
+	Library.CheckNameFormConsistency()
 }
 
 func loadBibFromDb() {
@@ -203,7 +203,7 @@ func doImportBib(path string) {
 		return
 	}
 	initialiseLibrary()
-	Library.ReadKeyOldiesFile()
+	Library.ReadOldKeysFile()
 	loadMappingFiles()
 	Library.Progress(ProgressImportingBibFile, path)
 	if !parseSyncBibFile(path) {
@@ -420,8 +420,8 @@ func printSessionStats() {
 		{StatDblpLinks, fmt.Sprintf("%d", dblpKeys), ""},
 		{StatDblpCrossrefOverrides, fmt.Sprintf("%d", Library.DblpParent.Len()), ""},
 		{StatDblpWaivedChildren, fmt.Sprintf("%d", Library.DblpWaived.Len()), ""},
-		{StatKeyOldies, fmt.Sprintf("%d", Library.KeyOldies.Len()), ""},
-		{StatKeyHints, fmt.Sprintf("%d", Library.HintToKey.Len()), ""},
+		{StatOldKeys, fmt.Sprintf("%d", Library.OldKeys.Len()), ""},
+		{StatKeyAliases, fmt.Sprintf("%d", Library.AliasToKey.Len()), ""},
 		{StatNonDoubleEntryPairs, fmt.Sprintf("%d", ndEntries), ""},
 		{StatNonDoubleContributorPairs, fmt.Sprintf("%d", ndContributors), ""},
 		{StatNonDoubleNamePairs, fmt.Sprintf("%d", ndNames), ""},
@@ -451,7 +451,7 @@ func openLibraryToUpdate() bool {
 	Library.BeginDeferringMessages()
 	if !reuse {
 		initialiseLibrary()
-		Library.ReadKeyOldiesFile()
+		Library.ReadOldKeysFile()
 		loadMappingFiles()
 		seedContributorsFromEntries(&Library)
 		maybeCleanupOrphanedContributors(&Library)
@@ -492,9 +492,9 @@ func openLibraryToUpdate() bool {
 	}
 	if !skipStartupChecks && !reuse {
 		Library.CheckDblpDuplicates()
-		Library.CheckKeyOldiesConsistency()
-		Library.CheckKeyHintsConsistency()
-		Library.CheckKeyOldieHintOverlap()
+		Library.CheckOldKeysConsistency()
+		Library.CheckKeyAliasesConsistency()
+		Library.CheckOldKeyAliasOverlap()
 		Library.CheckGarbledContributorFlags()
 		Library.CheckDblpWaivedConsistency()
 		Library.CheckEntryFieldMappingWinners()
@@ -529,7 +529,7 @@ func openLibraryToReport() bool {
 		return true
 	}
 	initialiseLibrary() // propagates progressSuppressed via Library.Initialise(Reporting, ...)
-	Library.ReadKeyOldiesFile()
+	Library.ReadOldKeysFile()
 	loadMappingFiles()
 
 	if skipBibValidation || Library.ValidBibDb() {
@@ -925,10 +925,10 @@ func cleanKeys(args []string) []string {
 	return result
 }
 
-// normalizeAuthorEditorEntryFields applies current name mappings to all stored author/editor
+// normalizeAuthorEditorEntryFields applies current name forms to all stored author/editor
 // field values in bib_entries. Any entry whose stored value contains at least one mapped alias
 // is updated in-place; the old value is recorded as superseded in superseded_field_values.
-// Called at startup so that name mappings added between runs are immediately propagated.
+// Called at startup so that name forms added between runs are immediately propagated.
 func normalizeAuthorEditorEntryFields() {
 	if len(Library.NameAliasToName) == 0 {
 		return
@@ -969,13 +969,13 @@ func normalizeAuthorEditorEntryFields() {
 		updated++
 	}
 	if updated > 0 {
-		Library.Progress("Normalized %d author/editor field(s) via name mappings", updated)
+		Library.Progress("Normalized %d author/editor field(s) via name forms", updated)
 	}
 }
 
 // retireResolvedAuthorEditorSuperseded deletes superseded_field_values rows for author/editor
 // fields where the superseded value is equal to the current entry winner after applying
-// name mappings. Called at startup so that name mappings added outside of triage
+// name forms. Called at startup so that name forms added outside of triage
 // automatically cascade to clean up resolved pairs.
 func retireResolvedAuthorEditorSuperseded() {
 	rows, err := db.Query(`SELECT entry_key, field, value FROM superseded_field_values WHERE field IN ('author', 'editor')`)
@@ -1041,7 +1041,7 @@ func retireResolvedAuthorEditorSuperseded() {
 		}
 	}
 	if retired > 0 {
-		Library.Progress("  Retired %d resolved author/editor pair(s) via name mappings", retired)
+		Library.Progress("  Retired %d resolved author/editor pair(s) via name forms", retired)
 	}
 }
 
@@ -1049,7 +1049,7 @@ func retireResolvedAuthorEditorSuperseded() {
 
 // doTriageAuthorMappings interactively reviews all author/editor pairs in superseded_field_values.
 // Each pair is classified and resolved: brace-wrap (auto-fixed), name-equal-after-mapping
-// (auto-retired), single-name variant (name-mapping offered), missing-authors (prompt),
+// (auto-retired), single-name variant (name-form offered), missing-authors (prompt),
 // multi-name variant (kept), or unclassifiable (flagged).
 func doTriageAuthorMappings() {
 	if !openLibraryToUpdate() {
@@ -1087,7 +1087,7 @@ func doTriageAuthorMappings() {
 
 	retireSuperseded := func(key, field, superseded string) {
 		if err := bibExec(`DELETE FROM superseded_field_values WHERE entry_key=? AND field=? AND value=?`, key, field, superseded); err != nil {
-			// Previously silent — see the matching comment in TKeyAliasTable.Load.
+			// Previously silent — see the matching comment in TKeyMapTable.Load.
 			Library.Warning("retireSuperseded: delete failed (key=%s, field=%s): %s", key, field, err)
 			markDbWriteFailed(fmt.Sprintf("retireSuperseded: delete failed (key=%s, field=%s, value=%s): %s", key, field, superseded, err))
 		}
@@ -1095,7 +1095,7 @@ func doTriageAuthorMappings() {
 
 	markKept := func(key, field, superseded string) {
 		if err := bibExec(`UPDATE superseded_field_values SET triage_status='kept' WHERE entry_key=? AND field=? AND value=?`, key, field, superseded); err != nil {
-			// Previously silent — see the matching comment in TKeyAliasTable.Load.
+			// Previously silent — see the matching comment in TKeyMapTable.Load.
 			Library.Warning("markKept: update failed (key=%s, field=%s): %s", key, field, err)
 			markDbWriteFailed(fmt.Sprintf("markKept: update failed (key=%s, field=%s, value=%s): %s", key, field, superseded, err))
 		}
@@ -1156,7 +1156,7 @@ outer:
 
 		Library.ResetQuestionFlag()
 
-		// Re-check: a name mapping added during this run may have already equated them.
+		// Re-check: a name form added during this run may have already equated them.
 		wNames := splitOnAnd(winner)
 		lNames := splitOnAnd(p.superseded)
 		if sliceEqual(normList(wNames), normList(lNames)) {
@@ -1292,9 +1292,9 @@ outer:
 	reportORCIDSideAutoResolves()
 }
 
-// reportSkippedNameMappings appends the name mappings skipped as garbled during the
+// reportSkippedNameForms appends the name forms skipped as garbled during the
 // ORCID enrichment to orcid_skipped_names.log, and reports their count.
-func reportSkippedNameMappings(lines []string) {
+func reportSkippedNameForms(lines []string) {
 	if len(lines) == 0 {
 		return
 	}
@@ -1304,7 +1304,7 @@ func reportSkippedNameMappings(lines []string) {
 		fmt.Fprintf(f, "# %s\n%s\n", time.Now().Format("2006-01-02 15:04:05"), strings.Join(lines, "\n"))
 		f.Close()
 	}
-	Library.Progress("ORCID name forms skipped as garbled (lists, titles): %d (see orcid_skipped_names.log; Tables, Name mappings in the web UI takes one anyway).", len(lines))
+	Library.Progress("ORCID name forms skipped as garbled (lists, titles): %d (see orcid_skipped_names.log; Tables, Name forms in the web UI takes one anyway).", len(lines))
 }
 
 // reportORCIDSideAutoResolves reports the name questions autoResolveByORCIDSide
@@ -1748,7 +1748,7 @@ func reportHomework() {
 	todo := func(label string, count int, action string) {
 		row := TMessageRow{Label: label, Value: fmt.Sprintf("%d", count)}
 		if count > 0 {
-			row.Note, row.Action = dialogueActions[action].Title, action
+			row.Note, row.Action = webActions[action].Title, action
 		}
 		homework.Rows = append(homework.Rows, row)
 	}
@@ -2244,11 +2244,11 @@ func doSetGroups(args []string) {
 }
 
 // resolveInputKey maps a user-supplied key to its canonical entry key,
-// falling back to HintToKey when MapEntryKey returns the input unchanged.
+// falling back to AliasToKey when MapEntryKey returns the input unchanged.
 func resolveInputKey(raw string) string {
 	resolved := Library.MapEntryKey(raw)
 	if resolved == raw {
-		if hint, ok := Library.HintToKey.Get(raw); ok {
+		if hint, ok := Library.AliasToKey.Get(raw); ok {
 			resolved = Library.MapEntryKey(hint)
 		}
 	}
@@ -2289,9 +2289,9 @@ func doEntryKeyAlias(args []string, withMap bool) {
 	}
 }
 
-// loadBackupKeyOldies reads a backup key_oldies CSV (format: canonical;alias)
+// loadBackupOldKeys reads a backup old_keys CSV (format: canonical;alias)
 // and returns a map from alias → canonical for use as a secondary key remap source.
-func loadBackupKeyOldies(path string) map[string]string {
+func loadBackupOldKeys(path string) map[string]string {
 	m := map[string]string{}
 	if !FileExists(path) {
 		return m
@@ -2305,26 +2305,26 @@ func loadBackupKeyOldies(path string) map[string]string {
 	return m
 }
 
-// doRestoreKeyHints reads a backup key_hints CSV (format: key;hint per line),
+// doRestoreKeyAliases reads a backup key_aliases CSV (format: key;hint per line),
 // maps each old entry key to the current canonical key via MapEntryKey/EntryExists,
-// and inserts surviving hints into key_hints. When the current library does not
-// recognise an old key, it also tries the backup key_oldies (auto-derived from
+// and inserts surviving hints into key_aliases. When the current library does not
+// recognise an old key, it also tries the backup old_keys (auto-derived from
 // the same directory) to chain through an extra level of remapping.
 // Processes in batches of 10 000 rows for performance.
-func doRestoreKeyHints(csvPath string) {
+func doRestoreKeyAliases(csvPath string) {
 	if csvPath == "" {
-		messageln("-restore_key_hints requires -hints_csv <path>")
+		messageln("-restore_key_aliases requires -aliases_csv <path>")
 		return
 	}
 	if !openLibraryToUpdate() {
 		return
 	}
 
-	// Load the backup key_oldies from the same directory as the hints CSV.
-	oldiesPath := filepath.Join(filepath.Dir(csvPath), "key_oldies.csv")
-	backupOldies := loadBackupKeyOldies(oldiesPath)
+	// Load the backup old_keys from the same directory as the hints CSV.
+	oldiesPath := filepath.Join(filepath.Dir(csvPath), "old_keys.csv")
+	backupOldies := loadBackupOldKeys(oldiesPath)
 	if len(backupOldies) > 0 {
-		Library.Progress("Loaded %d backup key_oldies entries from %s", len(backupOldies), oldiesPath)
+		Library.Progress("Loaded %d backup old_keys entries from %s", len(backupOldies), oldiesPath)
 	}
 
 	f, err := os.Open(csvPath)
@@ -2335,7 +2335,7 @@ func doRestoreKeyHints(csvPath string) {
 	defer f.Close()
 
 	// resolveKey tries to find a current canonical key for oldKey.
-	// First via the live library's alias chain, then via the backup key_oldies.
+	// First via the live library's alias chain, then via the backup old_keys.
 	resolveKey := func(oldKey string) string {
 		canon := Library.MapEntryKey(oldKey)
 		if Library.EntryExists(canon) {
@@ -2350,10 +2350,10 @@ func doRestoreKeyHints(csvPath string) {
 		return ""
 	}
 
-	// Load the current key_hints table so we can detect ambiguities before inserting.
-	Library.Progress("Loading current key_hints for ambiguity check")
+	// Load the current key_aliases table so we can detect ambiguities before inserting.
+	Library.Progress("Loading current key_aliases for ambiguity check")
 	currentHints := map[string]string{} // hint → current canonical key
-	if rows, err2 := db.Query(`SELECT hint, key FROM key_hints`); err2 == nil {
+	if rows, err2 := db.Query(`SELECT alias, key FROM key_aliases`); err2 == nil {
 		for rows.Next() {
 			var h, k string
 			if rows.Scan(&h, &k) == nil {
@@ -2363,14 +2363,14 @@ func doRestoreKeyHints(csvPath string) {
 		rows.Close()
 	}
 
-	insertOnly := `INSERT INTO key_hints (hint, key) VALUES (?, ?) ON CONFLICT(hint) DO NOTHING`
+	insertOnly := `INSERT INTO key_aliases (alias, key) VALUES (?, ?) ON CONFLICT(alias) DO NOTHING`
 
 	const batchSize = 10000
 	total, imported, skipped, remapped, ambiguous := 0, 0, 0, 0, 0
 
 	commitBatch := func(tx *sql.Tx) {
 		if err := tx.Commit(); err != nil {
-			dbInteraction.Warning("key_hints restore commit failed: %s", err)
+			dbInteraction.Warning("key_aliases restore commit failed: %s", err)
 		}
 	}
 
@@ -2398,7 +2398,7 @@ func doRestoreKeyHints(csvPath string) {
 		if canon == "" {
 			skipped++
 		} else if existing, conflict := currentHints[hint]; conflict && existing != canon {
-			Library.Warning("Ambiguous key hint during restore: %s already maps to %s, refusing %s", hint, existing, canon)
+			Library.Warning("Ambiguous key alias during restore: %s already maps to %s, refusing %s", hint, existing, canon)
 			ambiguous++
 		} else {
 			if canon != oldKey {
@@ -2413,7 +2413,7 @@ func doRestoreKeyHints(csvPath string) {
 
 		if total%batchSize == 0 {
 			commitBatch(tx)
-			Library.Progress("Restoring key hints: %d processed, %d imported, %d skipped, %d remapped, %d ambiguous", total, imported, skipped, remapped, ambiguous)
+			Library.Progress("Restoring key aliases: %d processed, %d imported, %d skipped, %d remapped, %d ambiguous", total, imported, skipped, remapped, ambiguous)
 			tx, err = db.Begin()
 			if err != nil {
 				messagef("Could not begin transaction: %s\n", err)
@@ -2427,7 +2427,7 @@ func doRestoreKeyHints(csvPath string) {
 		Library.Warning("Error reading %s: %s", csvPath, err)
 	}
 
-	Library.Progress("Key hints restore complete: %d total, %d imported, %d skipped (no entry), %d remapped via key_oldies, %d refused (ambiguous)", total, imported, skipped, remapped, ambiguous)
+	Library.Progress("Key aliases restore complete: %d total, %d imported, %d skipped (no entry), %d remapped via old_keys, %d refused (ambiguous)", total, imported, skipped, remapped, ambiguous)
 }
 
 func doShowEntry(args []string) {
@@ -3151,7 +3151,7 @@ func doAddKeyMapping(args []string) {
 		target := resolveUserKey(args[len(args)-1])
 		for _, alias := range args[:len(args)-1] {
 			Library.Progress("  Mapping %s → %s", cleanKey(alias), target)
-			Library.AddKeyAlias(cleanKey(alias), target)
+			Library.AddOldKey(cleanKey(alias), target)
 		}
 		doAllChecks(target)
 	}
@@ -3207,7 +3207,7 @@ func doMergeEntries(args []string) {
 			if alias == target {
 				// Both keys resolve to the same canonical. Check for a ghost bib_entries
 				// row under the raw key (entry still exists in bib_entries even though
-				// key_oldies already records it as an alias). Merge its fields into the
+				// old_keys already records it as an alias). Merge its fields into the
 				// canonical first — don't just delete, in case the ghost has un-merged data.
 				rawKey := rawKeys[i]
 				if rawKey != target && bibEntryExists(rawKey) {
@@ -3237,7 +3237,7 @@ func doSetPreferredAlias(args []string) {
 			Library.Error(ErrorSetPreferredAliasInvalidFormat, alias)
 			return
 		}
-		if target := Library.HintToKey.GetValue(alias); target != "" && target != key {
+		if target := Library.AliasToKey.GetValue(alias); target != "" && target != key {
 			Library.Error(ErrorSetPreferredAliasAlreadyInUse, alias, target)
 			return
 		}
@@ -3332,7 +3332,7 @@ func resolveContributorArg(arg string) (id, name string, ok bool) {
 	return cid, Library.ContributorByID[cid].Name, true
 }
 
-func doAddNameMapping(args []string) {
+func doAddNameForm(args []string) {
 	if !openLibraryToUpdate() {
 		return
 	}
@@ -3351,9 +3351,9 @@ func doAddNameMapping(args []string) {
 			canonical = name
 		}
 	}
-	forceNameMapping = true
-	Library.AddNameMapping(canonical, alias)
-	forceNameMapping = false
+	forceNameForm = true
+	Library.AddNameForm(canonical, alias)
+	forceNameForm = false
 	Library.RenormaliseNameFields()
 }
 
@@ -3519,7 +3519,7 @@ func doCorrectName(args []string) {
 		ndRows.Close()
 		for _, p := range pairs {
 			if err := bibExec(`DELETE FROM non_double_contributor_names WHERE name1 = ? AND name2 = ?`, p[0], p[1]); err != nil {
-				// Previously silent — see the matching comment in TKeyAliasTable.Load.
+				// Previously silent — see the matching comment in TKeyMapTable.Load.
 				Library.Warning("non_double_contributor_names delete failed (name1=%s, name2=%s): %s", p[0], p[1], err)
 				markDbWriteFailed(fmt.Sprintf("non_double_contributor_names delete failed (name1=%s, name2=%s): %s", p[0], p[1], err))
 			}
@@ -3535,7 +3535,7 @@ func doCorrectName(args []string) {
 					n1, n2 = n2, n1
 				}
 				if err := bibExec(`INSERT OR IGNORE INTO non_double_contributor_names (name1, name2) VALUES (?, ?)`, n1, n2); err != nil {
-					// Previously silent — see the matching comment in TKeyAliasTable.Load.
+					// Previously silent — see the matching comment in TKeyMapTable.Load.
 					Library.Warning("non_double_contributor_names insert failed (name1=%s, name2=%s): %s", n1, n2, err)
 					markDbWriteFailed(fmt.Sprintf("non_double_contributor_names insert failed (name1=%s, name2=%s): %s", n1, n2, err))
 				}
@@ -3544,7 +3544,7 @@ func doCorrectName(args []string) {
 	}
 
 	loadContributorsFromDb(&Library)
-	Library.CheckNameMappingConsistency()
+	Library.CheckNameFormConsistency()
 	Library.Progress("Name correction complete.")
 }
 
@@ -3629,10 +3629,10 @@ func isValidORCID(s string) bool {
 // Fetches ORCID person records, adds aliases, and challenges canonical mismatches.
 func doEnrichOrcidProfilesCore() {
 	var skippedForms []string
-	collectSkippedNameMappings = &skippedForms
+	collectSkippedNameForms = &skippedForms
 	defer func() {
-		collectSkippedNameMappings = nil
-		reportSkippedNameMappings(skippedForms)
+		collectSkippedNameForms = nil
+		reportSkippedNameForms(skippedForms)
 	}()
 	loadNonDoubleContributorNamesFromDb(&Library)
 
@@ -3800,7 +3800,7 @@ func doEnrichOrcidProfilesCore() {
 			}
 			upsertContributorNameToDB(p.id, form)
 			Library.NameToContributorID[form] = p.id
-			Library.AddNameMapping(contrib.Name, form)
+			Library.AddNameForm(contrib.Name, form)
 			newAliases++
 		}
 		// Also register swapped forms of other-names.
@@ -3811,7 +3811,7 @@ func doEnrichOrcidProfilesCore() {
 				if !mapped && !ambiguous {
 					upsertContributorNameToDB(p.id, swapped)
 					Library.NameToContributorID[swapped] = p.id
-					Library.AddNameMapping(contrib.Name, swapped)
+					Library.AddNameForm(contrib.Name, swapped)
 					newAliases++
 				}
 			}
@@ -3923,7 +3923,7 @@ func doEnrichOrcidProfilesCore() {
 			upsertContributorNameToDB(p.id, oldCanon)
 			Library.NameToContributorID[oldCanon] = p.id
 			Library.NameToContributorID[newCanon] = p.id
-			Library.AddNameMapping(newCanon, oldCanon)
+			Library.AddNameForm(newCanon, oldCanon)
 			newAliases++
 		}
 
@@ -4023,7 +4023,7 @@ var (
 	cmdAddGroup                 bool // -add_group: create a new BibDesk static group (with optional initial entries)
 	cmdAddKeyMapping            bool
 	cmdMergeEntries             bool
-	cmdAddNameMapping           bool
+	cmdAddNameForm              bool
 	cmdCorrectName              bool
 	cmdAddDoiAlias              bool
 	cmdSetPreferredAlias        bool
@@ -4053,8 +4053,8 @@ var (
 	cmdPushDblp                 bool
 	cmdRestoreDblp              bool
 	cmdUpdateDblp               bool
-	cmdRestoreKeyHints          bool
-	restoreKeyHintsPath         string
+	cmdRestoreKeyAliases        bool
+	restoreKeyAliasesPath       string
 	cmdDeleteGarbage            bool
 	cmdRestoreFromDump          bool
 	cmdRestoreBackupName        string // -restore <name>: restore named backup to home DB
@@ -4109,7 +4109,7 @@ func main() {
 	jobsFile := flag.String("jobs_file", "", "(test) run the commands in a file, one job per line, in one process")
 	flag.BoolVar(&forceWrite, "force_write", false, "force write even if unchanged")
 
-	flag.BoolVar(&cmdTrustHints, "trust_hints", false, "harvest: auto-accept key-hint matches without confirmation")
+	flag.BoolVar(&cmdTrustKeyAliases, "trust_hints", false, "harvest: auto-accept key-alias matches without confirmation")
 	flag.BoolVar(&cmdCollectKeys, "collect_keys", false, "harvest: add source entry keys to the hints DB when unambiguous")
 	flag.StringVar(&logFilePath, "log", "", "also write the run's output, questions and answers to this file (appended): -log <file>")
 	flag.StringVar(&logFilePath, "l", "", "short for -log")
@@ -4155,7 +4155,8 @@ func main() {
 	flag.BoolVar(&cmdAddGroup, "add_group", false, "create a new BibDesk static group: -add_group <group_name> [key...]")
 	flag.BoolVar(&cmdAddKeyMapping, "add_key_mapping", false, "add key alias(es) to a canonical key: -add_key_mapping <alias>... <canonical>")
 	flag.BoolVar(&cmdMergeEntries, "merge_entries", false, "merge entries into target: -merge_entries <key>... <target>")
-	flag.BoolVar(&cmdAddNameMapping, "add_name_mapping", false, "add a name alias mapping: -add_name_mapping <alias> <canonical>")
+	flag.BoolVar(&cmdAddNameForm, "add_name_form", false, "add another form of a contributor's name: -add_name_form <form> <canonical>")
+	flag.BoolVar(&cmdAddNameForm, "add_name_mapping", false, "the old name of -add_name_form")
 	flag.BoolVar(&cmdCorrectName, "correct_name", false, "correct a name spelling everywhere: -correct_name <bad_name> <correct_name>")
 	flag.BoolVar(&cmdAddDoiAlias, "add_doi_alias", false, "record a DOI as an alias for an entry: -add_doi_alias <doi> <entry_key>")
 	flag.BoolVar(&cmdSetPreferredAlias, "set_preferred_alias", false, "set preferred alias for a key: -set_preferred_alias <alias> <key>")
@@ -4184,8 +4185,8 @@ func main() {
 	flag.BoolVar(&cmdPushDblp, "push_dblp", false, "copy the local DBLP store to DBLP/ in the shared DB folder (Nextcloud)")
 	flag.BoolVar(&cmdRestoreDblp, "restore_dblp", false, "replace the local DBLP store with the copy in DBLP/ in the shared DB folder")
 	flag.BoolVar(&cmdUpdateDblp, "update_dblp", false, "import the DBLP XML export: downloaded from dblp_url (settings) when set, else found in your Downloads folder")
-	flag.BoolVar(&cmdRestoreKeyHints, "restore_key_hints", false, "restore key hints from a backup CSV, remapping old keys via key_oldies")
-	flag.StringVar(&restoreKeyHintsPath, "hints_csv", "", "path to the backup key_hints.csv for -restore_key_hints")
+	flag.BoolVar(&cmdRestoreKeyAliases, "restore_key_aliases", false, "restore key aliases from a backup CSV, remapping old keys via old_keys")
+	flag.StringVar(&restoreKeyAliasesPath, "aliases_csv", "", "path to the backup key_aliases.csv for -restore_key_aliases")
 	flag.BoolVar(&cmdDeleteGarbage, "delete_garbage", false, "delete DBLP trash folder contents and exit")
 	flag.BoolVar(&cmdRestoreFromDump, "restore_from_dump", false, "rebuild the local database from $base.dump in the shared DB folder and push it (use after corruption)")
 	flag.StringVar(&cmdRestoreBackupName, "restore", "", "restore the local database from a named backup and push it to the shared DB folder (e.g. -restore ErikProper_20260709_123456)")

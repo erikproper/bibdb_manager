@@ -87,8 +87,8 @@ func (l *TBibTeXLibrary) resolveDBLPCrossref(crossrefDblpKey string, allowURLFet
 			// prevents creating a duplicate that would steal crossref children from
 			// a manually-entered proceedings entry and leave it orphaned (lone).
 			if existing := l.findExistingNonDblpProceedings(crossrefDblpKey); existing != "" {
-				l.KeyOldies.SetTransient(dblpAlias, existing)
-				l.HintToKey.SetTransient(dblpAlias, existing)
+				l.OldKeys.SetTransient(dblpAlias, existing)
+				l.AliasToKey.SetTransient(dblpAlias, existing)
 				l.MaybeMergeDBLPEntry(crossrefDblpKey, existing, false)
 				l.Progress("Associated DBLP key %s with existing entry %s (title match)", crossrefDblpKey, existing)
 				return existing
@@ -258,8 +258,8 @@ func (l *TBibTeXLibrary) MaybeMergeDBLPEntry(DBLPKey, key string, allowURLFetch 
 			if existingCrossref != "" && l.EntryExists(existingCrossref) &&
 				l.EntryFieldValueity(existingCrossref, DBLPField) == "" &&
 				l.LookupDBLPKey(crossrefDblpKey) == "" {
-				l.KeyOldies.SetTransient(KeyForDBLP(crossrefDblpKey), existingCrossref)
-				l.HintToKey.SetTransient(KeyForDBLP(crossrefDblpKey), existingCrossref)
+				l.OldKeys.SetTransient(KeyForDBLP(crossrefDblpKey), existingCrossref)
+				l.AliasToKey.SetTransient(KeyForDBLP(crossrefDblpKey), existingCrossref)
 				l.MaybeMergeDBLPEntry(crossrefDblpKey, existingCrossref, allowURLFetch)
 				dblpEntry.Fields["crossref"] = existingCrossref
 				for field := range BibTeXMustInheritFields.Elements() {
@@ -391,12 +391,12 @@ func (l *TBibTeXLibrary) MaybeAddDBLPEntry(DBLPKey string) string {
 	// this key instead of minting a duplicate. SetTransient avoids a DB write —
 	// buildKeyAliasesFromDb already rebuilds these from bib_entries on every
 	// startup — so rolling it back on failure is just a map delete.
-	l.KeyOldies.SetTransient(KeyForDBLP(DBLPKey), key)
-	l.HintToKey.SetTransient(KeyForDBLP(DBLPKey), key)
+	l.OldKeys.SetTransient(KeyForDBLP(DBLPKey), key)
+	l.AliasToKey.SetTransient(KeyForDBLP(DBLPKey), key)
 
 	if !l.MaybeMergeDBLPEntry(DBLPKey, key, true) {
-		l.KeyOldies.DeleteTransient(KeyForDBLP(DBLPKey))
-		l.HintToKey.DeleteTransient(KeyForDBLP(DBLPKey))
+		l.OldKeys.DeleteTransient(KeyForDBLP(DBLPKey))
+		l.AliasToKey.DeleteTransient(KeyForDBLP(DBLPKey))
 		return ""
 	}
 	setTableDirty("dblp_hierarchy")
@@ -489,8 +489,8 @@ func (l *TBibTeXLibrary) AssociateDblpKey(key, dblpKey string) {
 			return
 		}
 	}
-	l.KeyOldies.SetTransient(KeyForDBLP(dblpKey), key)
-	l.HintToKey.SetTransient(KeyForDBLP(dblpKey), key)
+	l.OldKeys.SetTransient(KeyForDBLP(dblpKey), key)
+	l.AliasToKey.SetTransient(KeyForDBLP(dblpKey), key)
 	if !l.MaybeMergeDBLPEntry(dblpKey, key, true) {
 		l.SetEntryFieldValue(key, DBLPField, dblpKey)
 		bibEntriesModified = true

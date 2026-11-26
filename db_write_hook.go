@@ -120,7 +120,7 @@ var tablesNotInMemory = map[string]bool{
 }
 
 // Fields whose change needs more than refreshing the entry: they feed the key
-// aliases (key hints, DBLP key oldies), which refreshing would have to write.
+// aliases (key aliases, DBLP old keys), which refreshing would have to write.
 var fieldsNeedingReload = map[string]bool{PreferredAliasField: true, DBLPField: true}
 
 // refreshAfterWrites brings the loaded library up to date with what a job wrote:

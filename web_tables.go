@@ -6,7 +6,7 @@ package main
 // lists them all; a table's tab is shown in the tab bar when chosen there (Erik,
 // 2026-11-25: in principle all content is editable). Reads go through a read-only
 // connection; writes are jobs (-table_edit). The tables with a memory of their own
-// (field_mappings, name_forms, key_oldies, key_hints) change it with the table (no
+// (field_mappings, name_forms, old_keys, key_aliases) change it with the table (no
 // load afresh); a change to another table has the library loaded afresh.
 
 import (
@@ -37,7 +37,7 @@ type TWebTable struct {
 // too (doTableEdit); for the other tables the library is loaded afresh.
 func (t TWebTable) inMemory() bool {
 	switch t.Name {
-	case "field_mappings", "name_forms", "key_oldies", "key_hints":
+	case "field_mappings", "name_forms", "old_keys", "key_aliases":
 		return true
 	}
 	return false
@@ -58,33 +58,33 @@ var webTables = map[string]TWebTable{
 		Columns: []string{"source_field", "source_value", "target_field", "target_value"},
 		Keys:    []string{"source_field", "source_value", "target_field"},
 		Help: "A value of source_field is replaced by target_value in target_field. The same field on both " +
-			"sides: a correction (stored values are corrected too); different fields: a value moved or added " +
-			"elsewhere (source_field may carry an entry type, e.g. author:techreport).",
+			"sides: a correction; different fields: a value moved or added elsewhere (source_field may carry an " +
+			"entry type, e.g. series:techreport). A row added applies at once to the stored entries with that value.",
 		Group: "Mappings", from: "field_mappings",
 	},
 	"name_forms": {
-		Name: "name_forms", Title: "Name mappings",
+		Name: "name_forms", Title: "Name forms",
 		Columns: []string{"form", "canonical", "id"},
 		Keys:    []string{"form", "id"},
-		Help: "The other forms of an author's name, mapped to the author (their stored name and id): a form found " +
-			"in an entry is taken as that author. When adding, canonical may be the stored name or the id (EP-…).",
+		Help: "The other forms of a contributor's name, mapped to the contributor (their stored name and id): a form found " +
+			"in an entry is taken as that contributor. When adding, canonical may be the stored name or the id (EP-…).",
 		Group: "Mappings",
 		from:  "(SELECT n.name AS form, c.name AS canonical, n.id AS id FROM contributor_names n JOIN contributors c ON c.id = n.id WHERE n.name != c.name)",
 		table: "contributor_names",
 	},
-	"key_oldies": {
-		Name: "key_oldies", Title: "Old keys",
+	"old_keys": {
+		Name: "old_keys", Title: "Old keys",
 		Columns: []string{"alias", "key"},
 		Keys:    []string{"alias"},
 		Help:    "Former keys (EP-…) of entries (e.g. of the entry merged away), mapped to the key used: an old citation still finds its entry.",
-		Group:   "Keys and aliases", from: "key_oldies",
+		Group:   "Keys and aliases", from: "old_keys",
 	},
-	"key_hints": {
-		Name: "key_hints", Title: "Key aliases",
-		Columns: []string{"hint", "key"},
-		Keys:    []string{"hint"},
+	"key_aliases": {
+		Name: "key_aliases", Title: "Key aliases",
+		Columns: []string{"alias", "key"},
+		Keys:    []string{"alias"},
 		Help:    "Other keys an entry is known by (former preferred aliases, keys used in harvested bib files), mapped to its key: a citation with such a key finds the entry.",
-		Group:   "Keys and aliases", from: "key_hints",
+		Group:   "Keys and aliases", from: "key_aliases",
 	},
 }
 
@@ -103,8 +103,8 @@ func init() {
 			Help: "Country names as they may appear inside a booktitle (or a title equal to it), e.g. \"…, Toronto, Canada\", mapped to the form used there. English only, without ISO codes: a non-English country name suggests the title is in that language, and two-letter codes are ambiguous in a title. Used by the title alignment check."},
 		{Name: "entry_doi_aliases", Title: "DOI aliases", Group: "Keys and aliases", Columns: []string{"doi", "entry_key"}, Keys: []string{"doi"},
 			Help: "Other DOIs an entry is known by (e.g. the DOI of a merged duplicate): a bib file or DBLP record with such a DOI is taken as that entry."},
-		{Name: "contributor_id_oldies", Title: "Old author ids", Group: "Keys and aliases", Columns: []string{"absorbed_id", "canonical_id"}, Keys: []string{"absorbed_id"},
-			Help: "Former ids (EP-…) of authors that were merged into another author, mapped to the id used, so that old references still find the author."},
+		{Name: "contributor_id_oldies", Title: "Old contributor ids", Group: "Keys and aliases", Columns: []string{"absorbed_id", "canonical_id"}, Keys: []string{"absorbed_id"},
+			Help: "Former ids (EP-…) of contributors that were merged into another contributor, mapped to the id used, so that old references still find the contributor."},
 		{Name: "deleted_entries", Title: "Deleted entries", Group: "Keys and aliases", Columns: []string{"key"}, Keys: []string{"key"},
 			Help: "Keys of entries deleted from the library: a sync does not offer to add them again from older bib files. Delete a row to let an entry come back."},
 		{Name: "urls_ignore", Title: "Bad URLs", Group: "Lists", Columns: []string{"url"}, Keys: []string{"url"},
@@ -115,12 +115,12 @@ func init() {
 			Help: "Entries that have no DBLP record on purpose: the checks no longer warn that they lack a DBLP key."},
 		{Name: "non_double_entries", Title: "Not double: entries", Group: "Not doubles", Columns: []string{"key1", "key2"}, Keys: []string{"key1", "key2"},
 			Help: "Pairs of entries that look alike but are different publications (answered \"Keep\" when asked to merge): never offered for merging again."},
-		{Name: "non_double_contributors", Title: "Not double: authors", Group: "Not doubles", Columns: []string{"contributor_id_a", "contributor_id_b"}, Keys: []string{"contributor_id_a", "contributor_id_b"},
-			Help: "Pairs of authors (by id, the smaller first) that are different people: never offered for merging again."},
+		{Name: "non_double_contributors", Title: "Not double: contributors", Group: "Not doubles", Columns: []string{"contributor_id_a", "contributor_id_b"}, Keys: []string{"contributor_id_a", "contributor_id_b"},
+			Help: "Pairs of contributors (by id, the smaller first) that are different people: never offered for merging again."},
 		{Name: "non_double_contributor_names", Title: "Not double: names", Group: "Not doubles", Columns: []string{"name1", "name2"}, Keys: []string{"name1", "name2"},
 			Help: "Pairs of names (the smaller first) of different people (answered \"Different people\" in a name question): never asked about again."},
-		{Name: "contributor_orcids", Title: "ORCIDs", Group: "Authors", Columns: []string{"orcid", "contributor_id", "is_canonical"}, Keys: []string{"orcid"},
-			Help: "The ORCIDs of authors; is_canonical is 1 for the one used when an author has several."},
+		{Name: "contributor_orcids", Title: "ORCIDs", Group: "Contributors", Columns: []string{"orcid", "contributor_id", "is_canonical"}, Keys: []string{"orcid"},
+			Help: "The ORCIDs of contributors; is_canonical is 1 for the one used when a contributor has several."},
 		{Name: "bib_groups", Title: "Group members", Group: "Entries", Columns: []string{"group_name", "entry_key"}, Keys: []string{"group_name", "entry_key"},
 			Help: "Which entries are in which group (the groups of BibDesk; also set by Entry actions)."},
 		{Name: "entry_metadata", Title: "Entry flags", Group: "Entries", Columns: []string{"entry_key", "property", "value"}, Keys: []string{"entry_key", "property"},
@@ -158,7 +158,7 @@ func (w *TWebUI) handleTables(rw http.ResponseWriter, r *http.Request) {
 
 // tableGroupRank orders the Tables tab's groups.
 func tableGroupRank(g string) int {
-	for i, name := range []string{"Mappings", "Keys and aliases", "Lists", "Not doubles", "Authors", "Entries", "Settings", "Derived (read-only)"} {
+	for i, name := range []string{"Mappings", "Keys and aliases", "Lists", "Not doubles", "Contributors", "Entries", "Settings", "Derived (read-only)"} {
 		if g == name {
 			return i
 		}
@@ -334,10 +334,10 @@ func doTableEdit(args []string) {
 			} else if m := Library.FieldMappings[sf][sv]; m != nil {
 				delete(m, tf)
 			}
-		case "key_oldies":
-			Library.KeyOldies.Delete(row["alias"])
-		case "key_hints":
-			Library.HintToKey.Delete(row["hint"])
+		case "old_keys":
+			Library.OldKeys.Delete(row["alias"])
+		case "key_aliases":
+			Library.AliasToKey.Delete(row["alias"])
 		case "name_forms":
 			if Library.NameToContributorID[row["form"]] == row["id"] {
 				delete(Library.NameToContributorID, row["form"])
@@ -349,7 +349,7 @@ func doTableEdit(args []string) {
 			var canonical string
 			bibQueryRow(`SELECT name FROM contributors WHERE id = ?`, row["id"]).Scan(&canonical) //nolint:errcheck
 			if canonical == row["form"] {
-				messagef("%q is the author's stored name: rename the author instead.\n", row["form"])
+				messagef("%q is the contributor's stored name: rename the contributor instead.\n", row["form"])
 				return false
 			}
 			forget(row)
@@ -372,21 +372,24 @@ func doTableEdit(args []string) {
 		}
 		return true
 	}
+	var mapped [][2]string // field mappings added: source field and value
 	add := func(row map[string]string) bool {
 		get := func(c string) string { return strings.TrimSpace(row[c]) }
 		switch t.Name {
 		case "field_mappings":
 			sf, tf := get("source_field"), get("target_field")
+			field, _, _ := strings.Cut(sf, ":")
+			sv := Library.MapFieldValue(field, get("source_value"))
 			if sf == tf {
-				Library.AddGenericFieldAlias(sf, Library.MapFieldValue(sf, get("source_value")), Library.MapFieldValue(tf, get("target_value")), true)
+				Library.AddGenericFieldAlias(sf, sv, Library.MapFieldValue(tf, get("target_value")), true)
 			} else {
-				field, _, _ := strings.Cut(sf, ":")
-				Library.AddFieldMapping(sf, Library.MapFieldValue(field, get("source_value")), tf, Library.NormaliseFieldValue(tf, get("target_value")))
+				Library.AddFieldMapping(sf, sv, tf, Library.NormaliseFieldValue(tf, get("target_value")))
 			}
-		case "key_oldies":
+			mapped = append(mapped, [2]string{sf, sv})
+		case "old_keys":
+			Library.AddOldKey(get("alias"), get("key"))
+		case "key_aliases":
 			Library.AddKeyAlias(get("alias"), get("key"))
-		case "key_hints":
-			Library.AddKeyHint(get("hint"), get("key"))
 		case "name_forms":
 			id := get("id")
 			if id == "" {
@@ -394,7 +397,7 @@ func doTableEdit(args []string) {
 			}
 			cid, _, ok := resolveContributorArg(id)
 			if !ok {
-				messagef("No such author: %q\n", id)
+				messagef("No such contributor: %q\n", id)
 				return false
 			}
 			form := get("form")
@@ -404,7 +407,7 @@ func doTableEdit(args []string) {
 				bibQueryRow(`SELECT id FROM contributors WHERE name = ? AND id != ?`, form, cid).Scan(&other) //nolint:errcheck
 			}
 			if other != "" {
-				messagef("%q is a name of another author (%s); to make them one: Mark for merge, %s and %s\n", form, other, other, cid)
+				messagef("%q is a name of another contributor (%s); to make them one: Mark for merge, %s and %s\n", form, other, other, cid)
 				return false
 			}
 			upsertContributorNameToDB(cid, form)
@@ -446,6 +449,13 @@ func doTableEdit(args []string) {
 			}
 		}
 	}
+	if done {
+		for _, m := range mapped {
+			if n := applyFieldMappingToStored(m[0], m[1]); n > 0 {
+				messagef("Applied to %d stored entr%s.\n", n, map[bool]string{true: "y", false: "ies"}[n == 1])
+			}
+		}
+	}
 	if t.inMemory() {
 		writesKeptInMemory([]string{t.written()}, nil)
 	} // else: the service loads the library afresh (its write hook sees the table changed)
@@ -471,4 +481,46 @@ func tableNullableColumns(table string) map[string]bool {
 		}
 	}
 	return out
+}
+
+// applyFieldMappingToStored applies a field mapping just added (source field sf,
+// maybe with an entry type, "series:techreport"; source value sv) to the stored
+// entries with that value, which otherwise get it only when read in again (Erik,
+// 2026-11-26). Author and editor are left to that: they are stored as
+// contributors. It answers how many entries changed.
+func applyFieldMappingToStored(sf, sv string) int {
+	field, entryType, _ := strings.Cut(sf, ":")
+	if field == "author" || field == "editor" {
+		return 0
+	}
+	rows, err := bibQuery(`SELECT DISTINCT entry_key FROM bib_entries WHERE field = ? AND value = ?`, field, sv)
+	if err != nil {
+		return 0
+	}
+	var keys []string
+	for rows.Next() {
+		var k string
+		if rows.Scan(&k) == nil {
+			keys = append(keys, k)
+		}
+	}
+	rows.Close()
+	changed := 0
+	beginBibTransaction()
+	for _, key := range keys {
+		entry := loadEntryFromDb(key)
+		if entry == nil || (entryType != "" && entry.EntryType() != entryType) {
+			continue
+		}
+		openEntry(entry)
+		if v := Library.MapFieldValue(field, entry.Fields[field]); v != entry.Fields[field] {
+			entry.Fields[field] = v // a correction (the same field on both sides)
+		}
+		Library.MaybeApplyFieldMappings(entry, true)
+		if closeEntry(entry) {
+			changed++
+		}
+	}
+	commitBibTransaction()
+	return changed
 }

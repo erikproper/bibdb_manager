@@ -197,9 +197,9 @@ func (c *TCachedTable[K, V]) ForEach(fn func(K, V)) {
 	}
 }
 
-// --- TKeyAliasTable ---
+// --- TKeyMapTable ---
 
-// TKeyAliasTable is a write-through cache for alias→canonical key mappings.
+// TKeyMapTable is a write-through cache for alias→canonical key mappings.
 // It maintains a forward map (alias→canonical, always flat) and an inverse map
 // (canonical→aliases) so that when alias B gains a target C, any existing alias A→B
 // is immediately updated to A→C without waiting for a save-time chain-flattening pass.
@@ -208,7 +208,7 @@ func (c *TCachedTable[K, V]) ForEach(fn func(K, V)) {
 // inverse map, so they do not participate in bulk chain updates.
 // onModify, when set, is called after each persistent write (Set/Delete/DeleteByTarget).
 // It is NOT called by SetTransient. Wire it to setTableDate for modification tracking.
-type TKeyAliasTable struct {
+type TKeyMapTable struct {
 	forward    map[string]string   // alias → canonical (always flat)
 	inverse    map[string][]string // canonical → persistent aliases pointing to it
 	upsertSQL  string
@@ -230,7 +230,7 @@ func removeStringFromSlice(slice []string, value string) []string {
 // Load populates forward and inverse maps from the DB.
 // Chains in the stored data are flattened eagerly; stale entries (target not in
 // bib_entries) are deleted from the DB immediately.
-func (t *TKeyAliasTable) Load() {
+func (t *TKeyMapTable) Load() {
 	t.forward = make(map[string]string)
 	t.inverse = make(map[string][]string)
 
@@ -298,18 +298,18 @@ func (t *TKeyAliasTable) Load() {
 }
 
 // Get returns the canonical key for alias, or "" if not mapped.
-func (t *TKeyAliasTable) Get(alias string) string {
+func (t *TKeyMapTable) Get(alias string) string {
 	return t.forward[alias]
 }
 
 // Has reports whether alias is present in the forward map.
-func (t *TKeyAliasTable) Has(alias string) bool {
+func (t *TKeyMapTable) Has(alias string) bool {
 	_, ok := t.forward[alias]
 	return ok
 }
 
 // Len returns the number of entries in the forward map.
-func (t *TKeyAliasTable) Len() int {
+func (t *TKeyMapTable) Len() int {
 	return len(t.forward)
 }
 
@@ -319,7 +319,7 @@ func (t *TKeyAliasTable) Len() int {
 // to the resolved canonical and written to the DB.
 // Conflicts (alias already maps to a different canonical) are silently ignored;
 // the caller is responsible for conflict-checking before calling Set.
-func (t *TKeyAliasTable) Set(alias, canonical string) {
+func (t *TKeyMapTable) Set(alias, canonical string) {
 	if alias == "" || canonical == "" {
 		return
 	}
@@ -379,7 +379,7 @@ func (t *TKeyAliasTable) Set(alias, canonical string) {
 // SetTransient adds alias→canonical to the forward map for in-process lookups
 // without touching the DB or the inverse map. Used for DBLP-derived aliases
 // that are regenerated from bib_entries on every run.
-func (t *TKeyAliasTable) SetTransient(alias, canonical string) {
+func (t *TKeyMapTable) SetTransient(alias, canonical string) {
 	if t.forward != nil {
 		t.forward[alias] = canonical
 	}
@@ -389,14 +389,14 @@ func (t *TKeyAliasTable) SetTransient(alias, canonical string) {
 // (forward map only — never touched the inverse map or the DB, so neither
 // needs undoing). Used to roll back a speculative in-flight registration when
 // the entry it pointed at failed to materialize.
-func (t *TKeyAliasTable) DeleteTransient(alias string) {
+func (t *TKeyMapTable) DeleteTransient(alias string) {
 	if t.forward != nil {
 		delete(t.forward, alias)
 	}
 }
 
 // Delete removes alias from the forward map, the inverse map, and the DB.
-func (t *TKeyAliasTable) Delete(alias string) {
+func (t *TKeyMapTable) Delete(alias string) {
 	canonical, ok := t.forward[alias]
 	if !ok {
 		return
@@ -415,7 +415,7 @@ func (t *TKeyAliasTable) Delete(alias string) {
 
 // DeleteByTarget removes all persistent aliases pointing to canonical.
 // Uses the inverse map for O(1) lookup; does not touch transient-only entries.
-func (t *TKeyAliasTable) DeleteByTarget(canonical string) {
+func (t *TKeyMapTable) DeleteByTarget(canonical string) {
 	aliases := t.inverse[canonical]
 	modified := false
 	for _, alias := range aliases {
@@ -434,14 +434,14 @@ func (t *TKeyAliasTable) DeleteByTarget(canonical string) {
 }
 
 // EachAlias calls fn for each persistent alias pointing to canonical.
-func (t *TKeyAliasTable) EachAlias(canonical string, fn func(string)) {
+func (t *TKeyMapTable) EachAlias(canonical string, fn func(string)) {
 	for _, alias := range t.inverse[canonical] {
 		fn(alias)
 	}
 }
 
 // ForEach iterates over all forward-map entries (persistent and transient).
-func (t *TKeyAliasTable) ForEach(fn func(alias, canonical string)) {
+func (t *TKeyMapTable) ForEach(fn func(alias, canonical string)) {
 	for alias, canonical := range t.forward {
 		fn(alias, canonical)
 	}
@@ -450,7 +450,7 @@ func (t *TKeyAliasTable) ForEach(fn func(alias, canonical string)) {
 // ForEachPersistent iterates only over aliases that were loaded from the DB or
 // written via Set. Transient aliases (added via SetTransient, e.g. DBLP-derived
 // lookups) are excluded because they are not tracked in the inverse map.
-func (t *TKeyAliasTable) ForEachPersistent(fn func(alias, canonical string)) {
+func (t *TKeyMapTable) ForEachPersistent(fn func(alias, canonical string)) {
 	for canonical, aliases := range t.inverse {
 		for _, alias := range aliases {
 			fn(alias, canonical)

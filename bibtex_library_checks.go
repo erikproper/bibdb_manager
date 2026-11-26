@@ -195,7 +195,7 @@ func (l *TBibTeXLibrary) CheckEntryFieldMappingWinners() {
 					fixes = append(fixes, mismatch{entry, field, winner, actual})
 				}
 				// A challenger that now normalises to the actual value is
-				// redundant: the name_mapping makes it equivalent to the
+				// redundant: the name form makes it equivalent to the
 				// winner, so the superseded_field_values entry can be deleted.
 				if l.NormaliseFieldValue(field, challenger) == actual {
 					redundants = append(redundants, redundant{entry, field, challenger})
@@ -248,34 +248,34 @@ func (l *TBibTeXLibrary) CheckEntryFieldMappingWinners() {
  */
 
 // Check all oldies
-func (l *TBibTeXLibrary) CheckKeyOldiesConsistency() {
-	l.Progress(ProgressCheckingConsistencyOfKeyOldies)
+func (l *TBibTeXLibrary) CheckOldKeysConsistency() {
+	l.Progress(ProgressCheckingConsistencyOfOldKeys)
 
-	// key_oldies is reserved for former EP-format canonical keys (see AddKeyAlias);
+	// old_keys is reserved for former EP-format canonical keys (see AddOldKey);
 	// a non-EP-format oldie is a citation shorthand or demoted preferred alias that
-	// belongs in key_hints instead — migrate it there. Predates the AddKeyAlias
+	// belongs in key_aliases instead — migrate it there. Predates the AddOldKey
 	// guard that now prevents new violations; this repairs any left over from
 	// before that guard existed.
 	var misplaced []struct{ oldie, key string }
 	var ghosts []struct{ oldie, key string }
-	l.KeyOldies.ForEachPersistent(func(oldie, key string) {
+	l.OldKeys.ForEachPersistent(func(oldie, key string) {
 		if !IsValidKey(oldie) {
 			misplaced = append(misplaced, struct{ oldie, key string }{oldie, key})
 			return
 		}
 		if !l.EntryExists(key) {
-			l.Warning(WarningTargetOfOldieNotExists, key, oldie)
+			l.Warning(WarningTargetOfOldKeyNotExists, key, oldie)
 		}
 		if bibEntryExists(oldie) {
 			ghosts = append(ghosts, struct{ oldie, key string }{oldie, key})
 		}
 	})
 	for _, m := range misplaced {
-		l.AddKeyHint(m.oldie, m.key)
-		l.KeyOldies.Delete(m.oldie)
+		l.AddKeyAlias(m.oldie, m.key)
+		l.OldKeys.Delete(m.oldie)
 	}
 	if len(misplaced) > 0 {
-		l.Progress("  Migrated %d non-EP key oldie(s) to key_hints", len(misplaced))
+		l.Progress("  Migrated %d non-EP old key(s) to key_aliases", len(misplaced))
 	}
 	for _, g := range ghosts {
 		// Ghost: the oldie key still has rows in bib_entries even though it is
@@ -287,60 +287,60 @@ func (l *TBibTeXLibrary) CheckKeyOldiesConsistency() {
 	}
 }
 
-// CheckKeyHintsConsistency moves misplaced canonical-key hints to key_oldies,
+// CheckKeyAliasesConsistency moves misplaced canonical-key aliases to old_keys,
 // and warns about hints whose target no longer exists in the library.
 // When both the hint and its target match the canonical key pattern (EP-...), the
-// row belongs in key_oldies (old alias → canonical), not key_hints (shorthand → canonical).
-// This can happen after restoring key hints from a backup that mixed the two tables.
-func (l *TBibTeXLibrary) CheckKeyHintsConsistency() {
+// row belongs in old_keys (old alias → canonical), not key_aliases (shorthand → canonical).
+// This can happen after restoring key aliases from a backup that mixed the two tables.
+func (l *TBibTeXLibrary) CheckKeyAliasesConsistency() {
 	var toMigrate []struct{ hint, key string }
-	l.HintToKey.ForEach(func(hint, key string) {
+	l.AliasToKey.ForEach(func(hint, key string) {
 		if IsValidKey(hint) {
 			toMigrate = append(toMigrate, struct{ hint, key string }{hint, key})
 		}
 	})
 	if len(toMigrate) > 0 {
 		for _, m := range toMigrate {
-			l.AddKeyAlias(m.hint, m.key)
-			l.HintToKey.Delete(m.hint)
+			l.AddOldKey(m.hint, m.key)
+			l.AliasToKey.Delete(m.hint)
 		}
-		l.Progress("  Migrated %d canonical-key hint(s) from key_hints to key_oldies", len(toMigrate))
+		l.Progress("  Migrated %d canonical-key alias(s) from key_aliases to old_keys", len(toMigrate))
 	}
 
 	// Remove hints whose target no longer exists (e.g. after a merge deleted the source
 	// entry before retargeting was in place). Warn once so the user knows what was cleaned.
 	var deadHints []string
-	l.HintToKey.ForEach(func(hint, key string) {
+	l.AliasToKey.ForEach(func(hint, key string) {
 		if !l.EntryExists(key) {
 			deadHints = append(deadHints, hint)
 		}
 	})
 	for _, hint := range deadHints {
-		l.HintToKey.Delete(hint)
+		l.AliasToKey.Delete(hint)
 	}
 	if len(deadHints) > 0 {
-		l.Progress("  Removed %d dead key hint(s) (target entry no longer exists)", len(deadHints))
+		l.Progress("  Removed %d dead key alias(s) (target entry no longer exists)", len(deadHints))
 	}
 }
 
-// CheckKeyOldieHintOverlap warns when the same alias string is registered in both
-// KeyOldies and HintToKey with different targets. AddKeyAlias/AddKeyHint each only
-// guard against ambiguity within their own table, so a key_oldies write (e.g.
-// demoting a superseded preferredalias) and an unrelated key_hints write for the
+// CheckOldKeyAliasOverlap warns when the same alias string is registered in both
+// OldKeys and AliasToKey with different targets. AddOldKey/AddKeyAlias each only
+// guard against ambiguity within their own table, so a old_keys write (e.g.
+// demoting a superseded preferredalias) and an unrelated key_aliases write for the
 // same string can each succeed independently — leaving the two tables in silent,
 // contradictory disagreement about what the string resolves to. Not auto-resolved:
 // there is no way to tell which target is actually correct.
-func (l *TBibTeXLibrary) CheckKeyOldieHintOverlap() {
+func (l *TBibTeXLibrary) CheckOldKeyAliasOverlap() {
 	var conflicts []struct{ alias, oldieTarget, hintTarget string }
-	l.KeyOldies.ForEachPersistent(func(oldie, oldieTarget string) {
-		if hintTarget := l.HintToKey.GetValue(oldie); hintTarget != "" {
+	l.OldKeys.ForEachPersistent(func(oldie, oldieTarget string) {
+		if hintTarget := l.AliasToKey.GetValue(oldie); hintTarget != "" {
 			if l.MapEntryKey(hintTarget) != l.MapEntryKey(oldieTarget) {
 				conflicts = append(conflicts, struct{ alias, oldieTarget, hintTarget string }{oldie, oldieTarget, hintTarget})
 			}
 		}
 	})
 	for _, c := range conflicts {
-		l.Warning("Key %q is both a key oldie (-> %s) and a key hint (-> %s) with different targets — needs manual resolution", c.alias, c.oldieTarget, c.hintTarget)
+		l.Warning("Key %q is both a old key (-> %s) and a key alias (-> %s) with different targets — needs manual resolution", c.alias, c.oldieTarget, c.hintTarget)
 	}
 }
 
@@ -643,7 +643,7 @@ func (l *TBibTeXLibrary) derivePreferredAlias(entry *TBibTeXEntry) string {
 		if !validPreferredKeyAlias.MatchString(candidate) {
 			return "", false
 		}
-		if target := l.HintToKey.GetValue(candidate); target != "" && l.MapEntryKey(target) != entry.Key {
+		if target := l.AliasToKey.GetValue(candidate); target != "" && l.MapEntryKey(target) != entry.Key {
 			return "", false
 		}
 		return candidate, true
@@ -696,11 +696,11 @@ func (l *TBibTeXLibrary) derivePreferredAlias(entry *TBibTeXEntry) string {
 }
 
 // setPreferredAlias sets alias as the preferred alias for entry, registering it
-// in HintToKey. Preferred aliases are shorthand names and belong in key_hints,
-// not key_oldies (which is for old EP canonical keys only).
+// in AliasToKey. Preferred aliases are shorthand names and belong in key_aliases,
+// not old_keys (which is for old EP canonical keys only).
 func (l *TBibTeXLibrary) setPreferredAlias(entry *TBibTeXEntry, alias string) {
 	l.setEntryField(entry, PreferredAliasField, alias)
-	l.AddKeyHint(alias, entry.Key)
+	l.AddKeyAlias(alias, entry.Key)
 }
 
 // CheckAndEnforcePreferredAlias validates and, when possible, corrects the preferred alias.
@@ -710,8 +710,8 @@ func (l *TBibTeXLibrary) CheckAndEnforcePreferredAlias(entry *TBibTeXEntry) {
 
 	if alias != "" {
 		// Cross-check: alias must be registered as a hint.
-		if !l.HintToKey.Contains(alias) {
-			l.AddKeyHint(alias, entry.Key)
+		if !l.AliasToKey.Contains(alias) {
+			l.AddKeyAlias(alias, entry.Key)
 		}
 
 		if validPreferredKeyAlias.MatchString(alias) {
@@ -1296,11 +1296,11 @@ func (l *TBibTeXLibrary) CheckCrossref(entry *TBibTeXEntry) {
 		crossrefety = crossrefetyRAW
 	}
 	// A crossref by alias (a harvested bib file names the parent by its preferred
-	// alias, "society2008aswec"): the alias is a key hint, not a key_oldie, so
+	// alias, "society2008aswec"): the alias is a key alias, not a old_key, so
 	// MapEntryKey left it as it was and the check reported the target missing
 	// (2026-11-22). Resolve it through the hints, and store the library key.
 	if crossrefety != "" && !l.EntryExists(crossrefety) {
-		if hinted := l.MapEntryKey(l.HintToKey.GetValue(crossrefety)); hinted != "" && l.EntryExists(hinted) {
+		if hinted := l.MapEntryKey(l.AliasToKey.GetValue(crossrefety)); hinted != "" && l.EntryExists(hinted) {
 			crossrefety = hinted
 		}
 	}
@@ -1522,7 +1522,7 @@ func (l *TBibTeXLibrary) CheckNeedToSplitBookishEntry(keyRAW string) string {
 				}
 				if resolvedCrossrefKey != crossrefKey {
 					// crossrefKey lost the title-duplicate merge. It is KeyIsTemporary, so
-					// MergeEntries deletes it outright without a key_oldie, and MapEntryKey
+					// MergeEntries deletes it outright without a old_key, and MapEntryKey
 					// cannot resolve it; MergeEntries notes the survivor in
 					// tempKeyMergedInto instead (before 30.36 it did not, and the child kept
 					// a crossref to a key that no longer existed: "Crossref target ... does
@@ -2057,14 +2057,14 @@ func (l *TBibTeXLibrary) CheckEntries() {
 	ticker.Done()
 }
 
-// RenormaliseNameFields reloads name_mappings from the DB (picking up any mappings
+// RenormaliseNameFields reloads name forms from the DB (picking up any mappings
 // added or changed since the library was opened) then sweeps all author and editor
 // values in bib_entries through the updated normaliser. Called after
-// -import_name_mappings / -add_name_mappings to apply new mappings immediately
+// -add_name_form to apply new mappings immediately
 // without requiring a separate bib.check run (§11.3 cascade).
 func (l *TBibTeXLibrary) RenormaliseNameFields() {
 	loadContributorsFromDb(l)
-	l.CheckNameMappingConsistency()
+	l.CheckNameFormConsistency()
 
 	total := countBibEntries()
 	ticker := l.NewProgressTicker("  Re-normalising author/editor fields", total)
@@ -2091,7 +2091,7 @@ func (l *TBibTeXLibrary) RenormaliseNameFields() {
 // offers to merge each duplicate set. Both entries are recorded in entry_warnings so
 // they appear in warnings; select results.
 // Ghost entries — bib_entries rows that have a dblp field but no entry_type row and
-// are not recorded as aliases in key_oldies — are cleaned up automatically here,
+// are not recorded as aliases in old_keys — are cleaned up automatically here,
 // but only when a live entry for the same DBLP key survives to hold its data.
 func (l *TBibTeXLibrary) CheckDuplicateDBLPKeys() {
 	forEachDuplicateDBLPKey(func(dblpKey string, keys []string) {
@@ -2104,7 +2104,7 @@ func (l *TBibTeXLibrary) CheckDuplicateDBLPKeys() {
 			}
 			if resolved == k && !l.EntryExists(k) {
 				// Ghost candidate: has a dblp row in bib_entries but no entry_type,
-				// and is not in key_oldies as an alias. Deletion is deferred until
+				// and is not in old_keys as an alias. Deletion is deferred until
 				// we know whether a live entry for this DBLP key survives.
 				ghosts = append(ghosts, k)
 				continue

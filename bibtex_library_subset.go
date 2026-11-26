@@ -939,7 +939,7 @@ func runSubsetUpSync(cfg TBibGetConfig, sourcePath, keysBasePath string, syncSta
 		}
 
 		// The canonical from state may have become an alias since the last sync
-		// (key added to key_oldies). Resolve to the current canonical so the entry
+		// (key added to old_keys). Resolve to the current canonical so the entry
 		// is not misclassified as new/deleted.
 		stateKey := canonical
 		if canonical != "" && !Library.EntryExists(canonical) {

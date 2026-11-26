@@ -458,7 +458,7 @@ func (l *TBibTeXLibrary) addContributor(name string) string {
 }
 
 // giveContributorNameForm records form as a name form of contributor id. Unlike
-// AddNameMapping, which works by name and for a name shared by several contributors
+// AddNameForm, which works by name and for a name shared by several contributors
 // creates a new one, it ties the form to this contributor. The caller makes sure no
 // other contributor has the form (nameFormIsFree).
 func (l *TBibTeXLibrary) giveContributorNameForm(id, form string) {

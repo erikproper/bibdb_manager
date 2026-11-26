@@ -103,10 +103,10 @@ func init() {
 			func(l *TBibTeXLibrary) { cascadeRenormaliseFields(l, "booktitle", "journal") }},
 
 		// Key tables (no cascade)
-		{"key_hints", KeyHintsFilePath,
-			ExportKeyHints, func() { importKeyHintsFromCSV(true) }, nil},
-		{"key_oldies", KeyOldiesFilePath,
-			ExportKeyOldies, func() { importKeyOldiesFromCSV(true) }, nil},
+		{"key_aliases", KeyAliasesFilePath,
+			ExportKeyAliases, func() { importKeyAliasesFromCSV(true) }, nil},
+		{"old_keys", OldKeysFilePath,
+			ExportOldKeys, func() { importOldKeysFromCSV(true) }, nil},
 		{"non_double_entries", KeyNonDoublesFilePath,
 			ExportKeyNonDoubles, func() { importKeyNonDoublesFromCSV(true) }, nil},
 

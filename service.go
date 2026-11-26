@@ -165,7 +165,7 @@ func handleServiceCommands() bool {
 // runs: one that only reads, the recovery commands (they may ask a yes/no
 // question, at the terminal), and some that never ask.
 func runsWithoutService() bool {
-	if cmdRestoreFromDump || cmdRestoreBackupName != "" || cmdRestoreKeyHints || cmdRestoreDblp || cmdPushDblp ||
+	if cmdRestoreFromDump || cmdRestoreBackupName != "" || cmdRestoreKeyAliases || cmdRestoreDblp || cmdPushDblp ||
 		cmdLoadDblpXml || cmdDeleteGarbage || cmdImport != "" || cmdImportBib ||
 		cmdNewKey || cmdPush || cmdLoadLibrary {
 		return true
@@ -729,9 +729,9 @@ func (s *TService) runJob(req serviceFrame, dec *json.Decoder, out *frameSender)
 		if !waited {
 			out.send(serviceFrame{T: "info", D: "Waiting for the service: " + s.ownWhat + "...\n"}) //nolint:errcheck
 		}
-		if !toldAsking && dialogue.Asking() {
+		if !toldAsking && actionsTab.Asking() {
 			toldAsking = true
-			out.send(serviceFrame{T: "info", D: "It waits for an answer in the web UI's Actions tab: " + s.web.URL() + "#dialogue\n"}) //nolint:errcheck
+			out.send(serviceFrame{T: "info", D: "It waits for an answer in the web UI's Actions tab: " + s.web.URL() + "#actions\n"}) //nolint:errcheck
 			if req.Interactive {
 				s.openActionsTab(out)
 			}
@@ -807,7 +807,7 @@ func (s *TService) runJob(req serviceFrame, dec *json.Decoder, out *frameSender)
 		if len(args) >= 2 && args[0] == "-base" {
 			args = args[2:]
 		}
-		if err := s.runDialogueJob(actionFromCommandLine[name], [][]string{args}, false, nil, req.Cwd); err != nil {
+		if err := s.runActionsJob(actionFromCommandLine[name], [][]string{args}, false, nil, req.Cwd); err != nil {
 			refuse(out, "%s\n", err)
 			return
 		}
@@ -827,7 +827,7 @@ func (s *TService) runJob(req serviceFrame, dec *json.Decoder, out *frameSender)
 	code := 1
 	defer func() {
 		job.finish(code)
-		dialogue.finishIf(job, code)
+		actionsTab.finishIf(job, code)
 	}()
 	if req.Interactive {
 		job.setReply(sio.answer)
@@ -929,7 +929,7 @@ func (s *TService) runChildJob(req serviceFrame, dec *json.Decoder, out *frameSe
 // page of the web UI is open (Erik, 2026-11-25): an open one shows it by its light.
 func (s *TService) openActionsTab(out *frameSender) {
 	if !s.web.connected() {
-		out.send(serviceFrame{T: "open", D: s.web.URL() + "#dialogue"}) //nolint:errcheck
+		out.send(serviceFrame{T: "open", D: s.web.URL() + "#actions"}) //nolint:errcheck
 	}
 }
 
@@ -946,8 +946,8 @@ func (s *TService) bringQuestionUp(job *TJob, out *frameSender) {
 		}
 		return
 	}
-	first := dialogue.show(job)
-	out.send(serviceFrame{T: "info", D: "A question waits for your answer in the web UI's Actions tab: " + s.web.URL() + "#dialogue\n"}) //nolint:errcheck
+	first := actionsTab.show(job)
+	out.send(serviceFrame{T: "info", D: "A question waits for your answer in the web UI's Actions tab: " + s.web.URL() + "#actions\n"}) //nolint:errcheck
 	if first {
 		s.openActionsTab(out)
 	}

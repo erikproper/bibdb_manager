@@ -518,7 +518,7 @@ func (x *TWebIndex) filter(query string) []int32 {
 	if !strings.Contains(query, " ") {
 		if ro, err := openReadOnly(); err == nil {
 			var key string
-			if ro.QueryRow(`SELECT key FROM key_oldies WHERE alias = ?`, query).Scan(&key) == nil {
+			if ro.QueryRow(`SELECT key FROM old_keys WHERE alias = ?`, query).Scan(&key) == nil {
 				if i, ok := x.pos[key]; ok {
 					oldie = i
 				}

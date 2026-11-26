@@ -23,7 +23,7 @@ func TestMovedOptions(t *testing.T) {
 			t.Errorf("-%s is no option", name)
 		}
 	}
-	for action, a := range dialogueActions {
+	for action, a := range webActions {
 		for _, arg := range a.Args {
 			if len(arg) > 1 && arg[0] == '-' && !defined[arg[1:]] {
 				t.Errorf("action %s: %s is no option", action, arg)

@@ -184,7 +184,7 @@ ul.notes { margin: 0; padding-left: 20px; } ul.notes li { margin: 4px 0; }
 .qsub { color: var(--muted); margin-top: 6px; font-size: 13px; }
 .qactions { display: flex; gap: 10px; margin-top: 14px; align-items: center; }
 .qactions input { flex: 1; font: 14px ui-monospace, Menlo, monospace; padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--card); color: var(--text); }
-.dialoguecard { flex: 1; min-height: 0; display: flex; flex-direction: column; margin: 0; }
+.actionscard { flex: 1; min-height: 0; display: flex; flex-direction: column; margin: 0; }
 .tabs button .waiting { display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: var(--warn); margin-left: 7px;
                         box-shadow: 0 0 0 2px rgba(255,255,255,.6); animation: ledpulse 1s ease-in-out infinite alternate; }
 .tabs button .waiting.idle { background: var(--ok); animation: none; } /* green: no question waiting */
@@ -228,7 +228,7 @@ table.compare td.kept { box-shadow: inset 2px 0 0 var(--ok); }
     <button data-tab="status">Status</button>
     <button data-tab="search">Search</button>
     <button data-tab="tables">Tables</button>
-    <button data-tab="dialogue">Actions<span class="waiting idle" title="No question waiting"></span></button>
+    <button data-tab="actions">Actions<span class="waiting idle" title="No question waiting"></span></button>
     <button data-tab="stats">Statistics</button>
     <button data-tab="log">Log<span class="led" id="led" title=""></span></button>
   </nav>
@@ -242,7 +242,7 @@ table.compare td.kept { box-shadow: inset 2px 0 0 var(--ok); }
   <section class="panel" id="panel-tables" hidden><div class="narrow">
     <p class="muted" style="font-size:13px;margin:0 0 12px">Each table can have a tab of its own: choose the ones to show in the tab bar.</p>
     <div id="tablelist"><p class="muted">Loading…</p></div></div></section>
-  <section class="panel" id="panel-dialogue" hidden><div class="narrow">
+  <section class="panel" id="panel-actions" hidden><div class="narrow">
     <div class="card">
       <div class="line" style="margin:0 0 8px">
         <span class="label" style="min-width:4.5em">Checks</span><span class="actbtns">
@@ -251,14 +251,14 @@ table.compare td.kept { box-shadow: inset 2px 0 0 var(--ok); }
         <button class="plain" data-action="align_countries" title="Country names in booktitles, as the Country names in titles table has them">Country names in titles</button></span>
       </div>
       <div class="line" style="margin:0 0 8px">
-        <span class="label" style="min-width:4.5em">Authors</span><span class="actbtns">
+        <span class="label" style="min-width:4.5em">Contributors</span><span class="actbtns">
         <button class="plain" data-action="enrich" title="Absorb DBLP names and ORCIDs, enrich from ORCID profiles, merge ORCID duplicates">Enrich contributors</button>
         <button class="plain" data-action="enrich_matched" title="As Enrich contributors, but without asking about names that differ from the ORCID profile">Enrich, matched ORCIDs only</button>
         <button class="plain" data-action="refresh_orcid" title="Fetch the ORCID profiles again, the oldest first (Stop when it is enough)">Refresh ORCID</button>
-        <button class="plain" data-action="merge_orcid" title="Merge authors that share an ORCID, or whose ORCIDs were merged by ORCID">Merge ORCID duplicates</button>
-        <button class="plain" data-action="disambiguate" title="Resolve names that several authors share, entry by entry">Disambiguate authors</button>
-        <button class="plain" data-action="triage" title="Triage the author/editor values that lost a challenge">Triage author mappings</button>
-        <button class="plain" data-action="triage_aliases" title="Name forms used in one entry only: generalise them, or keep them there">Triage author aliases</button></span>
+        <button class="plain" data-action="merge_orcid" title="Merge contributors that share an ORCID, or whose ORCIDs were merged by ORCID">Merge ORCID duplicates</button>
+        <button class="plain" data-action="disambiguate" title="Resolve names that several contributors share, entry by entry">Disambiguate contributors</button>
+        <button class="plain" data-action="triage" title="Triage the author/editor values that lost a challenge">Triage contributor mappings</button>
+        <button class="plain" data-action="triage_aliases" title="Name forms used in one entry only: generalise them, or keep them there">Triage contributor aliases</button></span>
       </div>
       <div class="line" style="margin:0 0 8px">
         <span class="label" style="min-width:4.5em">PDF</span><span class="actbtns">
@@ -353,8 +353,9 @@ function lost(e) {
 const onShow = {}, timers = {};
 let current = "";
 function showTab(name) {
+  if (name === "dialogue") name = "actions"; // its name before v30.167 (links, saved tabs)
   if (!$("panel-" + name)) name = "search";
-  if (current === "dialogue" && name !== "dialogue" && qOpen) { qOpen = false; qShown = ""; closePopup(); } // back when the tab is shown again
+  if (current === "actions" && name !== "actions" && qOpen) { qOpen = false; qShown = ""; closePopup(); } // back when the tab is shown again
   current = name;
   for (const b of document.querySelectorAll(".tabs button")) b.classList.toggle("active", b.dataset.tab === name);
   for (const p of document.querySelectorAll(".panel")) p.hidden = p.id !== "panel-" + name;
@@ -378,7 +379,7 @@ function arrangeTabs() {
   const tables = all.filter((b) => /^tbl-/.test(b.dataset.tab)); // follow the Tables tab, in the order chosen there
   const rank = (b) => /^sel-/.test(b.dataset.tab) ? 0 : 1; // the Select tabs first, then the edit tabs
   linked.sort((a, b) => rank(a) - rank(b));
-  const order = load("taborder", []);
+  const order = load("taborder", []).map((n) => n === "dialogue" ? "actions" : n); // its name before v30.167
   fixed.sort((a, b) => {
     const ia = order.indexOf(a.dataset.tab), ib = order.indexOf(b.dataset.tab);
     return (ia < 0 ? 999 + fixed.indexOf(a) : ia) - (ib < 0 ? 999 + fixed.indexOf(b) : ib);
@@ -484,7 +485,7 @@ async function pollState() {
   let st;
   try { st = await get("/api/state", "json"); } catch (e) { lost(e); $("led").className = "led"; $("led").style.background = "var(--muted)"; $("led").title = "no connection"; return; }
   $("led").style.background = "";
-  const tabBtn = document.querySelector('.tabs button[data-tab="dialogue"]');
+  const tabBtn = document.querySelector('.tabs button[data-tab="actions"]');
   // The Actions tab's light (amber): the current job waits for an answer, wherever
   // it was started; or the library could not load without one.
   const waitTitle = st.asking ? "A question waits for your answer here"
@@ -513,10 +514,10 @@ setInterval(() => { if (!stopped) pollState(); }, 2000);
 // browser connects again by itself after an interruption.
 if (window.EventSource) new EventSource(BASE + "/api/live");
 
-// ---- Dialogue: actions, warnings, and questions as pop-ups (the output goes to the Log tab) ----
+// ---- The Actions tab: actions, warnings, and questions as pop-ups (the output goes to the Log tab) ----
 let dlg = null, qOpen = false, qShown = ""; // qShown: the question the pop-up shows (its line and position)
-async function loadDialogue() {
-  try { dlg = await get("/api/dialogue", "json"); } catch (e) { lost(e); return; }
+async function loadActions() {
+  try { dlg = await get("/api/actions", "json"); } catch (e) { lost(e); return; }
   const d = dlg;
   $("dlgtitle").textContent = d.title || "No job yet";
   $("dlgstate").textContent = d.title ? (d.running ? (d.asking ? "Waits for your answer" : "Running since " + d.since) + " — its output is in the Log tab"
@@ -545,12 +546,17 @@ async function loadDialogue() {
   // The question pop-up: opened while the tab is shown; a new question re-uses it; when the
   // job goes on without asking, it waits (Confirm greyed); when the job ends, it says so.
   const key = qKey(d);
-  if (current === "dialogue") {
+  if (current === "actions") {
     if (d.asking && (!qOpen || key !== qShown) && (qOpen || !$("overlay").classList.contains("open"))) openQuestion();
     else if (qOpen && !d.asking && !d.running) qEnded(d);
     else if (qOpen && !d.asking && qShown) { qShown = ""; qWaiting(); } // answered (in another tab, too): waits for the job
   }
 }
+// linkEntries is text, escaped, with each entry key after "entry" a link that opens
+// the entry's edit tab (Erik, 2026-11-26). Only after "entry": a contributor's id
+// looks the same.
+const linkEntries = (t) => esc(t).replace(/(\b[Ee]ntry\s+)(EP-\d{4}(?:-\d\d){5})\b/g,
+  (_, pre, key) => pre + '<a href="#" data-edit="' + key + '" title="Edit this entry in an edit tab">' + key + "</a>");
 // warnHTML renders a warning: its first line, value lines ("- Current : …") as a small
 // table with their notes ("(source: dblp)") under them, other lines as text.
 function warnHTML(head, lines) {
@@ -559,9 +565,9 @@ function warnHTML(head, lines) {
     const m = l.match(/^\s*-\s*([^:]{1,24}?)\s*:\s*(.*)$/);
     if (m) rows += '<tr><td class="f"><b>' + esc(m[1]) + "</b></td><td>" + esc(m[2]) + "</td></tr>";
     else if (/^\s*\(.*\)\s*$/.test(l) && rows) rows += '<tr><td></td><td class="muted">' + esc(l.trim()) + "</td></tr>";
-    else rest += "<div>" + esc(l.trim()) + "</div>";
+    else rest += "<div>" + linkEntries(l.trim()) + "</div>";
   }
-  return '<div class="qwarn"><div>' + esc(head) + "</div>" + (rows ? '<table class="qvals">' + rows + "</table>" : "") + rest + "</div>";
+  return '<div class="qwarn"><div>' + linkEntries(head) + "</div>" + (rows ? '<table class="qvals">' + rows + "</table>" : "") + rest + "</div>";
 }
 // The question pop-up, made from the job's question message (d.q: kind, topic, warning,
 // text, options with their labels and candidate entries, entries, field, values); the
@@ -610,7 +616,7 @@ function openQuestion() {
   const label = (k) => { const o = (q.options || []).find((x) => x.key === k); return o && o.label ? o.label : k; };
   const entries = q.entries || [];
   const cur = valueOf(q, "current"), chal = valueOf(q, "challenger");
-  // A name pair: each name with its buttons, everywhere (a name mapping) or for this entry only.
+  // A name pair: each name with its buttons, everywhere (a name form) or for this entry only.
   if (q.topic === "name_pair") {
     showQuestion(d, warnBox((q.warning || "").split("\n")[0]) +
       '<div class="qtext">Which name?</div><div class="qopts">' +
@@ -618,7 +624,7 @@ function openQuestion() {
         '<button class="plain" data-qopt="Y" title="Keep it, and map the other name to it in every entry">Keep everywhere</button><button class="plain" data-qopt="y" title="Keep it in this entry only">Keep here</button></div>' +
       '<div class="qrow"><div><span class="qlabel">Challenger</span><div class="qbib" style="font-size:13.5px">' + esc(chal ? chal.value : "") + '</div></div><span style="flex:1"></span>' +
         '<button class="plain" data-qopt="N" title="Take it, and map the current name to it in every entry">Take everywhere</button><button class="plain" data-qopt="n" title="Take it in this entry only">Take here</button></div></div>' +
-      '<div class="muted" style="font-size:13px;margin:-2px 0 6px">Everywhere: remembered as a name mapping, for all entries. Here: this entry only.</div>' +
+      '<div class="muted" style="font-size:13px;margin:-2px 0 6px">Everywhere: remembered as a name form, for all entries. Here: this entry only.</div>' +
       '<div class="qactions"><button class="plain" id="qeditbtn" title="Type the canonical name: both names are mapped to it">Edit…</button>' +
       '<button class="plain" data-qopt="d" title="These are two different people: never ask again">Different people</button><span style="flex:1"></span>' + stopButton(q) + "</div>" +
       editHTML(cur ? cur.value : ""));
@@ -767,32 +773,32 @@ async function sendAnswer(choice, text) {
       body: JSON.stringify({ question: id, choice: choice || "", text: text || "" }) });
     if (!r.ok) { toast(await r.text()); qShown = ""; } // not taken: shown again when it is still open
   } catch (e) { lost(e); }
-  setTimeout(loadDialogue, 400);
+  setTimeout(loadActions, 400);
 }
 $("dlgopen").onclick = openQuestion;
 // DBLP Lookup: an entry found in the local DBLP cache is added to the library (with its parent).
 $("dblplookup").onclick = () => openLookup(null, null, (key) => startAction("add_dblp", [key]));
-$("dlgstop").onclick = async () => { try { if (dlg && dlg.job) await fetch(BASE + "/api/job/" + dlg.job + "/stop", { method: "POST" }); } catch (e) {} setTimeout(loadDialogue, 300); };
+$("dlgstop").onclick = async () => { try { if (dlg && dlg.job) await fetch(BASE + "/api/job/" + dlg.job + "/stop", { method: "POST" }); } catch (e) {} setTimeout(loadActions, 300); };
 // startAction starts an action (with what it is given) and shows the Actions tab.
 async function startAction(action, given) {
   try {
-    const r = await fetch(BASE + "/api/dialogue/start", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action, given: given || [] }) });
+    const r = await fetch(BASE + "/api/actions/start", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action, given: given || [] }) });
     if (!r.ok) { alert(await r.text()); return false; }
   } catch (e) { lost(e); return false; }
   closePopup();
-  showTab("dialogue");
-  setTimeout(loadDialogue, 300);
+  showTab("actions");
+  setTimeout(loadActions, 300);
   return true;
 }
 for (const b of document.querySelectorAll("[data-action]")) b.onclick = async () => {
   try {
-    const r = await fetch(BASE + "/api/dialogue/start", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: b.dataset.action }) });
+    const r = await fetch(BASE + "/api/actions/start", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: b.dataset.action }) });
     if (!r.ok) { alert(await r.text()); return; }
   } catch (e) { lost(e); }
-  setTimeout(loadDialogue, 300);
+  setTimeout(loadActions, 300);
 };
-onShow.dialogue = loadDialogue;
-every("dialogue", 1000, loadDialogue);
+onShow.actions = loadActions;
+every("actions", 1000, loadActions);
 
 // ---- status ----
 async function loadStatus() { try { $("status").innerHTML = await get("/frag/status"); } catch (e) { lost(e); } }
@@ -1300,7 +1306,7 @@ class TableView {
 // The Tables tab: every table (but the entries themselves), grouped; a table chosen there
 // gets a tab in the tab bar (the choice is kept in the preferences).
 let tableDefs = [];
-const shownTables = () => load("tables", ["field_mappings", "name_forms", "key_oldies", "key_hints"]);
+const shownTables = () => load("tables", ["field_mappings", "name_forms", "old_keys", "key_aliases"]);
 function addTableTab(name) {
   const def = tableDefs.find((t) => t.name === name);
   if (!def || $("panel-tbl-" + name)) return;
@@ -1338,6 +1344,9 @@ function renderTablesTab() {
 }
 async function setupTables() {
   try { tableDefs = await get("/api/tables", "json") || []; } catch (e) { lost(e); return; }
+  // The tables renamed in step 22.4d keep their tabs.
+  const renamed = { key_hints: "key_aliases", key_oldies: "old_keys" };
+  if (shownTables().some((n) => renamed[n])) save("tables", shownTables().map((n) => renamed[n] || n));
   for (const name of shownTables()) addTableTab(name);
   arrangeTabs();
   renderTablesTab();
@@ -1349,7 +1358,7 @@ function trayHTML() {
   const part = (kind, one, more) => mergeTray[kind].length ? '<span class="part"><b>' + mergeTray[kind].length + "</b> " +
     (mergeTray[kind].length === 1 ? one : more) + ' <button class="plain" data-tray="compare" data-kind="' + kind + '">Compare</button>' +
     '<button class="plain" data-tray="clear" data-kind="' + kind + '">Clear</button></span>' : "";
-  return '<span class="muted">To merge:</span>' + part("entries", "entry", "entries") + part("authors", "author", "authors");
+  return '<span class="muted">To merge:</span>' + part("entries", "entry", "entries") + part("authors", "contributor", "contributors");
 }
 function showTray() {
   let t = $("tray");
@@ -1363,7 +1372,7 @@ function showTray() {
 function markForMerge(kind, key) {
   const list = mergeTray[kind];
   if (list.includes(key)) { mergeTray[kind] = list.filter((k) => k !== key); toast("Taken out of the merge tray: " + key); }
-  else { list.push(key); toast((kind === "entries" ? "Entry " : "Author ") + key + " marked for merge (" + list.length + ")"); }
+  else { list.push(key); toast((kind === "entries" ? "Entry " : "Contributor ") + key + " marked for merge (" + list.length + ")"); }
   save("mergetray", mergeTray); showTray();
   for (const v of Object.values(views)) if (v instanceof MergeView && v.kind === kind) v.load();
 }
@@ -1406,7 +1415,7 @@ class MergeView {
         esc(ch.edited) + "</textarea></label>" : "") + "</td>" : "";
       return '<tr class="' + (diff ? "diff" : "") + '"><td class="f">' + esc(f) + "</td>" + editCell + items.map(cell).join("") + "</tr>";
     }).join("");
-    this.panel.innerHTML = '<div class="editbar"><b>Merge ' + this.kind + '</b><span class="muted">' + items.length + " marked" +
+    this.panel.innerHTML = '<div class="editbar"><b>Merge ' + (this.kind === "authors" ? "contributors" : this.kind) + '</b><span class="muted">' + items.length + " marked" +
       (differing.length ? "; choose a value where they differ (" + differing.length + ")" : "") + "</span>" +
       '<button class="action" id="mgo">Merge into the kept one</button><button class="plain" id="mclose2">Close</button></div>' +
       '<div class="card" style="overflow:auto"><table class="compare">' + head + rows + "</table></div>" +
@@ -1442,7 +1451,7 @@ class MergeView {
     } catch (e) { lost(e); return; }
     mergeTray[this.kind] = []; save("mergetray", mergeTray); showTray();
     this.close();
-    showTab("dialogue");
+    showTab("actions");
   }
   close() {
     const name = "merge-" + this.kind;
@@ -1595,9 +1604,9 @@ class AuthorEditView {
     const q = (c) => this.panel.querySelector("." + c);
     this.origName = q("edstate").dataset.name;
     const tab = document.querySelector('.tabs button[data-tab="' + CSS.escape("author-" + this.id) + '"]');
-    if (tab) tab.innerHTML = "Author: " + esc(this.origName) + '<span class="tabx" title="Close this tab">×</span>';
+    if (tab) tab.innerHTML = "Contributor: " + esc(this.origName) + '<span class="tabx" title="Close this tab">×</span>';
     q("edsave").onclick = () => this.save();
-    // The name forms are saved at once, each change as a job (the Name mappings table).
+    // The name forms are saved at once, each change as a job (the Name forms table).
     const formChange = async (edit) => {
       try {
         const r = await fetch(BASE + "/api/table/name_forms", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(edit) });
@@ -1617,7 +1626,7 @@ class AuthorEditView {
     q("edcorrect").onclick = () => {
       const good = q("edgood").value.trim();
       if (!good) { q("edgood").focus(); return; }
-      if (this.dirty() && !confirm("Your unsaved changes to this author are lost. Go on?")) return;
+      if (this.dirty() && !confirm("Your unsaved changes to this contributor are lost. Go on?")) return;
       startAction("correct_name", [q("edbad").value, good]).then((ok) => { if (ok) this.load(); });
     };
     q("edrevert").onclick = () => { if (!this.dirty() || confirm("Undo your changes?")) this.load(); };
@@ -1661,7 +1670,7 @@ function openEditAuthor(id) {
     const b = document.createElement("button");
     b.dataset.tab = name;
     b.className = "edittab";
-    b.innerHTML = "Author: " + esc(id) + '<span class="tabx" title="Close this tab">×</span>';
+    b.innerHTML = "Contributor: " + esc(id) + '<span class="tabx" title="Close this tab">×</span>';
     $("tabs").appendChild(b); arrangeTabs();
     const panel = document.createElement("section");
     panel.className = "panel";
@@ -1939,7 +1948,7 @@ else showTab(location.hash.slice(1) || "search");
   <div>}</div>
 </div>
 {{if or .Authors .Editors}}<details class="card" style="font-size:14px"><summary class="muted" style="cursor:pointer">One of the authors or editors is someone else</summary>
-  <p class="muted" style="font-size:13px">Gives that position an author of its own, with the same name, recorded as a different person. For two people with the same name that neither an ORCID nor DBLP tells apart.</p>
+  <p class="muted" style="font-size:13px">Gives that position a contributor of its own, with the same name, recorded as a different person. For two people with the same name that neither an ORCID nor DBLP tells apart.</p>
   <table class="list">{{$key := .Key}}{{range .Authors}}<tr><td>{{tex .Name}}</td><td class="muted">author {{.Position}}</td><td class="key">{{.ID}}</td><td style="text-align:right"><button class="plain" data-start="split_position" data-given="{{given $key "author" .Position}}" data-confirm="Make this position ({{.Name}}) a different person?">Someone else</button></td></tr>{{end}}
   {{range .Editors}}<tr><td>{{tex .Name}}</td><td class="muted">editor {{.Position}}</td><td class="key">{{.ID}}</td><td style="text-align:right"><button class="plain" data-start="split_position" data-given="{{given $key "editor" .Position}}" data-confirm="Make this position ({{.Name}}) a different person?">Someone else</button></td></tr>{{end}}</table></details>{{end}}
 {{end}}
@@ -1969,14 +1978,14 @@ else showTab(location.hash.slice(1) || "search");
 {{end}}
 
 {{define "editauthor"}}
-<div class="editbar"><b>Editing author</b> <span class="key">{{.ID}}</span><span class="muted">({{.Entries}} entries)</span>
+<div class="editbar"><b>Editing contributor</b> <span class="key">{{.ID}}</span><span class="muted">({{.Entries}} entries)</span>
   <button class="action edsave">Save</button><button class="plain edrevert">Revert</button><button class="plain edclose">Close</button>
   <span class="edmsg"></span></div>
 <div class="edstate" hidden data-name="{{.Name}}"></div>
 <div class="card">
   <table class="edit">
     <tr><td class="field">name</td><td><textarea class="edname" rows="1">{{.Name}}</textarea>
-      <div class="out">Changing it keeps the current name as another name form (an alias). A name that is another author's is refused: merge them instead (Mark for merge).</div></td></tr>
+      <div class="out">Changing it keeps the current name as another name form (an alias). A name that is another contributor's is refused: merge them instead (Mark for merge).</div></td></tr>
     <tr><td class="field">misspelt</td><td><div class="line" style="margin:0"><select class="edbad"><option value="{{.Name}}">{{.Name}}</option>{{range .Forms}}<option value="{{.}}">{{.}}</option>{{end}}</select>
       <input class="edgood" placeholder="the correct spelling" style="flex:1;font:13px ui-monospace, Menlo, monospace;padding:5px 8px;border:1px solid var(--border);border-radius:6px;background:var(--card);color:var(--text)"><button class="plain edcorrect">Correct everywhere</button></div>
       <div class="out">Replaces a wrong spelling in every entry; unlike a changed name, it is not kept as a name form. Asks first, in the Actions tab.</div></td></tr>
@@ -1985,13 +1994,13 @@ else showTab(location.hash.slice(1) || "search");
     <tr><td class="field">DBLP</td><td>{{if .DBLP}}<a href="https://dblp.org/pid/{{.DBLP}}.html" target="_blank" rel="noopener">{{.DBLP}}</a>{{else}}<span class="muted">none</span>{{end}}</td></tr>
     <tr><td class="field">name forms</td><td><div class="edforms" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px">{{range .Forms}}<span class="groupchip" data-form="{{.}}">{{tex .}}<button title="Remove this name form">×</button></span>{{else}}<span class="muted">none</span>{{end}}</div>
       <div class="line" style="margin:0"><input class="edformnew" placeholder="add a name form, e.g. Dietz, J. L. G." style="flex:1;font:13px ui-monospace, Menlo, monospace;padding:5px 8px;border:1px solid var(--border);border-radius:6px;background:var(--card);color:var(--text)"><button class="plain edformadd">Add</button></div>
-      <div class="out">A form found in an entry is taken as this author. Saved at once (not with Save).</div></td></tr>
+      <div class="out">A form found in an entry is taken as this contributor. Saved at once (not with Save).</div></td></tr>
   </table>
 </div>
 {{end}}
 
 {{define "author"}}
-<div class="line"><button class="plain" data-editauthor="{{.ID}}" title="Edit this author in an edit tab">Edit</button>
+<div class="line"><button class="plain" data-editauthor="{{.ID}}" title="Edit this contributor in an edit tab">Edit</button>
   <button class="plain" data-mark="authors" data-key="{{.ID}}" title="Collect them for a merge (the tray at the bottom)">Mark for merge</button></div>
 <div class="card">
   <h2>{{tex .Name}} <span class="muted key">{{.ID}}</span></h2>

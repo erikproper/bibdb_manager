@@ -86,7 +86,7 @@ func resetLibraryRunState() {
 	l.TInteraction = Reporting
 	l.TBibTeXStream = TBibTeXStream{}
 	l.TBibTeXStream.Initialise(Reporting, l)
-	l.newKeyHints = TStringMap{}
+	l.newKeyAliases = TStringMap{}
 	l.illegalFields = TStringSetNew()
 	l.foundDoubles = false
 	l.NoDBUpdating = false
@@ -231,7 +231,7 @@ func (s *TSocketIO) toWebLog(m string) {
 	if _, own := s.out.(logSink); own {
 		return
 	}
-	if _, dlg := s.out.(dialogueSink); dlg {
+	if _, dlg := s.out.(actionsSink); dlg {
 		return // the Actions tab's job: it writes to the service log itself
 	}
 	if t, tee := s.out.(teeSink); tee {
@@ -512,7 +512,7 @@ func (s *TService) loadAtStart() {
 	fmt.Fprintf(os.Stderr, "%s  loading the library\n", time.Now().Format(time.DateTime))
 	// As the Actions tab's job: a question (e.g. whether to keep the changes of a
 	// run that did not finish) is answered there.
-	if s.runDialogueJob("Loading the library", [][]string{{"-load_library"}}, true, nil) != nil {
+	if s.runActionsJob("Loading the library", [][]string{{"-load_library"}}, true, nil) != nil {
 		return // busy or stopping
 	}
 	if serviceLibraryLevel == libraryNotLoaded {

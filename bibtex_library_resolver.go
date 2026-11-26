@@ -263,7 +263,7 @@ func (l *TBibTeXLibrary) ResolveFieldValue(key, challengeKey, field, challengeRa
 		return challengeRaw
 	}
 
-	// If the challenging preferred alias already resolves to this entry via key_oldies,
+	// If the challenging preferred alias already resolves to this entry via old_keys,
 	// the resolution was already recorded in a prior run — silently keep the current value.
 	if field == PreferredAliasField && l.MapEntryKey(challenge) == l.MapEntryKey(key) {
 		return current
@@ -314,7 +314,7 @@ func (l *TBibTeXLibrary) ResolveFieldValue(key, challengeKey, field, challengeRa
 
 	options := TStringSetNew()
 	// Editing the value (e) is offered for every challenge (Erik, 2026-11-24): the
-	// "e" case below works for any field (with name mappings for a single author).
+	// "e" case below works for any field (with name forms for a single author).
 	if field == "author" || field == "editor" {
 		if canBreakDown {
 			options.Add("y", "n", "b", "e")
@@ -390,27 +390,27 @@ func (l *TBibTeXLibrary) ResolveFieldValue(key, challengeKey, field, challengeRa
 	switch answer {
 	case "y":
 		if singleAuthor {
-			l.AddNameMapping(currentAuthorNames[0], challengeAuthorNames[0])
+			l.AddNameForm(currentAuthorNames[0], challengeAuthorNames[0])
 		}
 		// Record challenge→current in superseded_field_values. For PreferredAliasField, do NOT
-		// call AddKeyAlias(challenge, key): challenge may already be an alias of another entry
-		// and adding it here would produce a spurious "Ambiguous key oldie" warning.
+		// call AddOldKey(challenge, key): challenge may already be an alias of another entry
+		// and adding it here would produce a spurious "Ambiguous old key" warning.
 		l.UpdateEntryFieldAlias(key, field, challenge, current)
 		l.setLineage(key, field, current, challengeSource, true)
 		return current
 	case "n":
 		if singleAuthor {
-			l.AddNameMapping(challengeAuthorNames[0], currentAuthorNames[0])
+			l.AddNameForm(challengeAuthorNames[0], currentAuthorNames[0])
 		}
 		l.UpdateEntryFieldAlias(key, field, current, challenge)
 		if field == PreferredAliasField {
-			// Demote the old alias to a key hint — key_oldies is reserved for former
+			// Demote the old alias to a key alias — old_keys is reserved for former
 			// EP-format canonical keys; a preferred alias is a human-readable citation
-			// string, exactly what key_hints is for. Skip silently (rather than via
-			// AddKeyHint's own ambiguity warning) when already claimed by a different
+			// string, exactly what key_aliases is for. Skip silently (rather than via
+			// AddKeyAlias's own ambiguity warning) when already claimed by a different
 			// entry.
-			if ex := l.HintToKey.GetValue(current); ex == "" || l.MapEntryKey(ex) == l.MapEntryKey(key) {
-				l.AddKeyHint(current, key)
+			if ex := l.AliasToKey.GetValue(current); ex == "" || l.MapEntryKey(ex) == l.MapEntryKey(key) {
+				l.AddKeyAlias(current, key)
 			}
 		}
 		l.setLineage(key, field, challenge, challengeSource, false)
@@ -422,8 +422,8 @@ func (l *TBibTeXLibrary) ResolveFieldValue(key, challengeKey, field, challengeRa
 			edited = current
 		}
 		if singleAuthor {
-			l.AddNameMapping(edited, currentAuthorNames[0])
-			l.AddNameMapping(edited, challengeAuthorNames[0])
+			l.AddNameForm(edited, currentAuthorNames[0])
+			l.AddNameForm(edited, challengeAuthorNames[0])
 		}
 		l.UpdateEntryFieldAlias(key, field, challenge, edited)
 		l.UpdateEntryFieldAlias(key, field, current, edited)
@@ -461,8 +461,8 @@ func (l *TBibTeXLibrary) ResolveFieldValue(key, challengeKey, field, challengeRa
 		l.UpdateGenericFieldAlias(field, current, challenge)
 		if field == PreferredAliasField {
 			// See the matching comment in case "n" above.
-			if ex := l.HintToKey.GetValue(current); ex == "" || l.MapEntryKey(ex) == l.MapEntryKey(key) {
-				l.AddKeyHint(current, key)
+			if ex := l.AliasToKey.GetValue(current); ex == "" || l.MapEntryKey(ex) == l.MapEntryKey(key) {
+				l.AddKeyAlias(current, key)
 			}
 		}
 		l.setLineage(key, field, challenge, challengeSource, false)
@@ -510,7 +510,7 @@ func (l *TBibTeXLibrary) autoResolveByORCIDSide(key, field, currentName, challen
 	if challengerORCID != "" {
 		winner, loser, orcid = challengerName, currentName, challengerORCID
 	}
-	l.AddNameMapping(winner, loser)
+	l.AddNameForm(winner, loser)
 	l.orcidSideAutoResolves = append(l.orcidSideAutoResolves,
 		fmt.Sprintf("%s %s: %s [%s] over %s", key, field, winner, orcid, loser))
 	return winner, true
@@ -623,10 +623,10 @@ func isNameGeneration(word string) bool {
 // Returns:
 //   resultName — canonical name to use at this position (currentName when quit or skipped)
 //   quit       — user pressed q; caller should abort its enclosing loop
-//   mapped     — a name mapping was recorded (triage may retire the superseded_field_values row;
+//   mapped     — a name form was recorded (triage may retire the superseded_field_values row;
 //                breakdown uses the new resultName)
 //
-// Y/N create a global name mapping; y/n are entry-specific (no mapping).
+// Y/N create a global name form; y/n are entry-specific (no mapping).
 // The "d" (different people) case records (currentName, challengerName) in non_double_contributor_names,
 // and also in non_double_contributors when contributor IDs are available for both names.
 // It returns (currentName, false, false): no mapping, no quit, keep the current name.
@@ -638,7 +638,7 @@ func (l *TBibTeXLibrary) resolveNamePair(key, field string, namePos, nameTotal, 
 	if currentORCID != "" && challengerORCID != "" {
 		if currentORCID == challengerORCID {
 			l.orcidAutoResolveSameCount++
-			l.AddNameMapping(currentName, challengerName)
+			l.AddNameForm(currentName, challengerName)
 			return currentName, false, true
 		}
 		l.orcidAutoResolveDiffCount++
@@ -650,7 +650,7 @@ func (l *TBibTeXLibrary) resolveNamePair(key, field string, namePos, nameTotal, 
 	if inDblpUpdate {
 		l.dblpNameFormAutoAccepts = append(l.dblpNameFormAutoAccepts,
 			fmt.Sprintf("Auto-accepted DBLP name form %q for %s (mapping from %q)", challengerName, key, currentName))
-		l.AddNameMapping(challengerName, currentName)
+		l.AddNameForm(challengerName, currentName)
 		return challengerName, false, true
 	}
 
@@ -678,14 +678,14 @@ func (l *TBibTeXLibrary) resolveNamePair(key, field string, namePos, nameTotal, 
 	switch answer {
 	case "Y":
 		// Global: map challenger → current.
-		l.AddNameMapping(currentName, challengerName)
+		l.AddNameForm(currentName, challengerName)
 		return currentName, false, true
 	case "y":
 		// Entry-only: keep current name for this entry, no mapping recorded.
 		return currentName, false, false
 	case "N":
 		// Global: map current → challenger.
-		l.AddNameMapping(challengerName, currentName)
+		l.AddNameForm(challengerName, currentName)
 		return challengerName, false, true
 	case "n":
 		// Entry-only: use challenger name for this entry, no mapping recorded.
@@ -693,8 +693,8 @@ func (l *TBibTeXLibrary) resolveNamePair(key, field string, namePos, nameTotal, 
 	case "e":
 		canonical, err := l.AskForInput("Enter canonical name")
 		if err == nil && canonical != "" {
-			l.AddNameMapping(canonical, currentName)
-			l.AddNameMapping(canonical, challengerName)
+			l.AddNameForm(canonical, currentName)
+			l.AddNameForm(canonical, challengerName)
 			return canonical, false, true
 		}
 		return currentName, false, false

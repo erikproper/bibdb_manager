@@ -155,12 +155,12 @@ func (l *TBibTeXLibrary) ReadEntryFieldMappingsFile() {
 	loadEntryFieldMappingsFromDb(l)
 }
 
-func (l *TBibTeXLibrary) ReadKeyOldiesFile() {
-	l.KeyOldies.Load()
+func (l *TBibTeXLibrary) ReadOldKeysFile() {
+	l.OldKeys.Load()
 }
 
-func (l *TBibTeXLibrary) ReadKeyHintsFile() {
-	l.HintToKey.Load()
+func (l *TBibTeXLibrary) ReadKeyAliasesFile() {
+	l.AliasToKey.Load()
 }
 
 func (l *TBibTeXLibrary) ReadKeyNonDoublesFile() {
@@ -199,7 +199,7 @@ func (l *TBibTeXLibrary) ReadAddressMappings() {
 	loadBooktitleCountryNamesFromDb(l)
 }
 
-func (l *TBibTeXLibrary) ReadNameMappingsFile() {
+func (l *TBibTeXLibrary) ReadNameFormsFile() {
 	maybeMergeSpuriousContributors()
 	loadContributorsFromDb(l)
 	loadContributorIDOldiesFromDB(l)

@@ -120,3 +120,42 @@ func requireVersion(v string) {
 		SetConfig(minVersionConfig, v)
 	}
 }
+
+// renamedTablesVersion is the first version with the tables renamed in step 22.4d
+// (key_hints → key_aliases, its column hint → alias; key_oldies → old_keys): an older
+// program would make the old tables anew, empty, and go on without them.
+const renamedTablesVersion = "30.164"
+
+// renameTables gives the tables renamed in step 22.4d their new names, before
+// anything makes them anew; it tells whether it renamed one (requireRenamedTables
+// then raises the database's version, once the config table is there).
+func renameTables() bool {
+	exists := func(name string) bool {
+		var n int
+		db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?`, name).Scan(&n) //nolint:errcheck
+		return n > 0
+	}
+	renamed := false
+	for _, r := range []struct{ old, now, oldColumn, newColumn string }{
+		{"key_hints", "key_aliases", "hint", "alias"},
+		{"key_oldies", "old_keys", "", ""},
+	} {
+		if !exists(r.old) || exists(r.now) {
+			continue
+		}
+		steps := []string{`ALTER TABLE ` + r.old + ` RENAME TO ` + r.now}
+		if r.oldColumn != "" {
+			steps = append(steps, `ALTER TABLE `+r.now+` RENAME COLUMN `+r.oldColumn+` TO `+r.newColumn)
+		}
+		for _, step := range steps {
+			if _, err := db.Exec(step); err != nil {
+				messagef("Could not rename table %s to %s: %s\n", r.old, r.now, err)
+				endRun(1)
+			}
+		}
+		db.Exec(`UPDATE table_modification_times SET table_name = ? WHERE table_name = ?`, r.now, r.old) //nolint:errcheck
+		messagef("  Table %s is now %s\n", r.old, r.now)
+		renamed = true
+	}
+	return renamed
+}
