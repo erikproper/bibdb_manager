@@ -517,7 +517,7 @@ func (s *TService) loadAtStart() {
 	}
 	if serviceLibraryLevel == libraryNotLoaded {
 		libraryNeedsAnswer.Store(true)
-		fmt.Fprintf(os.Stderr, "%s  library not loaded (see the Actions tab); run bib.check, or Check in the web UI\n", time.Now().Format(time.DateTime))
+		fmt.Fprintf(os.Stderr, "%s  library not loaded (see the Actions tab); run bib.manager, or Check in the web UI\n", time.Now().Format(time.DateTime))
 		return
 	}
 	libraryNeedsAnswer.Store(false)

@@ -149,7 +149,7 @@ func (w *TWebUI) start() {
 <body style="font:16px -apple-system,sans-serif;margin:40px;max-width:640px">
 <h1 style="font-weight:400">%s</h1>
 <p>This address needs the key the service made when it started. Open the web UI from the
-command line with <code>bib.check -ui</code>; <code>bib.check -status</code> shows the full address.</p>`,
+command line with <code>bib.manager -ui</code>; <code>bib.manager -status</code> shows the full address.</p>`,
 			template.HTMLEscapeString(bibTeXBaseName), template.HTMLEscapeString(bibTeXBaseName))
 	})
 	server := &http.Server{

@@ -297,8 +297,15 @@ func (l *TBibTeXLibrary) mergePDFFile(sourceKey, targetKey string) {
 	srcPath := l.FilesRoot + l.FilesFolder + sourceKey + ".pdf"
 	dstPath := l.FilesRoot + l.FilesFolder + targetKey + ".pdf"
 
+	if (l.PDFFiles[targetKey] || FileExists(dstPath)) && MD5ForFile(srcPath) == MD5ForFile(dstPath) {
+		// The same file (often why the two were merged): keep the target's, without asking
+		// (Erik, 2026-11-27).
+		l.moveToLibraryTrash(srcPath) //nolint:errcheck
+		delete(l.PDFFiles, sourceKey)
+		return
+	}
 	if l.PDFFiles[targetKey] || FileExists(dstPath) {
-		// Both entries have a PDF — ask which to keep.
+		// Both entries have a PDF, and they differ — ask which to keep.
 		options := TStringSetNew()
 		options.Add("t", "s", "o", "k")
 		warning := "Merge produced two PDFs:\n  target (%s): %s\n  source (%s): %s"
@@ -620,7 +627,7 @@ func (l *TBibTeXLibrary) CheckPDFHealth() {
 		}
 	}
 	before = allPDFs - total
-	lastPct := -5 // the first PDF gives the first line
+	lastPct := -1 // the first PDF gives the first line
 	md5Index := TStringSetMap{}
 	ticker := l.NewProgressTicker(fmt.Sprintf(ProgressCheckingPDFHealth, filesDir), total)
 
@@ -635,11 +642,12 @@ func (l *TBibTeXLibrary) CheckPDFHealth() {
 		if n == len(pdfFiles)-1 {
 			finished = true
 		}
-		// The progress in the log, every 5 % of all PDFs (Erik, 2026-11-27).
+		// The progress, every 1 % of all PDFs (Erik, 2026-11-27): a line in the log, and
+		// the Actions tab's Progress card.
 		if allPDFs > 0 {
-			if pct := (before + n) * 100 / allPDFs; pct/5 != lastPct/5 {
+			if pct := (before + n) * 100 / allPDFs; pct != lastPct {
 				lastPct = pct
-				messagef("Checking PDFs: %d%% (%d of %d)\n", pct, before+n, allPDFs)
+				emit(TMessage{Kind: "progress", Text: fmt.Sprintf("Checking PDFs: %d%% (%d of %d)", pct, before+n, allPDFs)})
 			}
 		}
 		key := strings.TrimSuffix(fileName, ".pdf")
@@ -727,7 +735,9 @@ func (l *TBibTeXLibrary) CheckPDFHealth() {
 		for _, k := range remaining.ElementsSorted() {
 			sharing = append(sharing, l.questionEntryOf("", k))
 		}
-		switch l.WarningQuestionAbout(TQuestion{Entries: sharing}, QuestionDoublePdfWaive, validAnswers, WarningDuplicateFileContent, remaining.String()) {
+		// The PDF icon opens the file (the same content for all of them; Erik, 2026-11-27).
+		shared := l.FilesRoot + l.FilesFolder + remaining.ElementsSorted()[0] + ".pdf"
+		switch l.WarningQuestionAbout(TQuestion{Entries: sharing, PDF: shared}, QuestionDoublePdfWaive, validAnswers, WarningDuplicateFileContent, remaining.String()) {
 		case "w":
 			for key := range remaining.Elements() {
 				l.SetMetadata(key, MetaPropWaivedDoublePdf, md5hash)

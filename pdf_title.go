@@ -359,3 +359,36 @@ func (l *TBibTeXLibrary) askPDFTitle(key, path, pdfT, thePDF, keep, other string
 	}
 	return false
 }
+
+// CheckNewPDFTitle checks the title of a PDF just added to key (downloaded with its
+// faded PDF icon or Download PDF, or dropped on it; Erik, 2026-11-27): a natural
+// moment to cross-check. A mismatch the first page does not settle is asked about:
+// keep it (and waive its metadata title), or move it to the Trash.
+func (l *TBibTeXLibrary) CheckNewPDFTitle(key string) bool {
+	path := l.FilesRoot + l.FilesFolder + key + ".pdf"
+	if !FileExists(path) {
+		messagef("%s has no PDF.\n", key)
+		return false
+	}
+	t := l.pdfTitleMismatch(key, path)
+	if t == "" {
+		return true
+	}
+	warning := fmt.Sprintf("The PDF just added to %s is titled %q; the entry is titled %q.", key, t, texToText(l.EntryFieldValueity(key, "title")))
+	if !isTTY {
+		l.Warning("Entry %s: %s", key, warning)
+		return true
+	}
+	switch answerOf(&TQuestion{Kind: "choice", Key: key, Text: "Is it the entry's PDF?", Warning: warning, PDF: path,
+		Options: []TQuestionOption{{Key: "w", Label: "yes: its metadata is wrong (waive)"}, {Key: "r", Label: "no: move it to the Trash"}, {Key: "q", Label: "stop"}}}) {
+	case "w":
+		l.SetMetadata(key, MetaPropPdfTitleWaived, t)
+	case "r":
+		if l.moveToLibraryTrash(path) {
+			delete(l.PDFFiles, key)
+			messagef("The PDF of %s is in the Trash.\n", key)
+			return false
+		}
+	}
+	return true
+}

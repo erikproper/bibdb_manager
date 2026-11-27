@@ -46,6 +46,7 @@ var movedOptions = map[string]string{
 	"fix_duplicates":             "Actions, Checks: Fix duplicates",
 	"fix_entries":                "an entry's pop-up, Check",
 	"get_eprint_pdfs":            "Actions, PDF: Get from arXiv",
+	"check_pdf_title":            "a PDF dropped on an entry (checked at once)",
 	"get_pdf":                    "an entry's faded PDF icon, or its pop-up: Download PDF",
 	"get_pdfs":                   "Actions, PDF: Get from URL",
 	"matched_orcid_data_only":    "Actions, Contributors: Enrich, matched ORCIDs only",

@@ -55,7 +55,7 @@ var (
 	Reporting TInteraction
 )
 
-const AppVersion = "30.187"
+const AppVersion = "30.193"
 
 // Run-state flags consumed by the write tail in main.
 var (
@@ -1907,6 +1907,16 @@ func contributorLabel(id string, current bool) string {
 func doAddFailedURLs() {
 	if openLibraryToUpdate() {
 		Library.AddFailedURLsToIgnore()
+	}
+}
+
+func doCheckPdfTitle(arg string) {
+	if openLibraryToUpdate() {
+		key := Library.MapEntryKey(arg)
+		if key == "" {
+			key = arg
+		}
+		Library.CheckNewPDFTitle(key)
 	}
 }
 
@@ -4023,6 +4033,7 @@ var (
 	cmdGetPdfs                  bool
 	cmdGetEprintPdfs            bool
 	cmdGetPdf                   bool
+	cmdCheckPdfTitle            bool
 	cmdAddFailedURLs            bool
 	cmdFindEntries              bool
 	cmdAuditMappings            bool
@@ -4154,6 +4165,7 @@ func main() {
 	flag.BoolVar(&cmdSync, "sync", false, "sync library to bib file(s) via exchange config; optional arg narrows to one file")
 	flag.BoolVar(&cmdPull, "pull", false, "with -sync: skip up-sync (phase 1) and re-import; only write bib output from DB")
 	flag.BoolVar(&cmdGetPdfs, "get_pdfs", false, "download missing PDFs into the files folder")
+	flag.BoolVar(&cmdCheckPdfTitle, "check_pdf_title", false, "check the title of an entry's PDF just added: -check_pdf_title <key>")
 	flag.BoolVar(&cmdGetPdf, "get_pdf", false, "download the PDF of one entry from its url or eprint: -get_pdf <key>")
 	flag.BoolVar(&cmdGetEprintPdfs, "get_eprint_pdfs", false, "download missing PDFs from an eprint's site: -get_eprint_pdfs <eprinttype>")
 	flag.BoolVar(&cmdAddFailedURLs, "add_failed_urls", false, "add the URLs of the last failed PDF downloads (urls_failed.csv) to urls_ignore, so -get_pdfs skips them")

@@ -1984,7 +1984,7 @@ func doSync(filter string) error {
 	}
 
 	// Note: ScanOrphanPDFs is intentionally not called here — it is only run
-	// during a full bib.check (doDefaultRun), not during sync.
+	// during a full bib.manager (doDefaultRun), not during sync.
 
 	// Phase 1: merge all bib-side changes into the DB before writing any output.
 	// Skipped entirely when -pull is active — DB is left untouched.

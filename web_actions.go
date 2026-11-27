@@ -245,6 +245,7 @@ var webActions = map[string]TWebAction{
 	"get_pdfs":        {"Get PDFs from URLs", []string{"-get_pdfs"}, nil},
 	"get_arxiv":       {"Get PDFs from arXiv", []string{"-get_eprint_pdfs", "arXiv"}, nil},
 	"get_pdf":         {"Download PDF", []string{"-get_pdf"}, []string{"an entry's key"}},
+	"check_pdf_title": {"Check the PDF's title", []string{"-check_pdf_title"}, []string{"an entry's key"}},
 	"add_failed":      {"Add failed URLs to Bad URLs", []string{"-add_failed_urls"}, nil},
 	"update_dblp":     {"Update DBLP", []string{"-update_dblp"}, nil},
 	"update_entries":  {"Update all DBLP entries", []string{"-update_all_dblp_entries"}, nil},

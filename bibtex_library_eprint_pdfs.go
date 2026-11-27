@@ -186,7 +186,7 @@ func (l *TBibTeXLibrary) GetEntryPDF(key string) bool {
 		return false
 	}
 	messagef("Downloaded the PDF of %s.\n", key)
-	return true
+	return l.CheckNewPDFTitle(key)
 }
 
 // loggedInAt are the eprinttypes whose site the user said to be logged in to, in

@@ -31,7 +31,7 @@ html, body { overflow: hidden; }
 html, body { height: 100%; }
 body { margin: 0; background: var(--bg); color: var(--text); display: flex; flex-direction: column;
        font: 15px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
-header { background: var(--primary); color: var(--primary-text); padding: 0 16px; flex: none;
+header { position: relative; z-index: 11; /* above a pop-up's overlay: the tabs stay at hand */ background: var(--primary); color: var(--primary-text); padding: 0 16px; flex: none;
          display: flex; align-items: last baseline; gap: 24px; min-height: 56px; } /* tabs at the bottom, the title on their baseline */
 header .logo { width: 32px; height: 32px; flex: none; align-self: center; margin-right: -12px; border-radius: 7px;
                box-shadow: 0 0 0 1.5px rgba(255,255,255,.7); }
@@ -348,6 +348,7 @@ function showTab(name) {
   if (name === "dialogue") name = "actions"; // its name before v30.167 (links, saved tabs)
   if (!$("panel-" + name)) name = "search";
   if (current === "actions" && name !== "actions" && qOpen) { qOpen = false; qShown = ""; closePopup(); } // back when the tab is shown again
+  else if (name !== current && $("overlay").classList.contains("open")) closePopup(); // a pop-up belongs to the tab it was opened on
   current = name;
   for (const b of document.querySelectorAll(".tabs button")) b.classList.toggle("active", b.dataset.tab === name);
   for (const p of document.querySelectorAll(".panel")) p.hidden = p.id !== "panel-" + name;
@@ -452,19 +453,26 @@ async function pdfChanged(key) {
 // downloadPDF downloads an entry's PDF from its url or eprint, as a job (step 25), staying
 // where the user is; the icon or pop-up follows when it is done.
 async function downloadPDF(key) {
+  await entryPDFJob("get_pdf", key, "Downloading the PDF of " + key + " …", "Downloaded the PDF of " + key + ".", "No PDF for " + key + ": see the Log tab.");
+}
+// entryPDFJob runs an entry's PDF job (download, title check) and follows it: a question it
+// asks (logged in? is it the entry's PDF?) opens in the Actions tab, after which the page
+// goes back to where the user was; the entry's icon and pop-up follow.
+async function entryPDFJob(action, key, startText, okText, failText) {
   try {
-    const r = await fetch(BASE + "/api/actions/start", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "get_pdf", given: [key] }) });
-    if (!r.ok) { alert(await r.text()); return; }
+    const r = await fetch(BASE + "/api/actions/start", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action, given: [key] }) });
+    if (!r.ok) { if (startText) alert(await r.text()); return; } // a check after a drop: silent when the service is busy
   } catch (e) { lost(e); return; }
-  toast("Downloading the PDF of " + key + " …");
-  let asked = false;
+  if (startText) toast(startText);
+  let back = "";
   for (let i = 0; i < 1800; i++) { // a browser download (JSTOR) waits for the user
     await new Promise((res) => setTimeout(res, 1000));
     let d; try { d = await get("/api/actions", "json"); } catch (e) { return; }
-    if (d.asking && !asked) { asked = true; closePopup(); showTab("actions"); loadActions(); } // its question (logged in? wait longer?)
+    if (d.asking && !back) { back = current; closePopup(); showTab("actions"); loadActions(); }
     if (!d.running) {
+      if (back && back !== "actions") { if (qOpen) { qOpen = false; closePopup(); } showTab(back); }
       await pdfChanged(key);
-      toast(d.code ? "No PDF for " + key + ": the download failed (see the Log tab)." : "Downloaded the PDF of " + key + ".");
+      if (okText || failText) toast(d.code ? failText : okText);
       return;
     }
   }
@@ -483,6 +491,7 @@ async function uploadPDF(key, file) {
       if (!r.ok) { alert("Not stored: " + await r.text()); return false; }
       const d = await r.json();
       toast(d.message, d.undo);
+      entryPDFJob("check_pdf_title", key, "", "", ""); // its title, cross-checked at once (Erik, 2026-11-27)
       return true;
     } catch (e) { lost(e); alert(String(e.message || e)); return false; }
   }
@@ -501,7 +510,7 @@ async function pollState() {
   // The Actions tab's light (amber): the current job waits for an answer, wherever
   // it was started; or the library could not load without one.
   const waitTitle = st.asking ? "A question waits for your answer here"
-    : (st.answer && !st.busy) ? "The library is not loaded: it needed an answer. Run Check here, or bib.check in a terminal." : "";
+    : (st.answer && !st.busy) ? "The library is not loaded: it needed an answer. Run Check here, or bib.manager in a terminal." : "";
   const dlgTitle = waitTitle || "No question waiting";
   tabBtn.innerHTML = "Actions" + '<span class="' + (waitTitle ? "waiting" : "waiting idle") + '" title="' + esc(dlgTitle) + '"></span>';
   tabBtn.title = dlgTitle;
@@ -1910,7 +1919,7 @@ document.addEventListener("click", async (e) => {
     const wait = setInterval(async () => {
       try { await fetch(BASE + "/frag/status", { cache: "no-store" }); }
       catch (err) { clearInterval(wait); stopped = true; lost(err);
-                    $("banner").textContent = "The service has stopped. Start it again with bib.check -start, then open the UI with bib.check -ui."; }
+                    $("banner").textContent = "The service has stopped. Start it again with bib.manager -start, then open the UI with bib.manager -ui."; }
     }, 1000);
   }
 });

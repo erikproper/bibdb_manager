@@ -313,7 +313,7 @@ func (l *TBibTeXLibrary) MaybeMergeDBLPEntry(DBLPKey, key string, allowURLFetch 
 	locallyWithdrawn := l.EntryFieldValueity(key, "withdrawn") != ""
 
 	// An ISSN next to an ISBN is too much information (see CheckISSNRedundance);
-	// drop it here so a DBLP update does not re-add what bib.check removes.
+	// drop it here so a DBLP update does not re-add what bib.manager removes.
 	if IsValidISBN(dblpEntry.Fields["isbn"]) || IsValidISBN(l.EntryFieldValueity(key, "isbn")) {
 		delete(dblpEntry.Fields, "issn")
 	}

@@ -2067,7 +2067,7 @@ func (l *TBibTeXLibrary) CheckEntries() {
 // added or changed since the library was opened) then sweeps all author and editor
 // values in bib_entries through the updated normaliser. Called after
 // -add_name_form to apply new mappings immediately
-// without requiring a separate bib.check run (§11.3 cascade).
+// without requiring a separate bib.manager run (§11.3 cascade).
 func (l *TBibTeXLibrary) RenormaliseNameFields() {
 	loadContributorsFromDb(l)
 	l.CheckNameFormConsistency()

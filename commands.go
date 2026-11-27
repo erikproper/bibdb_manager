@@ -75,6 +75,18 @@ func init() {
 			},
 		},
 		{
+			name:     "check_pdf_title",
+			kind:     commandWrite,
+			selected: func() bool { return cmdCheckPdfTitle },
+			run: func(args []string) {
+				if len(args) != 1 {
+					messageln("Usage: -check_pdf_title <key>")
+					endRun(1)
+				}
+				doCheckPdfTitle(args[0])
+			},
+		},
+		{
 			name:     "get_pdf",
 			kind:     commandWrite,
 			selected: func() bool { return cmdGetPdf },
