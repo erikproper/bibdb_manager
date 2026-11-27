@@ -59,6 +59,9 @@ type TProgressTicker struct {
 	rendered    bool
 	interaction *TInteraction
 	lastRender  time.Time
+	loggedPct   int       // the last percentage written to the log (logProgress)
+	started     time.Time // when the step began: only a long one is logged
+	NoLog       bool      // the caller logs its progress itself (the PDF check: of all PDFs)
 }
 
 // tickerRenderInterval throttles redraws for fast, tight loops (e.g. scanning
@@ -122,6 +125,8 @@ func (r *TInteraction) NewProgressTicker(label string, total int) *TProgressTick
 		total:       total,
 		totalWidth:  w,
 		interaction: r,
+		loggedPct:   -1,
+		started:     time.Now(),
 	}
 	activeTicker = t
 	return t
@@ -151,6 +156,26 @@ func (t *TProgressTicker) SetTotal(total int) {
 // Determined mode:   label:  N/Total (XX%)
 // Indeterminate:     label: N
 // Indeterminate/idle: label: ...
+// logProgress writes the progress to the log every 1 % of a counted step that has run
+// for 10 s or more (Erik,
+// 2026-11-27: a long job showed no progress in the log; the counter itself is live,
+// and no log line).
+func (t *TProgressTicker) logProgress() {
+	if t.NoLog || t.total < 100 || time.Since(t.started) < 10*time.Second {
+		return // a short step (the load's) adds no lines
+	}
+	pct := t.current * 100 / t.total
+	if pct == t.loggedPct || pct > 100 {
+		return
+	}
+	t.loggedPct = pct
+	if t.rendered {
+		clearCounter()
+		t.rendered = false
+	}
+	emit(TMessage{Kind: "progress", Text: fmt.Sprintf("%s: %d%% (%d of %d)", t.label, pct, t.current, t.total)})
+}
+
 func (t *TProgressTicker) render() {
 	if t == nil {
 		return
@@ -184,6 +209,7 @@ func (t *TProgressTicker) Step() bool {
 	}
 	t.current++
 	t.pollForQuit()
+	t.logProgress()
 	if t.dueToRender() {
 		t.render()
 	}
@@ -199,6 +225,7 @@ func (t *TProgressTicker) SetCount(n int) bool {
 	}
 	t.current = n
 	t.pollForQuit()
+	t.logProgress()
 	if t.dueToRender() {
 		t.render()
 	}

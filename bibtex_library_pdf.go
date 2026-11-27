@@ -630,6 +630,9 @@ func (l *TBibTeXLibrary) CheckPDFHealth() {
 	lastPct := -1 // the first PDF gives the first line
 	md5Index := TStringSetMap{}
 	ticker := l.NewProgressTicker(fmt.Sprintf(ProgressCheckingPDFHealth, filesDir), total)
+	if ticker != nil {
+		ticker.NoLog = true // logged below, as a percentage of all PDFs
+	}
 
 	for n, fileName := range pdfFiles {
 		if ticker.Step() || l.QuitWasRequested() {

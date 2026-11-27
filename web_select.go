@@ -22,6 +22,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -29,6 +30,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -71,6 +73,8 @@ type TSelectSession struct {
 	edits   int                      // changes ever (the "only selected" list is redone after one)
 	message string                   // the last save's or sync's outcome
 	opened  time.Time
+	gitOnce sync.Once
+	git     bool // the folder is in a git working tree (gitOnce)
 }
 
 var (
@@ -424,13 +428,18 @@ type TSelectInfo struct {
 	Unknown  int    `json:"unknown"`
 	Changes  int    `json:"changes"`
 	Message  string `json:"message"`
+	Git      bool   `json:"git,omitempty"` // the files are in a git repository: Git Push
 }
 
 func (s *TSelectSession) info() TSelectInfo {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.gitOnce.Do(func() {
+		out, err := exec.Command("git", "-C", s.File.Dir, "rev-parse", "--is-inside-work-tree").Output()
+		s.git = err == nil && strings.TrimSpace(string(out)) == "true"
+	})
 	info := TSelectInfo{ID: s.ID, Name: s.File.Name, Dir: tildePath(s.File.Dir), Unknown: len(s.unknown),
-		Changes: s.changes, Message: s.message}
+		Changes: s.changes, Message: s.message, Git: s.git}
 	for _, e := range s.entries {
 		if e.State == selectOn {
 			info.Selected++
@@ -522,6 +531,21 @@ func (w *TWebUI) handleSelect(rw http.ResponseWriter, r *http.Request) {
 			s.mu.Unlock()
 		}); err != nil {
 			http.Error(rw, err.Error(), http.StatusConflict)
+			return
+		}
+		reply(nil)
+	case "gitpush":
+		if err := s.save(); err != nil {
+			http.Error(rw, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		msg, err := s.gitPush()
+		s.mu.Lock()
+		s.message = msg
+		s.mu.Unlock()
+		fmt.Fprintf(os.Stderr, "%s  select: %s\n", time.Now().Format(time.DateTime), msg)
+		if err != nil {
+			http.Error(rw, msg, http.StatusConflict)
 			return
 		}
 		reply(nil)
@@ -649,6 +673,42 @@ func (s *TSelectSession) version() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.edits
+}
+
+// gitPush commits the project's .bib and .keys files, and only these two (Erik,
+// 2026-11-27), when they changed, and pushes the repository's branch.
+func (s *TSelectSession) gitPush() (string, error) {
+	dir, files := s.File.Dir, []string{s.File.Name + BibFileExtension, s.File.Name + KeysFileExtension}
+	git := func(args ...string) (string, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		out, err := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...).CombinedOutput()
+		return strings.TrimSpace(string(out)), err
+	}
+	var present []string
+	for _, f := range files {
+		if FileExists(filepath.Join(dir, f)) {
+			present = append(present, f)
+		}
+	}
+	if out, err := git(append([]string{"add", "--"}, present...)...); err != nil {
+		return "Git Push: git add failed: " + out, err
+	}
+	committed := false
+	if _, err := git(append([]string{"diff", "--cached", "--quiet", "--"}, present...)...); err != nil { // staged changes
+		if out, err := git(append([]string{"commit", "-m", "Update " + strings.Join(present, " and "), "--"}, present...)...); err != nil {
+			return "Git Push: git commit failed: " + out, err
+		}
+		committed = true
+	}
+	if out, err := git("push"); err != nil {
+		return "Git Push: git push failed: " + out, err
+	}
+	at := time.Now().Format("15:04")
+	if committed {
+		return fmt.Sprintf("Committed and pushed %s at %s.", strings.Join(present, " and "), at), nil
+	}
+	return fmt.Sprintf("Nothing new to commit in %s; pushed at %s.", strings.Join(present, " and "), at), nil
 }
 
 // syncOutcome says what a sync from a Select tab did: the .bib written (its

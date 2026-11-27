@@ -190,10 +190,10 @@ pre.log { flex: 1; min-height: 0; overflow: auto; margin: 0; white-space: pre-wr
 
 /* Pop-ups */
 #overlay { position: fixed; inset: 0; background: rgba(0,0,0,.35); display: none; z-index: 10;
-           align-items: flex-start; justify-content: center; padding: 40px 16px; }
+           align-items: flex-start; justify-content: center; padding: 24px 16px; } /* top: under the header (placeOverlay) */
 #overlay.open { display: flex; }
 .modal { background: var(--bg); border-radius: 12px; box-shadow: 0 8px 32px rgba(0,0,0,.35);
-         width: min(980px, 100%); max-height: calc(100vh - 80px); display: flex; flex-direction: column; }
+         width: min(980px, 100%); max-height: 100%; /* the overlay: under the header, less its padding */ display: flex; flex-direction: column; }
 .modal-bar { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--border); flex: none; }
 .modal-bar .mtitle { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .modal-bar button { background: transparent; border: 0; color: var(--text); font-size: 18px; cursor: pointer; padding: 2px 8px; border-radius: 6px; }
@@ -299,7 +299,7 @@ table.compare td.kept { box-shadow: inset 2px 0 0 var(--ok); }
 </template>
 <template id="searchtpl">
   <div class="selbar" hidden><b class="selname"></b><span class="selinfo muted"></span>
-    <button class="action selsave">Save</button><button class="action selsync">Sync</button><button class="plain selclose">Close</button>
+    <button class="action selsave">Save</button><button class="action selsync">Sync</button><button class="action selgit" hidden title="Commit the .bib and .keys files (only these two) and push them">Git Push</button><button class="plain selclose">Close</button>
     <span class="selmsg"></span></div>
   <div class="searchbar"><input type="search" class="q" placeholder="Filter: words from the key, alias, title, authors, editors, year, venue, DOI (empty: all entries)" autocomplete="off"></div>
   <div class="searchinfo"><span class="count muted"></span><button class="toggle selonly" hidden title="Show only the selected entries (green and amber)">Selection</button>
@@ -941,6 +941,7 @@ class SearchView {
       el.grid.addEventListener("click", (e) => { const t = e.target.closest(".tick"); if (t) { e.stopPropagation(); this.toggle(t); } });
       q("selsave").onclick = () => this.selAction("save");
       q("selsync").onclick = () => this.selAction("sync");
+      q("selgit").onclick = () => this.selAction("gitpush");
       q("selclose").onclick = () => this.closeSelect();
       this.setInfo(sel);
     }
@@ -1132,6 +1133,7 @@ class SearchView {
       (info.unknown ? ", " + info.unknown + " not in the library (kept)" : "") +
       (info.changes ? " — " + info.changes + " change" + (info.changes === 1 ? "" : "s") + " not saved" : "");
     el.selmsg.textContent = info.message || "";
+    const gb = this.panel.querySelector(".selgit"); if (gb) gb.hidden = !info.git;
   }
   async post(action, body) {
     const r = await fetch(BASE + "/api/select/" + this.sel.id + "/" + action, { method: "POST",
@@ -1753,8 +1755,13 @@ function popup(title, html, push) {
   $("mbody").scrollTop = 0;
   for (const a of $("mbody").querySelectorAll('a[href^="http"]')) { a.target = "_blank"; a.rel = "noopener"; }
   $("mback").style.visibility = stack.length > 1 ? "visible" : "hidden";
+  placeOverlay();
   $("overlay").classList.add("open");
 }
+// placeOverlay starts a pop-up's overlay under the header (its height varies: the tabs
+// wrap), so a pop-up sits below the tabs rather than under them (Erik, 2026-11-27).
+function placeOverlay() { $("overlay").style.top = document.querySelector("header").getBoundingClientRect().bottom + "px"; }
+window.addEventListener("resize", () => { if ($("overlay").classList.contains("open")) placeOverlay(); });
 async function show(item) {
   try {
     const html = await get(item.kind === "entry" ? "/frag/entry/" + encodeURIComponent(item.id) : "/frag/author/" + encodeURIComponent(item.id));
