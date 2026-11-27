@@ -701,14 +701,46 @@ func (s *TSelectSession) gitPush() (string, error) {
 		}
 		committed = true
 	}
+	files2 := strings.Join(present, " and ")
+	// Nothing new to push (the files unchanged, nothing waiting): no push at all.
+	if out, err := git("rev-list", "--count", "@{upstream}..HEAD"); err == nil && strings.TrimSpace(out) == "0" {
+		return fmt.Sprintf("%s unchanged: nothing to push.", files2), nil
+	}
+	// The remote may have commits of its own (Overleaf: edits made there): ours go on top
+	// of them first. Other local changes are set aside meanwhile, and put back as they
+	// were, staged or not (git's --autostash unstages them).
+	stashed := false
+	if out, _ := git("status", "--porcelain", "--untracked-files=no"); out != "" {
+		if out, err := git("stash", "push", "-q", "-m", "bibdb_manager Git Push"); err != nil {
+			return "Git Push: could not set the other local changes aside (git stash): " + out, err
+		}
+		stashed = true
+	}
+	restore := func() string {
+		if !stashed {
+			return ""
+		}
+		if out, err := git("stash", "pop", "-q", "--index"); err != nil {
+			return " Your other local changes are in the stash (git stash pop): " + out
+		}
+		return ""
+	}
+	if out, err := git("pull", "--rebase"); err != nil {
+		git("rebase", "--abort") //nolint:errcheck // leave the repository as it was
+		return "Git Push: the remote has changes that do not combine with this commit (git pull --rebase failed); " +
+			"the commit is made, not pushed: settle it in the repository. " + out + restore(), err
+	}
+	if note := restore(); note != "" {
+		return "Git Push: not pushed." + note, fmt.Errorf("stash pop failed")
+	}
 	if out, err := git("push"); err != nil {
 		return "Git Push: git push failed: " + out, err
 	}
 	at := time.Now().Format("15:04")
 	if committed {
-		return fmt.Sprintf("Committed and pushed %s at %s.", strings.Join(present, " and "), at), nil
+		return fmt.Sprintf("Committed and pushed %s at %s.", files2, at), nil
 	}
-	return fmt.Sprintf("Nothing new to commit in %s; pushed at %s.", strings.Join(present, " and "), at), nil
+	return fmt.Sprintf("%s unchanged; pushed the commits waiting at %s.", files2, at), nil
 }
 
 // syncOutcome says what a sync from a Select tab did: the .bib written (its
