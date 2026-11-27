@@ -611,6 +611,16 @@ func (l *TBibTeXLibrary) CheckPDFHealth() {
 	}()
 
 	total := len(pdfFiles)
+	allPDFs, before := 0, 0 // for the progress in the log: of all PDFs, and those before this run's first
+	if entries, err := os.ReadDir(filesDir); err == nil {
+		for _, e := range entries {
+			if strings.HasSuffix(strings.ToLower(e.Name()), ".pdf") {
+				allPDFs++
+			}
+		}
+	}
+	before = allPDFs - total
+	lastPct := -5 // the first PDF gives the first line
 	md5Index := TStringSetMap{}
 	ticker := l.NewProgressTicker(fmt.Sprintf(ProgressCheckingPDFHealth, filesDir), total)
 
@@ -624,6 +634,13 @@ func (l *TBibTeXLibrary) CheckPDFHealth() {
 		}
 		if n == len(pdfFiles)-1 {
 			finished = true
+		}
+		// The progress in the log, every 5 % of all PDFs (Erik, 2026-11-27).
+		if allPDFs > 0 {
+			if pct := (before + n) * 100 / allPDFs; pct/5 != lastPct/5 {
+				lastPct = pct
+				messagef("Checking PDFs: %d%% (%d of %d)\n", pct, before+n, allPDFs)
+			}
 		}
 		key := strings.TrimSuffix(fileName, ".pdf")
 		fullPath := filesDir + fileName

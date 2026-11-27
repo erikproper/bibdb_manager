@@ -25,6 +25,8 @@ import (
 	"fmt"
 	"html"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -246,7 +248,68 @@ func (l *TBibTeXLibrary) pdfTitleMismatch(key, path string) string {
 			return ""
 		}
 	}
+	// The PDF's text shows the entry's title: its metadata is wrong, which is waived at
+	// once, without a question (Erik, 2026-11-26: "the crap that is in there").
+	if titleInText(entryT, firstPagesText(path)) {
+		l.SetMetadata(key, MetaPropPdfTitleWaived, t)
+		messagef("Entry %s: its PDF's metadata title %q is wrong (its first page shows the entry's title): waived.\n", key, t)
+		return ""
+	}
 	return t
+}
+
+// firstPagesText is the text of a PDF's first two pages (pdftotext), or of its first
+// page read by OCR when it has no text (a scan: pdftoppm, tesseract); "" when neither
+// is there.
+func firstPagesText(path string) string {
+	if out, err := exec.Command("pdftotext", "-f", "1", "-l", "2", path, "-").Output(); err == nil && len(strings.TrimSpace(string(out))) > 20 {
+		return string(out)
+	}
+	dir, err := os.MkdirTemp("", "pdfpage")
+	if err != nil {
+		return ""
+	}
+	defer os.RemoveAll(dir)
+	if exec.Command("pdftoppm", "-f", "1", "-l", "1", "-r", "150", "-png", path, filepath.Join(dir, "p")).Run() != nil {
+		return ""
+	}
+	pages, _ := filepath.Glob(filepath.Join(dir, "p*.png"))
+	if len(pages) == 0 {
+		return ""
+	}
+	out, err := exec.Command("tesseract", pages[0], "stdout").Output()
+	if err != nil {
+		return ""
+	}
+	return string(out)
+}
+
+// titleInText tells whether a title is printed in text (a PDF's first pages): its
+// words in a row, or, for a title of four words or more, nearly all of them (a line
+// break, a hyphen, an OCR slip).
+func titleInText(title, text string) bool {
+	tw := titleWords(title)
+	if len(tw) == 0 || text == "" {
+		return false
+	}
+	xw := titleWords(text)
+	if strings.Contains(" "+strings.Join(xw, " ")+" ", " "+strings.Join(tw, " ")+" ") {
+		return true
+	}
+	if len(tw) < 4 {
+		return false
+	}
+	in := map[string]bool{}
+	for _, w := range xw {
+		in[w] = true
+	}
+	found := 0
+	for _, w := range tw {
+		if in[w] {
+			found++
+		}
+	}
+	return found*100 >= len(tw)*85
 }
 
 // crossrefParent is key's crossref parent in the library, or "".

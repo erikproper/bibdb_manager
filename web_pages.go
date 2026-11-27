@@ -1539,6 +1539,13 @@ class EditView {
     this.panel.addEventListener("input", () => this.mark());
     this.panel.addEventListener("change", () => this.mark());
     this.panel.querySelectorAll(".edremove").forEach((b) => b.onclick = () => { b.closest("tr").classList.add("removed"); this.mark(); });
+    // The fields to add follow the entry type: those allowed for it, less those the entry has.
+    const fillAddable = () => {
+      const byType = JSON.parse(q("edadd").dataset.bytype || "{}"), sel = q("edadd");
+      const have = new Set([...this.panel.querySelectorAll("table.edit tr[data-field]:not(.removed)")].map((tr) => tr.dataset.field));
+      sel.innerHTML = '<option value="">Add a field…</option>' + (byType[q("edtype").value] || []).filter((f) => !have.has(f)).map((f) => "<option>" + esc(f) + "</option>").join("");
+    };
+    q("edtype").addEventListener("change", fillAddable);
     q("edadd").onchange = () => {
       const f = q("edadd").value; if (!f) return;
       q("edadd").querySelector('option[value="' + CSS.escape(f) + '"], option:checked').remove();
@@ -2008,7 +2015,7 @@ else showTab(location.hash.slice(1) || "search");
       <td style="width:32px"><button class="plain edremove" title="Remove this field">×</button></td></tr>
     {{end}}
   </table>
-  <div class="line" style="margin-top:10px"><select class="edadd"><option value="">Add a field…</option>{{range .Addable}}<option>{{.}}</option>{{end}}</select>
+  <div class="line" style="margin-top:10px"><select class="edadd" data-bytype="{{.AddableByType}}"><option value="">Add a field…</option>{{range .Addable}}<option>{{.}}</option>{{end}}</select>
     <span class="muted">* required for the type. A changed field is shown in orange; Save runs bib.field for each.</span></div>
 </div>
 <div class="card"><h2>Groups</h2>

@@ -139,15 +139,19 @@ func (w *TWebUI) handleEditFrag(rw http.ResponseWriter, r *http.Request) {
 		}
 		return fields[i].Name < fields[j].Name
 	})
+	types := BibTeXAllowedEntries.Set().ElementsSorted()
+	// The fields that can be added, per entry type (the page follows a change of type).
+	addableByType := map[string][]string{}
+	for _, t := range types {
+		addableByType[t] = editAddableFields(t)
+	}
 	var addable []string
-	if allowed, ok := BibTeXAllowedEntryFields[st.Type]; ok {
-		for _, f := range allowed.Set().ElementsSorted() {
-			if _, has := st.Fields[f]; !has && f != "entrytype" {
-				addable = append(addable, f)
-			}
+	for _, f := range addableByType[st.Type] {
+		if _, has := st.Fields[f]; !has {
+			addable = append(addable, f)
 		}
 	}
-	types := BibTeXAllowedEntries.Set().ElementsSorted()
+	addableJSON, _ := json.Marshal(addableByType)
 	var allGroups []string
 	if gRows, err := ro.Query(`SELECT DISTINCT group_name FROM bib_groups ORDER BY group_name`); err == nil {
 		for gRows.Next() {
@@ -164,10 +168,32 @@ func (w *TWebUI) handleEditFrag(rw http.ResponseWriter, r *http.Request) {
 		reference = refs[key]
 	}
 	w.render(rw, "edit", map[string]any{
-		"Key": key, "Type": st.Type, "Types": types, "Fields": fields, "Addable": addable,
+		"Key": key, "Type": st.Type, "Types": types, "Fields": fields, "Addable": addable, "AddableByType": string(addableJSON),
 		"Groups": st.Groups, "AllGroups": allGroups, "State": string(state), "Reference": reference,
 		"Alias": st.Fields["preferredalias"], "PDFSource": editPDFSource(ro, key),
 	})
+}
+
+// editAddableFields are the fields an entry of entryType can be given in its edit
+// tab: those allowed for the type (Erik, 2026-11-26), but for the ones a tool keeps
+// itself (BibDesk, JabRef: dates, file links, owner), the preferred alias, the
+// groups (edited apart) and the entry type.
+func editAddableFields(entryType string) []string {
+	allowed, ok := BibTeXAllowedEntryFields[entryType]
+	if !ok {
+		return nil
+	}
+	var out []string
+	for _, f := range allowed.Set().ElementsSorted() {
+		switch {
+		case strings.HasPrefix(f, "bdsk-"):
+		case f == LocalURLField, f == JabrefFileField, f == PreferredAliasField, f == EntryTypeField,
+			f == "date-added", f == "date-modified", f == "owner", f == "creationdate", f == "modificationdate", f == "groups":
+		default:
+			out = append(out, f)
+		}
+	}
+	return out
 }
 
 // editPDFSource is where key's PDF can be downloaded when it has none (step 25),

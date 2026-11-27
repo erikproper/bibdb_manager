@@ -68,6 +68,9 @@ func (l *TBibTeXLibrary) SetMetadata(key, prop, value string) {
 	db.Exec(`INSERT INTO entry_metadata (entry_key, property, value) VALUES (?, ?, ?)
 	          ON CONFLICT(entry_key, property) DO UPDATE SET value = excluded.value`,
 		key, prop, value)
+	// Memory and table stay in step: the service keeps the library (before, a waiver
+	// written by the PDF check made it load the library afresh after the job).
+	writesKeptInMemory([]string{"entry_metadata"}, nil)
 }
 
 // DeleteMetadata removes property prop from entry key's metadata and writes through to the DB.
@@ -79,6 +82,7 @@ func (l *TBibTeXLibrary) DeleteMetadata(key, prop string) {
 				delete(l.Metadata, key)
 			}
 			db.Exec(`DELETE FROM entry_metadata WHERE entry_key = ? AND property = ?`, key, prop)
+			writesKeptInMemory([]string{"entry_metadata"}, nil)
 		}
 	}
 }
@@ -97,6 +101,15 @@ func (l *TBibTeXLibrary) transferMetadata(source, target string) {
 	} {
 		if val := l.GetMetadata(source, prop); val != "" && l.GetMetadata(target, prop) == "" {
 			l.SetMetadata(target, prop, val)
+		}
+	}
+	// A waived PDF title goes with the PDF the merged entry keeps (mergePDFFile ran
+	// before): the waiver whose title is that PDF's, so the next PDF check does not
+	// ask again (Erik, 2026-11-27).
+	if sw := l.GetMetadata(source, MetaPropPdfTitleWaived); sw != "" {
+		tw := l.GetMetadata(target, MetaPropPdfTitleWaived)
+		if tw == "" || (tw != sw && pdfTitle(l.FilesRoot+l.FilesFolder+target+".pdf") == sw) {
+			l.SetMetadata(target, MetaPropPdfTitleWaived, sw)
 		}
 	}
 	// Wipe all remaining metadata for source (any untransferred props).
