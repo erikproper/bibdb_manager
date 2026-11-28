@@ -74,6 +74,7 @@ type TQuestionEntry struct {
 type TQuestionPair struct {
 	Name  string `json:"name"`
 	Value string `json:"value"`
+	Link  string `json:"link,omitempty"` // the value as a link (a DOI, a URL, a field_urls field)
 }
 
 // TQuestionValue is a value to choose between ("current", "challenger").
@@ -81,6 +82,32 @@ type TQuestionValue struct {
 	Role  string `json:"role"`
 	Value string `json:"value"`
 	Note  string `json:"note,omitempty"` // e.g. its lineage
+	Link  string `json:"link,omitempty"` // the value as a link (a DOI, a URL, …)
+}
+
+// addQuestionLinks makes the values of the entries and values a question shows links
+// where they stand for one (a DOI, a URL, a field of the settings' field_urls; Erik,
+// 2026-11-27: checking a challenger's year meant looking its DOI up by hand).
+func addQuestionLinks(q *TQuestion) {
+	var entry func(e *TQuestionEntry)
+	entry = func(e *TQuestionEntry) {
+		if e == nil {
+			return
+		}
+		for i := range e.Fields {
+			e.Fields[i].Link = webFieldLink(e.Fields[i].Name, e.Fields[i].Value)
+		}
+		entry(e.Parent)
+	}
+	for i := range q.Entries {
+		entry(&q.Entries[i])
+	}
+	for i := range q.Options {
+		entry(q.Options[i].Entry)
+	}
+	for i := range q.Values {
+		q.Values[i].Link = webFieldLink(q.Field, q.Values[i].Value)
+	}
 }
 
 // sendQuestion puts q to the user: as a message to the web UI, or (a yes/no
@@ -93,6 +120,7 @@ func sendQuestion(q *TQuestion) {
 		if l, ok := userIO.(*TLoggingIO); ok {
 			l.log(renderQuestion(q)) // -log keeps the questions too
 		}
+		addQuestionLinks(q)
 		s.SendMessage(serviceFrame{T: "question", Q: q})
 		return
 	}
@@ -269,12 +297,12 @@ func (l *TBibTeXLibrary) questionEntryOf(role, key string) TQuestionEntry {
 		}
 		if field == LocalURLField {
 			if l.PDFFiles[entry.Key] {
-				q.Fields = append(q.Fields, TQuestionPair{field, l.FilesRoot + l.FilesFolder + entry.Key + ".pdf"})
+				q.Fields = append(q.Fields, TQuestionPair{Name: field, Value: l.FilesRoot + l.FilesFolder + entry.Key + ".pdf"})
 			}
 			continue
 		}
 		if value := entry.FieldValue(field); value != "" {
-			q.Fields = append(q.Fields, TQuestionPair{field, l.MapEntryFieldValue(entry.Key, field, value)})
+			q.Fields = append(q.Fields, TQuestionPair{Name: field, Value: l.MapEntryFieldValue(entry.Key, field, value)})
 		}
 	}
 	return q
@@ -292,7 +320,7 @@ func questionEntryOfFields(role, key string, fields map[string]string) TQuestion
 	}
 	sort.Strings(names)
 	for _, f := range names {
-		q.Fields = append(q.Fields, TQuestionPair{f, fields[f]})
+		q.Fields = append(q.Fields, TQuestionPair{Name: f, Value: fields[f]})
 	}
 	return q
 }

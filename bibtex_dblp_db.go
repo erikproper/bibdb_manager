@@ -31,6 +31,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 )
 
 const (
@@ -128,7 +129,34 @@ var dblpReader struct {
 	sync.Mutex
 	db      *sql.DB
 	stmts   map[string]*sql.Stmt
-	missing bool // dblp.sqlite3 was absent at the last open attempt (warned once)
+	missing bool        // dblp.sqlite3 was absent at the last open attempt (warned once)
+	file    os.FileInfo // the file opened: another process may swap in a new store
+	checked time.Time   // when the path was last compared with file
+}
+
+// dblpReaderRecheck is how often a reader compares the store's path with the file
+// it has open: a job run as a child process of the service swaps in a new store
+// without telling the service.
+const dblpReaderRecheck = 2 * time.Second
+
+// dblpReaderCloseDelay is how long a replaced connection stays open, for the
+// lookups still running on it.
+const dblpReaderCloseDelay = time.Minute
+
+// dropSwappedDblpReader forgets the open store when another file now stands at
+// its path, so the next read opens that one. The caller holds dblpReader.
+func dropSwappedDblpReader() {
+	if dblpReader.db == nil || time.Since(dblpReader.checked) < dblpReaderRecheck {
+		return
+	}
+	dblpReader.checked = time.Now()
+	now, err := os.Stat(dblpDBPath())
+	if err == nil && dblpReader.file != nil && os.SameFile(now, dblpReader.file) {
+		return
+	}
+	old := dblpReader.db
+	time.AfterFunc(dblpReaderCloseDelay, func() { old.Close() }) //nolint:errcheck
+	dblpReader.db, dblpReader.stmts, dblpReader.file = nil, nil, nil
 }
 
 // dblpReadQueries are the statements readers use, by name.
@@ -162,6 +190,7 @@ var dblpQuietQueries = map[string]bool{"person_names": true, "person_orcids": tr
 func dblpStmt(name string) *sql.Stmt {
 	dblpReader.Lock()
 	defer dblpReader.Unlock()
+	dropSwappedDblpReader()
 	if dblpReader.db == nil {
 		if !FileExists(dblpDBPath()) {
 			if !dblpReader.missing {
@@ -180,6 +209,8 @@ func dblpStmt(name string) *sql.Stmt {
 		// absorbDblpNamesCore); a few connections serve them, each with its own cache.
 		db.SetMaxOpenConns(dblpReaderConnections)
 		dblpReader.db, dblpReader.stmts, dblpReader.missing = db, map[string]*sql.Stmt{}, false
+		dblpReader.file, _ = os.Stat(dblpDBPath()) // nil: compared as swapped, so opened again
+		dblpReader.checked = time.Now()
 	}
 	if s, ok := dblpReader.stmts[name]; ok {
 		return s
@@ -204,7 +235,7 @@ func closeDblpReader() {
 	if dblpReader.db != nil {
 		dblpReader.db.Close()
 	}
-	dblpReader.db, dblpReader.stmts, dblpReader.missing = nil, nil, false
+	dblpReader.db, dblpReader.stmts, dblpReader.missing, dblpReader.file = nil, nil, false, nil
 }
 
 // dblpQueryStrings runs a named read query and returns its first column.

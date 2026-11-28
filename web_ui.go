@@ -386,9 +386,10 @@ func (w *TWebUI) handleStats(rw http.ResponseWriter, r *http.Request) {
 type TWebEntryRow struct {
 	Key, Type, Year, Title string
 	Authors                []TWebPerson
-	HTML                   template.HTML // the reference as the homepage fragments render it ("": not available)
-	Roles                  string        // on an author's list: "author", "editor" or both (space-separated)
-	HasPDF                 bool          // on an author's list: the entry has a PDF
+	HTML                   template.HTML   // the reference as the homepage fragments render it ("": not available)
+	Roles                  string          // on an author's list: "author", "editor" or both (space-separated)
+	HasPDF                 bool            // on an author's list: the entry has a PDF
+	Link                   *TFieldIconLink // on an author's list: no PDF, no source, but a field's link with an icon
 }
 
 // handleEntries answers a page of the Search table (JSON): q filters (every
@@ -918,6 +919,8 @@ func (w *TWebUI) handleAuthor(rw http.ResponseWriter, r *http.Request) {
 		row.Roles = strings.Join(roles[k], " ")
 		if _, err := os.Stat(entryPDFPath(k)); err == nil {
 			row.HasPDF = true
+		} else if webPDFSource(ro, k) == "" {
+			row.Link = webFieldIconLink(ro, k)
 		}
 		if strings.Contains(row.Roles, "author") {
 			authored++

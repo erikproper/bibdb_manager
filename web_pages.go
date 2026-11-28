@@ -157,6 +157,8 @@ table.grid td.op button.copykey, table.grid td.op button.rowpdf { border: 0 !imp
 table.grid td.op .copyslot { display: inline-block; width: 17px; margin-right: 2px; }
 table.grid td.op button.rowpdf svg, table.grid td.op button.copykey svg { vertical-align: -2px; }
 button.rowpdf.faded { opacity: .35; } button.rowpdf.faded:hover { opacity: .8; }
+a.fieldicon { display: inline-block; padding: 0 2px; vertical-align: middle; text-decoration: none; font-size: 12px; }
+a.fieldicon img { vertical-align: -2px; border-radius: 2px; }
 table.grid td.op button { background: transparent; border: 1px solid var(--border); border-radius: 6px; color: var(--primary);
                           cursor: pointer; padding: 0 6px; font-size: 13px; line-height: 18px; }
 .loading { padding: 12px; }
@@ -599,11 +601,14 @@ function warnHTML(head, lines) {
 // output text is never read for it. A line asked for without a message (d.q null) gets a
 // text field under the job's last line.
 const cap = (t) => (t || "").charAt(0).toUpperCase() + (t || "").slice(1);
+// linkVal is a value shown with a question, as a link (in a new tab) where it stands for
+// one (a DOI, a URL, a field of field_urls; Erik, 2026-11-27).
+const linkVal = (text, link) => link ? '<a href="' + esc(link) + '" target="_blank" rel="noopener">' + esc(text) + "</a>" : esc(text);
 // entryHTML lays an entry out as BibTeX ("@type{key," its fields "}"), framed; its notes
 // under it, its crossref parent likewise under "Crossref parent:".
 function entryHTML(e, framed) {
   if (!e) return "";
-  const rows = (e.fields || []).map((f) => '<tr><td class="f">' + esc(f.name) + "</td><td>= {" + esc(f.value) + "},</td></tr>").join("");
+  const rows = (e.fields || []).map((f) => '<tr><td class="f">' + esc(f.name) + "</td><td>= {" + linkVal(f.value, f.link) + "},</td></tr>").join("");
   let html = '<div class="qbib">' + (e.key ? "<div>@" + esc(e.type || "misc") + "{" + esc(e.key) + ",</div>" : "") +
     '<table style="margin-left:2ch">' + rows + "</table>" + (e.key ? "<div>}</div>" : "") + "</div>" +
     (e.notes || []).map((n) => '<div class="muted" style="font-size:12.5px">' + esc(n) + "</div>").join("");
@@ -635,6 +640,10 @@ function wireEdit(opt) {
   $("qeditok").onclick = go;
   $("qeditin").onkeydown = (e) => { if (e.key === "Enter") go(); };
 }
+// fieldIconHTML: an entry's field link with its icon (settings: field_urls), shown where it
+// has no PDF and no source to download one from (Erik, 2026-11-27).
+const fieldIconHTML = (l) => '<a class="fieldicon" href="' + esc(l.u) + '" target="_blank" rel="noopener" title="' + esc(l.f) + ": " + esc(l.u) + '">' +
+  (/^(https?:|data:image\/)/.test(l.i) ? '<img src="' + esc(l.i) + '" width="14" height="14" alt="' + esc(l.f) + '">' : esc(l.i)) + "</a>";
 // qPDFIcon: a PDF icon that opens the PDF the question is about (q.pdf).
 const qPDFIcon = (q) => q.pdf ? ' <button class="pdf" id="qpdf" title="Open the PDF to look" style="vertical-align:middle">' + PDFICON + "</button>" : "";
 // stopButton: Stop answers "q" where the question takes it, else stops the job (the pop-up
@@ -671,7 +680,7 @@ function openQuestion() {
     const current = entries.find((e) => e.role === "Current entry"), challenging = entries.find((e) => e.role === "Challenging entry");
     const extra = keys.filter((o) => !["y", "n", "Y", "N", "e", "q", "s", "S"].includes(o));
     const forAll = has("Y") && has("N");
-    const radio = (name, ans, v) => v ? '<label><input type="radio" name="qopt" value="' + ans + '"><div><span class="qlabel">' + name + '</span><div class="qbib" style="font-size:13.5px">' + esc(v.value) + "</div>" +
+    const radio = (name, ans, v) => v ? '<label><input type="radio" name="qopt" value="' + ans + '"><div><span class="qlabel">' + name + '</span><div class="qbib" style="font-size:13.5px">' + linkVal(v.value, v.link) + "</div>" +
       (v.note ? '<div class="muted" style="font-size:12.5px">' + esc(v.note) + "</div>" : "") + "</div></label>" : "";
     showQuestion(d, (current && current.type ? entryCard(current, "For entry") : warnBox(q.warning)) +
       '<div class="qtext">Select as ' + esc(q.field) + ':</div><div class="qopts">' + radio("Current", "y", cur) + radio("Challenger", "n", chal) + "</div>" +
@@ -692,7 +701,7 @@ function openQuestion() {
   }
   // What it is about: the warning, the entries, the values.
   let html = warnBox(q.warning) + entries.map((e) => entryCard(e)).join("");
-  if (q.values && q.values.length) html += '<table class="qvals" style="margin-bottom:8px">' + q.values.map((v) => '<tr><td class="f"><b>' + esc(cap(v.role)) + "</b></td><td>" + esc(v.value) +
+  if (q.values && q.values.length) html += '<table class="qvals" style="margin-bottom:8px">' + q.values.map((v) => '<tr><td class="f"><b>' + esc(cap(v.role)) + "</b></td><td>" + linkVal(v.value, v.link) +
     (v.note ? ' <span class="muted">(' + esc(v.note) + ")</span>" : "") + "</td></tr>").join("") + "</table>";
   // A typed answer (options, when given, as buttons besides).
   if (q.kind === "text") {
@@ -1058,7 +1067,8 @@ class SearchView {
       const r = this.rows[n];
       html.push('<tr data-key="' + esc(r.k) + '">' + (this.sel ? '<td class="op">' + this.tickHTML(r.t) + this.copyHTML(r) + "</td>" : "") + '<td class="op">' +
         (r.pdf ? '<button class="rowpdf" data-pdf="' + esc(r.k) + '" title="Open the PDF">' + PDFICON + "</button><span></span>"
-               : r.get ? '<button class="rowpdf faded" data-getpdf="' + esc(r.k) + '" title="No PDF yet: download it (from its url or eprint)">' + PDFICON + "</button><span></span>" : "") + "</td>");
+               : r.get ? '<button class="rowpdf faded" data-getpdf="' + esc(r.k) + '" title="No PDF yet: download it (from its url or eprint)">' + PDFICON + "</button><span></span>"
+               : r.link ? fieldIconHTML(r.link) : "") + "</td>");
       for (const c of layout.cols) {
         const v = r.cells[c] || "";
         html.push("<td" + (r.inh[c] ? ' class="inh"' : "") + ' title="' + esc(v) + '">' + esc(v) + "</td>");
@@ -1091,7 +1101,7 @@ class SearchView {
         const cells = {}, inh = {};
         layout.cols.forEach((c, i) => { cells[c] = r.c[i]; });
         for (const i of r.i || []) inh[layout.cols[i]] = true;
-        return { k: r.k, cells, inh, pdf: !!r.p, get: !!r.g, t: r.t || 0, l: r.l || "" };
+        return { k: r.k, cells, inh, pdf: !!r.p, get: !!r.g, link: r.lk || null, t: r.t || 0, l: r.l || "" };
       });
       if (reset) this.rows = got; else this.rows.push(...got);
       this.renderRows(reset ? 0 : this.rows.length - got.length);
@@ -1116,7 +1126,7 @@ class SearchView {
         const cells = {}, inh = {};
         layout.cols.forEach((c, i) => { cells[c] = r.c[i]; });
         for (const i of r.i || []) inh[layout.cols[i]] = true;
-        return { k: r.k, cells, inh, pdf: !!r.p, get: !!r.g, t: r.t || 0, l: r.l || "" };
+        return { k: r.k, cells, inh, pdf: !!r.p, get: !!r.g, link: r.lk || null, t: r.t || 0, l: r.l || "" };
       });
       this.renderRows(0);
       this.el.gridbox.scrollTop = top;
@@ -2080,7 +2090,7 @@ else showTab(location.hash.slice(1) || "search");
     <label class="rolepick"><input type="checkbox" class="rolefilter" value="editor" checked> edited ({{.Edited}})</label></h2>
   <table class="list">
     {{range .Results}}<tr data-key="{{.Key}}" data-roles="{{.Roles}}" title="{{.Key}}"><td class="year">{{.Year}}</td><td class="ref">{{if .HTML}}{{.HTML}}{{else}}{{if .Title}}{{tex .Title}}{{else}}<span class="key">{{.Key}}</span>{{end}}{{if .Authors}} — {{template "peopletext" .Authors}}{{end}}{{end}}</td>
-      <td style="width:34px">{{if .HasPDF}}<button class="pdf rowpdf" data-pdf="{{.Key}}" title="Open the PDF"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg></button>{{end}}</td></tr>{{end}}
+      <td style="width:34px">{{if .HasPDF}}<button class="pdf rowpdf" data-pdf="{{.Key}}" title="Open the PDF"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg></button>{{else if .Link}}<a class="fieldicon" href="{{.Link.URL}}" target="_blank" rel="noopener" title="{{.Link.Field}}: {{.Link.URL}}">{{if .Link.Image}}<img src="{{.Link.Image}}" width="14" height="14" alt="{{.Link.Field}}">{{else}}{{.Link.Icon}}{{end}}</a>{{end}}</td></tr>{{end}}
   </table>
 </div>
 {{end}}

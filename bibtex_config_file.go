@@ -64,7 +64,9 @@ type TBibTeXFolders struct {
 	// field name → URL, "$" standing for the value, e.g. "repositum":
 	// "https://doi.org/$". Added to (and may override) the built-in ones for doi
 	// and dblp (webFieldURLs).
-	FieldURLs map[string]string `json:"field_urls,omitempty"`
+	// A field may also have an icon (Erik, 2026-11-27): "researchgate": {"url": "…/$",
+	// "icon": "https://www.researchgate.net/favicon.ico"}; see TFieldURL.
+	FieldURLs map[string]TFieldURL `json:"field_urls,omitempty"`
 	// EprintPDF says per eprinttype where an eprint's PDF comes from (step 25), e.g.
 	// "jstor": {"url": "https://www.jstor.org/stable/pdf/$.pdf", "browser": "Firefox",
 	// "noauto": true}. Added to (and may override) the built-in ones (builtinEprintPDF).
@@ -114,6 +116,7 @@ var (
 	nrOfBackups        = defaultNrOfBackups  // set by loadBibTeXFolders; see pruneLibraryBackups
 	servicePort        = 0                   // set by loadBibTeXFolders; see web_ui.go
 	fieldURLs          map[string]string     // set by loadBibTeXFolders; see webFieldLink
+	fieldIcons         map[string]string     // set by loadBibTeXFolders; see webFieldIconLink
 	eprintPDF          map[string]TEprintPDF // set by loadBibTeXFolders; see eprintPDFSetting
 	webBrowser         = ""                  // set by loadBibTeXFolders; see openInBrowser
 	displayFile        = ""                  // set by loadBibTeXFolders; see displayContent
@@ -263,7 +266,13 @@ func loadBibTeXFolders(settingsPath string) {
 	dblpURL = f.DblpURL
 	serviceIdleMinutes = f.ServiceIdleMinutes
 	servicePort = f.ServicePort
-	fieldURLs = f.FieldURLs
+	fieldURLs, fieldIcons = map[string]string{}, map[string]string{}
+	for field, u := range f.FieldURLs {
+		fieldURLs[field] = u.URL
+		if u.Icon != "" {
+			fieldIcons[field] = u.Icon
+		}
+	}
 	eprintPDF = f.EprintPDF
 	if f.Colours == nil {
 		f.Colours = defaultColours()
